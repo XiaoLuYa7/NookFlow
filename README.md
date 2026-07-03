@@ -1,5 +1,7 @@
 # NookFlow
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 NookFlow is a lightweight macOS dynamic island app built with SwiftUI and AppKit. It places a compact, notch-aware panel near the menu bar and expands into a focused control surface for music, lyrics, reminders, calendar, weather, files, quick apps, and shortcuts.
 
 The app is designed around native macOS behavior: low idle resource usage, smooth panel transitions, predictable window focus, and clear permission boundaries.
