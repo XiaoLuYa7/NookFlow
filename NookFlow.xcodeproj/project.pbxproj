@@ -1,0 +1,601 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		477540A27D8E4E5F4FC7DBC8 /* LyricsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6C480E68B3DBE8666CFA83 /* LyricsModels.swift */; };
+		65D1C2E7893277608265B61B /* LyricsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56E73D3FBB4C6AA2FBBF90C3 /* LyricsProvider.swift */; };
+		A1000001 /* NookFlowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* NookFlowApp.swift */; };
+		A1000002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* AppDelegate.swift */; };
+		A1000005 /* IslandState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* IslandState.swift */; };
+		A1000006 /* IslandViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* IslandViewModel.swift */; };
+		A1000008 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000008 /* Assets.xcassets */; };
+		A1000009 /* IslandPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000009 /* IslandPanel.swift */; };
+		A100000A /* IslandWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000A /* IslandWindowController.swift */; };
+		A100000B /* IslandDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B /* IslandDesignTokens.swift */; };
+		A10000C1 /* CompactMusicPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000C1 /* CompactMusicPresentation.swift */; };
+		A100000C /* IslandRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C /* IslandRootView.swift */; };
+		A100000D /* CompactIslandView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D /* CompactIslandView.swift */; };
+		A100000E /* ExpandedIslandView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000E /* ExpandedIslandView.swift */; };
+		A100000F /* PinButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000F /* PinButton.swift */; };
+		A1000010 /* IslandSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* IslandSettings.swift */; };
+		A1000011 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* SettingsWindowController.swift */; };
+		A1000012 /* SettingsRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* SettingsRootView.swift */; };
+		A1000013 /* folder.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000013 /* folder.png */; };
+		A1000014 /* application.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000014 /* application.png */; };
+		A1000032 /* music.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* music.png */; };
+		A1000033 /* spotify.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000033 /* spotify.png */; };
+		A1000034 /* finder_icon.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000034 /* finder_icon.png */; };
+		A1000015 /* WeatherProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015 /* WeatherProvider.swift */; };
+		A1000016 /* CalendarProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000016 /* CalendarProvider.swift */; };
+		A1000017 /* ReminderProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000017 /* ReminderProvider.swift */; };
+		A1000018 /* PlaybackProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000018 /* PlaybackProvider.swift */; };
+		A1000019 /* ApplicationsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000019 /* ApplicationsProvider.swift */; };
+		A100001A /* ApplicationsGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001A /* ApplicationsGridView.swift */; };
+		A100001B /* HandCursorModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001B /* HandCursorModifier.swift */; };
+		A100001C /* NewReminderPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001C /* NewReminderPanelView.swift */; };
+		A100001D /* FileDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001D /* FileDataProvider.swift */; };
+		A100001E /* FilesGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200001E /* FilesGridView.swift */; };
+		A1000020 /* TodoViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000020 /* TodoViewModel.swift */; };
+		A1000021 /* TodoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000021 /* TodoView.swift */; };
+		A10000B0 /* IslandShellLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000B0 /* IslandShellLayout.swift */; };
+		A10009E5 /* ModuleDragController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000AE5 /* ModuleDragController.swift */; };
+		B3A10001E5F2C9D47A680B3E /* NotchGeometryProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A10002E5F2C9D47A680B3E /* NotchGeometryProvider.swift */; };
+		B3A10003E5F2C9D47A680B3E /* LyricTextMeasurer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A10004E5F2C9D47A680B3E /* LyricTextMeasurer.swift */; };
+		B3A10005E5F2C9D47A680B3E /* NotchLyricView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A10006E5F2C9D47A680B3E /* NotchLyricView.swift */; };
+		B3A10007E5F2C9D47A680B3E /* NotchLyricMask.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A10008E5F2C9D47A680B3E /* NotchLyricMask.swift */; };
+		B3A10009E5F2C9D47A680B3E /* CompactCapsuleContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A1000AE5F2C9D47A680B3E /* CompactCapsuleContentView.swift */; };
+		B4A100010000000000000001 /* QuickAppItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A100020000000000000001 /* QuickAppItem.swift */; };
+		B4A100010000000000000002 /* QuickAppsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A100020000000000000002 /* QuickAppsStore.swift */; };
+		B4A100010000000000000003 /* ApplicationLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A100020000000000000003 /* ApplicationLauncher.swift */; };
+		B4A100010000000000000004 /* QuickAppsCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A100020000000000000004 /* QuickAppsCardView.swift */; };
+		B4A100010000000000000005 /* QuickAppsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A100020000000000000005 /* QuickAppsSettingsView.swift */; };
+		B5A100010000000000000001 /* ShortcutItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A100020000000000000001 /* ShortcutItem.swift */; };
+		B5A100010000000000000002 /* ShortcutsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A100020000000000000002 /* ShortcutsStore.swift */; };
+		B5A100010000000000000004 /* ShortcutsCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A100020000000000000004 /* ShortcutsCardView.swift */; };
+		B5A100010000000000000005 /* ShortcutsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A100020000000000000005 /* ShortcutsSettingsView.swift */; };
+		B6A100010000000000000001 /* NotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A100020000000000000001 /* NotificationSettingsView.swift */; };
+		F1A100010000000000000001 /* NotificationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A100020000000000000001 /* NotificationCoordinator.swift */; };
+		F1A100010000000000000002 /* InAppNotificationWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A100020000000000000002 /* InAppNotificationWindowController.swift */; };
+		C6A100010000000000000001 /* DesktopLyricsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A100020000000000000001 /* DesktopLyricsWindowController.swift */; };
+		CD17DAD5C65B14898A093ED5 /* LyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CF1FD2BFCD44586E0ECBB77 /* LyricsView.swift */; };
+		D0ADDA089E00ED2D5B9D082E /* LyricsNetworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF846F0A3FB7A245AD8AD27 /* LyricsNetworkService.swift */; };
+		D24D34655AE7633DC1BFEED1 /* LyricsParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92AA4C01D0F31701723CD22E /* LyricsParser.swift */; };
+		D7A100010000000000000001 /* AppDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A100020000000000000001 /* AppDesignSystem.swift */; };
+		D7A100010000000000000002 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A100020000000000000002 /* SettingsComponents.swift */; };
+		D7A100010000000000000003 /* SettingsAppShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A100020000000000000003 /* SettingsAppShell.swift */; };
+		E8A100010000000000000001 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A100020000000000000001 /* GeneralSettingsView.swift */; };
+		E8A100010000000000000002 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A100020000000000000002 /* AboutView.swift */; };
+		DA315AB856C9D6A53EC7EB1F /* LyricsCacheModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9620D3350E2FB681CC195ABA /* LyricsCacheModel.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0CF1FD2BFCD44586E0ECBB77 /* LyricsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsView.swift; sourceTree = "<group>"; };
+		56E73D3FBB4C6AA2FBBF90C3 /* LyricsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsProvider.swift; sourceTree = "<group>"; };
+		92AA4C01D0F31701723CD22E /* LyricsParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsParser.swift; sourceTree = "<group>"; };
+		9620D3350E2FB681CC195ABA /* LyricsCacheModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsCacheModel.swift; sourceTree = "<group>"; };
+		A1000AE5 /* ModuleDragController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModuleDragController.swift; sourceTree = "<group>"; };
+		A2000001 /* NookFlowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookFlowApp.swift; sourceTree = "<group>"; };
+		A2000002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A2000005 /* IslandState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandState.swift; sourceTree = "<group>"; };
+		A2000006 /* IslandViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandViewModel.swift; sourceTree = "<group>"; };
+		A2000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A2000009 /* IslandPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandPanel.swift; sourceTree = "<group>"; };
+		A200000A /* IslandWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandWindowController.swift; sourceTree = "<group>"; };
+		A200000B /* IslandDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandDesignTokens.swift; sourceTree = "<group>"; };
+		A20000C1 /* CompactMusicPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactMusicPresentation.swift; sourceTree = "<group>"; };
+		A200000C /* IslandRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandRootView.swift; sourceTree = "<group>"; };
+		A200000D /* CompactIslandView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactIslandView.swift; sourceTree = "<group>"; };
+		A200000E /* ExpandedIslandView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpandedIslandView.swift; sourceTree = "<group>"; };
+		A200000F /* PinButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinButton.swift; sourceTree = "<group>"; };
+		A2000010 /* IslandSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandSettings.swift; sourceTree = "<group>"; };
+		A2000011 /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
+		A2000012 /* SettingsRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRootView.swift; sourceTree = "<group>"; };
+		A2000013 /* folder.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/folder.png; sourceTree = "<group>"; };
+		A2000014 /* application.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/application.png; sourceTree = "<group>"; };
+		A2000032 /* music.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/music.png; sourceTree = "<group>"; };
+		A2000033 /* spotify.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/spotify.png; sourceTree = "<group>"; };
+		A2000034 /* finder_icon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/finder_icon.png; sourceTree = "<group>"; };
+		A2000015 /* WeatherProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherProvider.swift; sourceTree = "<group>"; };
+		A2000016 /* CalendarProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarProvider.swift; sourceTree = "<group>"; };
+		A2000017 /* ReminderProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderProvider.swift; sourceTree = "<group>"; };
+		A2000018 /* PlaybackProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackProvider.swift; sourceTree = "<group>"; };
+		A2000019 /* ApplicationsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationsProvider.swift; sourceTree = "<group>"; };
+		A200001A /* ApplicationsGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationsGridView.swift; sourceTree = "<group>"; };
+		A200001B /* HandCursorModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandCursorModifier.swift; sourceTree = "<group>"; };
+		A200001C /* NewReminderPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewReminderPanelView.swift; sourceTree = "<group>"; };
+		A200001D /* FileDataProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDataProvider.swift; sourceTree = "<group>"; };
+		A200001E /* FilesGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesGridView.swift; sourceTree = "<group>"; };
+		A2000020 /* TodoViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoViewModel.swift; sourceTree = "<group>"; };
+		A2000021 /* TodoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoView.swift; sourceTree = "<group>"; };
+		A20000B0 /* IslandShellLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandShellLayout.swift; sourceTree = "<group>"; };
+		A3000001 /* L-Nook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "L-Nook.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE6C480E68B3DBE8666CFA83 /* LyricsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsModels.swift; sourceTree = "<group>"; };
+		B3A10002E5F2C9D47A680B3E /* NotchGeometryProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchGeometryProvider.swift; sourceTree = "<group>"; };
+		B3A10004E5F2C9D47A680B3E /* LyricTextMeasurer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricTextMeasurer.swift; sourceTree = "<group>"; };
+		B3A10006E5F2C9D47A680B3E /* NotchLyricView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchLyricView.swift; sourceTree = "<group>"; };
+		B3A10008E5F2C9D47A680B3E /* NotchLyricMask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchLyricMask.swift; sourceTree = "<group>"; };
+		B3A1000AE5F2C9D47A680B3E /* CompactCapsuleContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactCapsuleContentView.swift; sourceTree = "<group>"; };
+		B4A100020000000000000001 /* QuickAppItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAppItem.swift; sourceTree = "<group>"; };
+		B4A100020000000000000002 /* QuickAppsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAppsStore.swift; sourceTree = "<group>"; };
+		B4A100020000000000000003 /* ApplicationLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationLauncher.swift; sourceTree = "<group>"; };
+		B4A100020000000000000004 /* QuickAppsCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAppsCardView.swift; sourceTree = "<group>"; };
+		B4A100020000000000000005 /* QuickAppsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAppsSettingsView.swift; sourceTree = "<group>"; };
+		B5A100020000000000000001 /* ShortcutItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutItem.swift; sourceTree = "<group>"; };
+		B5A100020000000000000002 /* ShortcutsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsStore.swift; sourceTree = "<group>"; };
+		B5A100020000000000000004 /* ShortcutsCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsCardView.swift; sourceTree = "<group>"; };
+		B5A100020000000000000005 /* ShortcutsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutsSettingsView.swift; sourceTree = "<group>"; };
+		B6A100020000000000000001 /* NotificationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationSettingsView.swift; sourceTree = "<group>"; };
+		F1A100020000000000000001 /* NotificationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationCoordinator.swift; sourceTree = "<group>"; };
+		F1A100020000000000000002 /* InAppNotificationWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppNotificationWindowController.swift; sourceTree = "<group>"; };
+		C6A100020000000000000001 /* DesktopLyricsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopLyricsWindowController.swift; sourceTree = "<group>"; };
+		D7A100020000000000000001 /* AppDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDesignSystem.swift; sourceTree = "<group>"; };
+		D7A100020000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
+		D7A100020000000000000003 /* SettingsAppShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAppShell.swift; sourceTree = "<group>"; };
+		E8A100020000000000000001 /* GeneralSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralSettingsView.swift; sourceTree = "<group>"; };
+		E8A100020000000000000002 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
+		EFF846F0A3FB7A245AD8AD27 /* LyricsNetworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsNetworkService.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A4000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A5000001 = {
+			isa = PBXGroup;
+			children = (
+				A5000002 /* NookFlow */,
+				A5000007 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A5000002 /* NookFlow */ = {
+			isa = PBXGroup;
+			children = (
+				A5000003 /* App */,
+				A5000004 /* Panel */,
+				A5000005 /* Views */,
+				A5000006 /* Models */,
+				A2000008 /* Assets.xcassets */,
+				A2000014 /* application.png */,
+				A2000013 /* folder.png */,
+				A2000032 /* music.png */,
+				A2000033 /* spotify.png */,
+				A2000034 /* finder_icon.png */,
+			);
+			sourceTree = "<group>";
+		};
+		A5000003 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A2000001 /* NookFlowApp.swift */,
+				A2000002 /* AppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A5000004 /* Panel */ = {
+			isa = PBXGroup;
+			children = (
+				A2000009 /* IslandPanel.swift */,
+				A200000A /* IslandWindowController.swift */,
+				C6A100020000000000000001 /* DesktopLyricsWindowController.swift */,
+				F1A100020000000000000002 /* InAppNotificationWindowController.swift */,
+				A2000011 /* SettingsWindowController.swift */,
+			);
+			path = Panel;
+			sourceTree = "<group>";
+		};
+		A5000005 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				D7A100020000000000000001 /* AppDesignSystem.swift */,
+				D7A100020000000000000002 /* SettingsComponents.swift */,
+				D7A100020000000000000003 /* SettingsAppShell.swift */,
+				E8A100020000000000000001 /* GeneralSettingsView.swift */,
+				E8A100020000000000000002 /* AboutView.swift */,
+				A200000B /* IslandDesignTokens.swift */,
+				A20000B0 /* IslandShellLayout.swift */,
+				A200000C /* IslandRootView.swift */,
+				A200000D /* CompactIslandView.swift */,
+				A200000E /* ExpandedIslandView.swift */,
+				A200000F /* PinButton.swift */,
+				A2000012 /* SettingsRootView.swift */,
+				A200001A /* ApplicationsGridView.swift */,
+				A200001B /* HandCursorModifier.swift */,
+				A200001C /* NewReminderPanelView.swift */,
+				A2000021 /* TodoView.swift */,
+				A200001E /* FilesGridView.swift */,
+				0CF1FD2BFCD44586E0ECBB77 /* LyricsView.swift */,
+				B3A1000AE5F2C9D47A680B3E /* CompactCapsuleContentView.swift */,
+				B3A10006E5F2C9D47A680B3E /* NotchLyricView.swift */,
+				B3A10008E5F2C9D47A680B3E /* NotchLyricMask.swift */,
+				B4A100020000000000000004 /* QuickAppsCardView.swift */,
+				B4A100020000000000000005 /* QuickAppsSettingsView.swift */,
+				B5A100020000000000000004 /* ShortcutsCardView.swift */,
+				B5A100020000000000000005 /* ShortcutsSettingsView.swift */,
+				B6A100020000000000000001 /* NotificationSettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A5000006 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A2000005 /* IslandState.swift */,
+				A2000006 /* IslandViewModel.swift */,
+				A2000010 /* IslandSettings.swift */,
+				A2000015 /* WeatherProvider.swift */,
+				F1A100020000000000000001 /* NotificationCoordinator.swift */,
+				A2000016 /* CalendarProvider.swift */,
+				A2000017 /* ReminderProvider.swift */,
+				A2000018 /* PlaybackProvider.swift */,
+				A2000019 /* ApplicationsProvider.swift */,
+				A200001D /* FileDataProvider.swift */,
+				A2000020 /* TodoViewModel.swift */,
+				A20000C1 /* CompactMusicPresentation.swift */,
+				56E73D3FBB4C6AA2FBBF90C3 /* LyricsProvider.swift */,
+				AE6C480E68B3DBE8666CFA83 /* LyricsModels.swift */,
+				92AA4C01D0F31701723CD22E /* LyricsParser.swift */,
+				9620D3350E2FB681CC195ABA /* LyricsCacheModel.swift */,
+				EFF846F0A3FB7A245AD8AD27 /* LyricsNetworkService.swift */,
+				B3A10002E5F2C9D47A680B3E /* NotchGeometryProvider.swift */,
+				B3A10004E5F2C9D47A680B3E /* LyricTextMeasurer.swift */,
+				B4A100020000000000000001 /* QuickAppItem.swift */,
+				B4A100020000000000000002 /* QuickAppsStore.swift */,
+				B5A100020000000000000001 /* ShortcutItem.swift */,
+				B5A100020000000000000002 /* ShortcutsStore.swift */,
+				B4A100020000000000000003 /* ApplicationLauncher.swift */,
+				A1000AE5 /* ModuleDragController.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A5000007 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A3000001 /* L-Nook.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A6000001 /* NookFlow */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A8000003 /* Build configuration list for PBXNativeTarget "NookFlow" */;
+				buildPhases = (
+					A7000001 /* Sources */,
+					A4000001 /* Frameworks */,
+					A7000002 /* Resources */,
+				);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NookFlow;
+			productName = NookFlow;
+			productReference = A3000001 /* L-Nook.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A9000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					A6000001 = {
+						CreatedOnToolsVersion = 15.4;
+					};
+				};
+			};
+			buildConfigurationList = A8000001 /* Build configuration list for PBXProject "NookFlow" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A5000001;
+			productRefGroup = A5000007 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A6000001 /* NookFlow */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A7000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000008 /* Assets.xcassets in Resources */,
+				A1000014 /* application.png in Resources */,
+				A1000013 /* folder.png in Resources */,
+				A1000032 /* music.png in Resources */,
+				A1000033 /* spotify.png in Resources */,
+				A1000034 /* finder_icon.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+	/* End PBXResourcesBuildPhase section */
+
+	/* Begin PBXSourcesBuildPhase section */
+		A7000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000001 /* NookFlowApp.swift in Sources */,
+				A1000002 /* AppDelegate.swift in Sources */,
+				A1000009 /* IslandPanel.swift in Sources */,
+				A100000A /* IslandWindowController.swift in Sources */,
+				C6A100010000000000000001 /* DesktopLyricsWindowController.swift in Sources */,
+				A1000005 /* IslandState.swift in Sources */,
+				A1000006 /* IslandViewModel.swift in Sources */,
+				A100000B /* IslandDesignTokens.swift in Sources */,
+				A10000C1 /* CompactMusicPresentation.swift in Sources */,
+				A10000B0 /* IslandShellLayout.swift in Sources */,
+				A100000C /* IslandRootView.swift in Sources */,
+				A100000D /* CompactIslandView.swift in Sources */,
+				A100000E /* ExpandedIslandView.swift in Sources */,
+				A100000F /* PinButton.swift in Sources */,
+				A1000010 /* IslandSettings.swift in Sources */,
+				A1000015 /* WeatherProvider.swift in Sources */,
+				A1000016 /* CalendarProvider.swift in Sources */,
+				A1000017 /* ReminderProvider.swift in Sources */,
+				A1000018 /* PlaybackProvider.swift in Sources */,
+				A1000011 /* SettingsWindowController.swift in Sources */,
+				A1000012 /* SettingsRootView.swift in Sources */,
+				A1000019 /* ApplicationsProvider.swift in Sources */,
+				A100001A /* ApplicationsGridView.swift in Sources */,
+				A100001B /* HandCursorModifier.swift in Sources */,
+				A100001C /* NewReminderPanelView.swift in Sources */,
+				A100001D /* FileDataProvider.swift in Sources */,
+				A100001E /* FilesGridView.swift in Sources */,
+				A1000020 /* TodoViewModel.swift in Sources */,
+				A1000021 /* TodoView.swift in Sources */,
+				477540A27D8E4E5F4FC7DBC8 /* LyricsModels.swift in Sources */,
+				D24D34655AE7633DC1BFEED1 /* LyricsParser.swift in Sources */,
+				DA315AB856C9D6A53EC7EB1F /* LyricsCacheModel.swift in Sources */,
+				D0ADDA089E00ED2D5B9D082E /* LyricsNetworkService.swift in Sources */,
+				65D1C2E7893277608265B61B /* LyricsProvider.swift in Sources */,
+				CD17DAD5C65B14898A093ED5 /* LyricsView.swift in Sources */,
+				B3A10001E5F2C9D47A680B3E /* NotchGeometryProvider.swift in Sources */,
+				B3A10003E5F2C9D47A680B3E /* LyricTextMeasurer.swift in Sources */,
+				B3A10007E5F2C9D47A680B3E /* NotchLyricMask.swift in Sources */,
+				B3A10005E5F2C9D47A680B3E /* NotchLyricView.swift in Sources */,
+				B3A10009E5F2C9D47A680B3E /* CompactCapsuleContentView.swift in Sources */,
+				B4A100010000000000000001 /* QuickAppItem.swift in Sources */,
+				B4A100010000000000000002 /* QuickAppsStore.swift in Sources */,
+				B4A100010000000000000003 /* ApplicationLauncher.swift in Sources */,
+				B4A100010000000000000004 /* QuickAppsCardView.swift in Sources */,
+				B4A100010000000000000005 /* QuickAppsSettingsView.swift in Sources */,
+				B5A100010000000000000001 /* ShortcutItem.swift in Sources */,
+				B5A100010000000000000002 /* ShortcutsStore.swift in Sources */,
+				B5A100010000000000000004 /* ShortcutsCardView.swift in Sources */,
+				B5A100010000000000000005 /* ShortcutsSettingsView.swift in Sources */,
+				B6A100010000000000000001 /* NotificationSettingsView.swift in Sources */,
+				F1A100010000000000000001 /* NotificationCoordinator.swift in Sources */,
+				F1A100010000000000000002 /* InAppNotificationWindowController.swift in Sources */,
+				D7A100010000000000000001 /* AppDesignSystem.swift in Sources */,
+				D7A100010000000000000002 /* SettingsComponents.swift in Sources */,
+				D7A100010000000000000003 /* SettingsAppShell.swift in Sources */,
+				E8A100010000000000000001 /* GeneralSettingsView.swift in Sources */,
+				E8A100010000000000000002 /* AboutView.swift in Sources */,
+				A10009E5 /* ModuleDragController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B1000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B1000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		B1000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "L-Nook";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "L-Nook uses Apple Events to read playback information from music apps.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "L-Nook uses calendar access to show today's events.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationUsageDescription = "L-Nook uses your location to show local weather.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "L-Nook uses your location to show local weather.";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "L-Nook uses reminders access to show your incomplete tasks.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.personal.DynamicNook;
+				PRODUCT_NAME = "L-Nook";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B1000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "L-Nook";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "L-Nook uses Apple Events to read playback information from music apps.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "L-Nook uses calendar access to show today's events.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationUsageDescription = "L-Nook uses your location to show local weather.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "L-Nook uses your location to show local weather.";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "L-Nook uses reminders access to show your incomplete tasks.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.personal.DynamicNook;
+				PRODUCT_NAME = "L-Nook";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A8000001 /* Build configuration list for PBXProject "NookFlow" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1000001 /* Debug */,
+				B1000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A8000003 /* Build configuration list for PBXNativeTarget "NookFlow" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1000003 /* Debug */,
+				B1000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A9000001 /* Project object */;
+}
