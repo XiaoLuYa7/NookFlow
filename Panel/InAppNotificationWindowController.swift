@@ -47,11 +47,23 @@ struct InAppNotificationPayload {
     let kind: InAppNotificationKind
 }
 
+private enum InAppNotificationMetrics {
+    static let bannerSize = CGSize(width: 356, height: 88)
+    static let shadowPadding: CGFloat = 24
+    static let cornerRadius: CGFloat = 25
+
+    static var panelSize: CGSize {
+        CGSize(
+            width: bannerSize.width + shadowPadding * 2,
+            height: bannerSize.height + shadowPadding * 2
+        )
+    }
+}
+
 @MainActor
 final class InAppNotificationWindowController {
     static let shared = InAppNotificationWindowController()
 
-    private let panelSize = NSSize(width: 356, height: 88)
     private var panel: NSPanel?
     private var queue: [InAppNotificationPayload] = []
     private var presentationTask: Task<Void, Never>?
@@ -75,8 +87,11 @@ final class InAppNotificationWindowController {
         presentationTask?.cancel()
 
         let panel = makePanelIfNeeded()
-        panel.contentView = NSHostingView(rootView: InAppNotificationBanner(payload: payload))
+        panel.contentView = NSHostingView(
+            rootView: InAppNotificationHost(payload: payload)
+        )
 
+        let panelSize = InAppNotificationMetrics.panelSize
         let targetFrame = frame(for: panelSize)
         let startFrame = targetFrame.offsetBy(dx: 0, dy: 10)
         panel.setFrame(startFrame, display: true)
@@ -113,14 +128,14 @@ final class InAppNotificationWindowController {
         if let panel { return panel }
 
         let panel = InAppNotificationPanel(
-            contentRect: NSRect(origin: .zero, size: panelSize),
+            contentRect: NSRect(origin: .zero, size: InAppNotificationMetrics.panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
         panel.isReleasedWhenClosed = false
@@ -143,9 +158,10 @@ final class InAppNotificationWindowController {
         guard let screen else { return NSRect(origin: .zero, size: size) }
 
         let visibleFrame = screen.visibleFrame
+        let padding = InAppNotificationMetrics.shadowPadding
         return NSRect(
             x: visibleFrame.midX - size.width / 2,
-            y: visibleFrame.maxY - size.height - 28,
+            y: visibleFrame.maxY - size.height - 28 + padding,
             width: size.width,
             height: size.height
         )
@@ -155,6 +171,21 @@ final class InAppNotificationWindowController {
 private final class InAppNotificationPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+private struct InAppNotificationHost: View {
+    let payload: InAppNotificationPayload
+
+    var body: some View {
+        ZStack {
+            InAppNotificationBanner(payload: payload)
+        }
+        .frame(
+            width: InAppNotificationMetrics.panelSize.width,
+            height: InAppNotificationMetrics.panelSize.height
+        )
+        .background(Color.clear)
+    }
 }
 
 private struct InAppNotificationBanner: View {
@@ -209,9 +240,12 @@ private struct InAppNotificationBanner: View {
         .padding(.top, 8)
         .padding(.horizontal, 17)
         .padding(.bottom, 12)
-        .frame(width: 356, height: 88)
+        .frame(
+            width: InAppNotificationMetrics.bannerSize.width,
+            height: InAppNotificationMetrics.bannerSize.height
+        )
         .background {
-            RoundedRectangle(cornerRadius: 25, style: .continuous)
+            RoundedRectangle(cornerRadius: InAppNotificationMetrics.cornerRadius, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
@@ -223,15 +257,21 @@ private struct InAppNotificationBanner: View {
                     )
                 )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 25, style: .continuous)
+                    RoundedRectangle(cornerRadius: InAppNotificationMetrics.cornerRadius, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
                 }
                 .overlay(alignment: .top) {
-                    RoundedRectangle(cornerRadius: 25, style: .continuous)
+                    RoundedRectangle(cornerRadius: InAppNotificationMetrics.cornerRadius, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.04), lineWidth: 2)
                         .blur(radius: 0.5)
                 }
         }
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: InAppNotificationMetrics.cornerRadius,
+                style: .continuous
+            )
+        )
         .shadow(color: Color.black.opacity(0.24), radius: 18, y: 8)
     }
 }
