@@ -8,9 +8,9 @@ struct IslandRootView: View {
     @ObservedObject var viewModel: IslandViewModel
     @ObservedObject var settings: IslandSettings
     let onOpenSettings: () -> Void
+    let onOpenTodoSettings: () -> Void
     let onOpenFeedback: () -> Void
 
-    private let compactLyricLoadingTimer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
     private var playbackProvider: PlaybackProvider { viewModel.playbackProvider }
     private var lyricsProvider: LyricsProvider { viewModel.lyricsProvider }
 
@@ -26,6 +26,7 @@ struct IslandRootView: View {
     @State private var nextLyricStartTimeMS: TimeInterval?
     @State private var compactLyricKey = 0
     @State private var compactLyricLoadingDotCount = 1
+    @State private var compactLyricLoadingTask: Task<Void, Never>?
     @State private var foregroundPrompt: ForegroundAppPrompt?
     @State private var foregroundPromptTask: Task<Void, Never>?
     @State private var isTutorialHintVisible = false
@@ -62,6 +63,7 @@ struct IslandRootView: View {
             currentSnapshot = snapshot
             viewModel.lyricsProvider.update(for: snapshot, trackID: nil)
             updateCompactCapsuleMode()
+            configureCompactLyricLoadingTask()
         }
         .onReceive(viewModel.lyricsProvider.$currentLineIndex) { index in
             updateCompactLyric(index: index)
@@ -70,6 +72,7 @@ struct IslandRootView: View {
         .onReceive(viewModel.lyricsProvider.$lyrics) { _ in
             updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
             updateCompactCapsuleMode()
+            configureCompactLyricLoadingTask()
         }
         .onReceive(viewModel.lyricsProvider.$statusText) { _ in
             updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
@@ -81,9 +84,7 @@ struct IslandRootView: View {
             }
             updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
             updateCompactCapsuleMode()
-        }
-        .onReceive(compactLyricLoadingTimer) { _ in
-            updateCompactLyricLoadingStatusIfNeeded()
+            configureCompactLyricLoadingTask()
         }
         .onChange(of: settings.compactLeftSideIcon) { oldValue, newValue in
             handleSystemSideSelectionChange(oldValue: oldValue, newValue: newValue)
@@ -127,8 +128,14 @@ struct IslandRootView: View {
             viewModel.playbackProvider.updateAccessConfiguration(from: settings)
         }
         .onDisappear {
+            viewModel.playbackProvider.stop()
+            weatherProvider.stop()
+            deviceInfoProvider.stop()
+            batteryProvider.stop()
             systemStatusProvider.stop()
             foregroundAppProvider.stop()
+            compactLyricLoadingTask?.cancel()
+            compactLyricLoadingTask = nil
             foregroundPromptTask?.cancel()
             foregroundPromptTask = nil
         }
@@ -287,18 +294,21 @@ struct IslandRootView: View {
                 .allowsHitTesting(false)
                 .opacity(compactContentOpacity)
 
-                ExpandedIslandView(
-                    viewModel: viewModel,
-                    isContentReady: viewModel.shouldMountExpandedContent,
-                    contentRevealProgress: viewModel.contentRevealProgress,
-                    secondaryContentRevealProgress: viewModel.secondaryContentRevealProgress,
-                    settings: settings,
-                    onOpenSettings: onOpenSettings,
-                    onOpenFeedback: onOpenFeedback
-                )
-                .environmentObject(settings)
-                .opacity(expandedContentOpacity)
-                .allowsHitTesting(viewModel.presentationPhase == .expanded)
+                if viewModel.shouldMountExpandedContent {
+                    ExpandedIslandView(
+                        viewModel: viewModel,
+                        isContentReady: viewModel.shouldMountExpandedContent,
+                        contentRevealProgress: viewModel.contentRevealProgress,
+                        secondaryContentRevealProgress: viewModel.secondaryContentRevealProgress,
+                        settings: settings,
+                        onOpenSettings: onOpenSettings,
+                        onOpenTodoSettings: onOpenTodoSettings,
+                        onOpenFeedback: onOpenFeedback
+                    )
+                    .environmentObject(settings)
+                    .opacity(expandedContentOpacity)
+                    .allowsHitTesting(viewModel.presentationPhase == .expanded)
+                }
             }
             .frame(
                 width: canvasSize.width,
@@ -591,13 +601,38 @@ struct IslandRootView: View {
     private func updateCompactLyricLoadingStatusIfNeeded() {
         guard currentSnapshot.isLive,
               viewModel.lyricsProvider.isLoading,
-              viewModel.lyricsProvider.lyrics.isEmpty else { return }
+              viewModel.lyricsProvider.lyrics.isEmpty else {
+            compactLyricLoadingTask?.cancel()
+            compactLyricLoadingTask = nil
+            return
+        }
 
         compactLyricLoadingDotCount = compactLyricLoadingDotCount >= 3
             ? 1
             : compactLyricLoadingDotCount + 1
         updateCompactLyricStatusText()
         updateCompactCapsuleMode()
+    }
+
+    private func configureCompactLyricLoadingTask() {
+        let shouldRun = currentSnapshot.isLive
+            && viewModel.lyricsProvider.isLoading
+            && viewModel.lyricsProvider.lyrics.isEmpty
+
+        guard shouldRun else {
+            compactLyricLoadingTask?.cancel()
+            compactLyricLoadingTask = nil
+            return
+        }
+
+        guard compactLyricLoadingTask == nil else { return }
+        compactLyricLoadingTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                guard !Task.isCancelled else { return }
+                updateCompactLyricLoadingStatusIfNeeded()
+            }
+        }
     }
 
     private var compactLyricLoadingText: String {

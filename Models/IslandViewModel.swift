@@ -38,7 +38,8 @@ final class IslandViewModel: ObservableObject {
     @Published private(set) var fileDataRefreshToken = 0
     @Published private(set) var reduceMotionEnabled = false
     @Published private(set) var expandedContentOverflowHeight: CGFloat = 0
-    private(set) var externalInteractiveFrame: CGRect?
+    @Published private(set) var externalInteractiveFrame: CGRect?
+    @Published private(set) var todoTasks: [TodoTask] = []
 
     let playbackProvider: PlaybackProvider
     let lyricsProvider = LyricsProvider()
@@ -72,6 +73,7 @@ final class IslandViewModel: ObservableObject {
         capsuleExpandTask?.cancel()
         presentationTask?.cancel()
         tabCanvasTask?.cancel()
+        playbackProvider.stop()
     }
 
     // MARK: - Actions
@@ -476,7 +478,13 @@ final class IslandViewModel: ObservableObject {
     }
 
     func setExternalInteractiveFrame(_ frame: CGRect?) {
+        guard externalInteractiveFrame != frame else { return }
         externalInteractiveFrame = frame
+    }
+
+    func setTodoTasks(_ tasks: [TodoTask]) {
+        guard todoTasks != tasks else { return }
+        todoTasks = tasks
     }
 
     // MARK: - Hover-driven auto-collapse

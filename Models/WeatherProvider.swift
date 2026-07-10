@@ -45,7 +45,10 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     private let geocoder = CLGeocoder()
     private var hasStarted = false
     private var weatherTask: Task<Void, Never>?
+    private var refreshTimer: Timer?
+    private var scheduledRefreshInterval: TimeInterval?
     private static var hasRequestedAuthorization = false
+    private static let defaultRefreshInterval: TimeInterval = 15 * 60
 
     override init() {
         super.init()
@@ -54,16 +57,19 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     deinit {
+        refreshTimer?.invalidate()
         weatherTask?.cancel()
         geocoder.cancelGeocode()
         manager.stopUpdatingLocation()
         manager.delegate = nil
     }
 
-    func start() {
-        guard !hasStarted else { return }
-        hasStarted = true
-        requestLocationIfPossible()
+    func start(autoRefreshInterval: TimeInterval? = defaultRefreshInterval) {
+        if !hasStarted {
+            hasStarted = true
+            requestLocationIfPossible()
+        }
+        configureAutoRefresh(interval: autoRefreshInterval)
     }
 
     func refresh() {
@@ -71,7 +77,17 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
         requestLocationIfPossible()
     }
 
+    func stop() {
+        hasStarted = false
+        configureAutoRefresh(interval: nil)
+        weatherTask?.cancel()
+        weatherTask = nil
+        geocoder.cancelGeocode()
+        manager.stopUpdatingLocation()
+    }
+
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard hasStarted else { return }
         requestLocationIfPossible()
     }
 
@@ -149,18 +165,20 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func loadWeather(for location: CLLocation) {
-        updateSnapshot(
-            WeatherSnapshot(
-                temperature: nil,
-                apparentTemperature: nil,
-                humidity: nil,
-                condition: "加载中",
-                locationName: "当前位置",
-                symbolName: "cloud.fill",
-                detail: "正在更新天气",
-                isLive: false
+        if !snapshot.isLive {
+            updateSnapshot(
+                WeatherSnapshot(
+                    temperature: nil,
+                    apparentTemperature: nil,
+                    humidity: nil,
+                    condition: "加载中",
+                    locationName: "当前位置",
+                    symbolName: "cloud.fill",
+                    detail: "正在更新天气",
+                    isLive: false
+                )
             )
-        )
+        }
 
         weatherTask?.cancel()
         weatherTask = Task { [location] in
@@ -190,6 +208,22 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
                 }
             }
         }
+    }
+
+    private func configureAutoRefresh(interval: TimeInterval?) {
+        guard scheduledRefreshInterval != interval else { return }
+
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        scheduledRefreshInterval = interval
+
+        guard let interval, interval > 0 else { return }
+
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+        timer.tolerance = min(interval * 0.15, 60)
+        refreshTimer = timer
     }
 
     private func updateSnapshot(_ snapshot: WeatherSnapshot) {

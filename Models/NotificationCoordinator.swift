@@ -81,7 +81,9 @@ final class NotificationCoordinator {
             try? await Task.sleep(for: .milliseconds(180))
             guard let self, !Task.isCancelled else { return }
             if NotificationSettingsViewModel.shared.weather.isEnabled {
-                weatherProvider.start()
+                weatherProvider.start(autoRefreshInterval: nil)
+            } else {
+                weatherProvider.stop()
             }
         }
     }

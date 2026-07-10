@@ -596,6 +596,7 @@ private actor ApplicationDataCache {
     private var applicationSignature: String?
     private var applicationItems: [ApplicationItem] = []
     private var directorySizes: [String: (signature: String, size: Int64)] = [:]
+    private let maxDirectorySizeEntries = 256
 
     func applications(for signature: String) -> [ApplicationItem]? {
         guard applicationSignature == signature else { return nil }
@@ -603,6 +604,9 @@ private actor ApplicationDataCache {
     }
 
     func storeApplications(_ items: [ApplicationItem], signature: String) {
+        if applicationSignature != signature {
+            directorySizes.removeAll(keepingCapacity: true)
+        }
         applicationSignature = signature
         applicationItems = items
     }
@@ -615,5 +619,14 @@ private actor ApplicationDataCache {
 
     func storeDirectorySize(_ size: Int64, for path: String, signature: String) {
         directorySizes[path] = (signature, size)
+        trimDirectorySizeCacheIfNeeded()
+    }
+
+    private func trimDirectorySizeCacheIfNeeded() {
+        guard directorySizes.count > maxDirectorySizeEntries else { return }
+
+        for key in directorySizes.keys.prefix(directorySizes.count - maxDirectorySizeEntries) {
+            directorySizes.removeValue(forKey: key)
+        }
     }
 }

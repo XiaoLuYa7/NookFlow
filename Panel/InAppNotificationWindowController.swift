@@ -49,13 +49,13 @@ struct InAppNotificationPayload {
 
 private enum InAppNotificationMetrics {
     static let bannerSize = CGSize(width: 356, height: 88)
-    static let shadowPadding: CGFloat = 24
+    static let panelPadding: CGFloat = 0
     static let cornerRadius: CGFloat = 25
 
     static var panelSize: CGSize {
         CGSize(
-            width: bannerSize.width + shadowPadding * 2,
-            height: bannerSize.height + shadowPadding * 2
+            width: bannerSize.width + panelPadding * 2,
+            height: bannerSize.height + panelPadding * 2
         )
     }
 }
@@ -87,11 +87,16 @@ final class InAppNotificationWindowController {
         presentationTask?.cancel()
 
         let panel = makePanelIfNeeded()
-        panel.contentView = NSHostingView(
+        let panelSize = InAppNotificationMetrics.panelSize
+        let hostingView = InAppNotificationHostingView(
             rootView: InAppNotificationHost(payload: payload)
         )
+        hostingView.frame = NSRect(origin: .zero, size: panelSize)
+        hostingView.autoresizingMask = [.width, .height]
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        panel.contentView = hostingView
 
-        let panelSize = InAppNotificationMetrics.panelSize
         let targetFrame = frame(for: panelSize)
         let startFrame = targetFrame.offsetBy(dx: 0, dy: 10)
         panel.setFrame(startFrame, display: true)
@@ -116,7 +121,9 @@ final class InAppNotificationWindowController {
                 panel.animator().setFrameOrigin(startFrame.origin)
             } completionHandler: { [weak self, weak panel] in
                 Task { @MainActor in
+                    panel?.alphaValue = 0
                     panel?.orderOut(nil)
+                    panel?.contentView = nil
                     self?.isPresenting = false
                     self?.presentNextIfNeeded()
                 }
@@ -136,6 +143,8 @@ final class InAppNotificationWindowController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        panel.contentView?.wantsLayer = true
+        panel.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
         panel.isReleasedWhenClosed = false
@@ -158,7 +167,7 @@ final class InAppNotificationWindowController {
         guard let screen else { return NSRect(origin: .zero, size: size) }
 
         let visibleFrame = screen.visibleFrame
-        let padding = InAppNotificationMetrics.shadowPadding
+        let padding = InAppNotificationMetrics.panelPadding
         return NSRect(
             x: visibleFrame.midX - size.width / 2,
             y: visibleFrame.maxY - size.height - 28 + padding,
@@ -171,6 +180,18 @@ final class InAppNotificationWindowController {
 private final class InAppNotificationPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+private final class InAppNotificationHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool { false }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        window?.isOpaque = false
+        window?.backgroundColor = .clear
+    }
 }
 
 private struct InAppNotificationHost: View {
@@ -272,6 +293,5 @@ private struct InAppNotificationBanner: View {
                 style: .continuous
             )
         )
-        .shadow(color: Color.black.opacity(0.24), radius: 18, y: 8)
     }
 }

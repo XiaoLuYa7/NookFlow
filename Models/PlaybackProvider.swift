@@ -158,6 +158,9 @@ final class PlaybackProvider: ObservableObject {
     private var artworkLookupTask: Task<Void, Never>?
     private var lastArtworkLookupKey: String?
     private var fallbackArtworkDataByKey: [String: Data] = [:]
+    private var isRefreshInFlight = false
+    private var needsRefreshAfterCurrent = false
+    private var refreshGeneration = 0
 
     @MainActor
     init(settings: IslandSettings) {
@@ -178,12 +181,30 @@ final class PlaybackProvider: ObservableObject {
         }
 
         // Listen for Apple Music playback notifications for faster updates
-        notificationObserver = DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("com.apple.Music.playerInfo"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.refresh()
+        if notificationObserver == nil {
+            notificationObserver = DistributedNotificationCenter.default().addObserver(
+                forName: NSNotification.Name("com.apple.Music.playerInfo"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.refresh()
+            }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        refreshGeneration += 1
+        isRefreshInFlight = false
+        needsRefreshAfterCurrent = false
+        artworkLookupTask?.cancel()
+        artworkLookupTask = nil
+        cancelPendingLiveSeek()
+
+        if let observer = notificationObserver {
+            DistributedNotificationCenter.default().removeObserver(observer)
+            notificationObserver = nil
         }
     }
 
@@ -239,12 +260,7 @@ final class PlaybackProvider: ObservableObject {
     }
 
     deinit {
-        timer?.invalidate()
-        artworkLookupTask?.cancel()
-        cancelPendingLiveSeek()
-        if let observer = notificationObserver {
-            DistributedNotificationCenter.default().removeObserver(observer)
-        }
+        stop()
     }
 
     private func runTransportCommand(_ commandKind: PlaybackTransportCommand, allowFallback: Bool) {
@@ -333,17 +349,41 @@ final class PlaybackProvider: ObservableObject {
     }
 
     private func refresh() {
+        guard !isRefreshInFlight else {
+            needsRefreshAfterCurrent = true
+            return
+        }
+
+        isRefreshInFlight = true
+        let generation = refreshGeneration
         let access = resolvedAccessConfiguration()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Self.loadSnapshotResult(access: access)
             DispatchQueue.main.async { [weak self] in
                 guard let self,
+                      self.refreshGeneration == generation
+                else {
+                    return
+                }
+
+                self.isRefreshInFlight = false
+
+                guard
                       Date() >= self.ignoreExternalRefreshUntil else {
+                    if self.needsRefreshAfterCurrent {
+                        self.needsRefreshAfterCurrent = false
+                        self.refresh()
+                    }
                     return
                 }
 
                 self.applySnapshot(result.snapshot)
                 self.diagnosticText = result.diagnostic
+
+                if self.needsRefreshAfterCurrent {
+                    self.needsRefreshAfterCurrent = false
+                    self.refresh()
+                }
             }
         }
     }

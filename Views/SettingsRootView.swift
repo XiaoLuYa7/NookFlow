@@ -488,6 +488,9 @@ struct SettingsRootView: View {
     @ObservedObject var settings: IslandSettings
     @StateObject private var model: SettingsEditorModel
     @State private var isSidebarCollapsed = false
+    @State private var previewImageCardImage: NSImage?
+    @State private var previewImageCardImagePath = ""
+    @State private var previewImageCardLoadTask: Task<Void, Never>?
 
     init(settings: IslandSettings) {
         self.settings = settings
@@ -515,12 +518,20 @@ struct SettingsRootView: View {
         .frame(minWidth: 900, minHeight: 580)
         .onAppear {
             consumeNavigationTriggers()
+            loadPreviewImageCardThumbnailIfNeeded()
+        }
+        .onChange(of: model.imageCardPath) { _, _ in
+            loadPreviewImageCardThumbnailIfNeeded()
         }
         .onChange(of: settings.quickAppsSettingsTrigger) { _, _ in
             consumeNavigationTriggers()
         }
         .onChange(of: settings.shortcutsSettingsTrigger) { _, _ in
             consumeNavigationTriggers()
+        }
+        .onDisappear {
+            previewImageCardLoadTask?.cancel()
+            previewImageCardLoadTask = nil
         }
         .sheet(isPresented: $model.showFeedbackSheet) {
             FeedbackMailSheet {
@@ -547,7 +558,7 @@ struct SettingsRootView: View {
                 homePage
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
             } else if model.selectedSettingsPage == .todo {
-                TodoView()
+                TodoView(settings: settings)
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
             } else if model.selectedSettingsPage == .music {
                 musicPage
@@ -906,7 +917,7 @@ struct SettingsRootView: View {
                 .offset(x: 13, y: 16)
 
             Group {
-                if let image = NSImage(contentsOfFile: model.imageCardPath) {
+                if let image = previewImageCardImage {
                     Image(nsImage: image)
                         .resizable()
                         .scaledToFill()
@@ -961,10 +972,8 @@ struct SettingsRootView: View {
     }
 
     private var previewFinderIcon: some View {
-        let iconPath = Bundle.main.path(forResource: "finder_icon", ofType: "png")
-
-        return Group {
-            if let iconPath, let image = NSImage(contentsOfFile: iconPath) {
+        Group {
+            if let image = AppCachedImageAssets.finderIcon {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -977,6 +986,33 @@ struct SettingsRootView: View {
                             .foregroundStyle(.black.opacity(0.65))
                     }
             }
+        }
+    }
+
+    private func loadPreviewImageCardThumbnailIfNeeded() {
+        let path = model.imageCardPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard path != previewImageCardImagePath || previewImageCardImage == nil else {
+            return
+        }
+
+        previewImageCardLoadTask?.cancel()
+        previewImageCardImagePath = path
+        previewImageCardImage = nil
+
+        guard !path.isEmpty else {
+            previewImageCardLoadTask = nil
+            return
+        }
+
+        previewImageCardLoadTask = Task { @MainActor in
+            let image = await Task.detached(priority: .utility) { () -> NSImage? in
+                guard FileManager.default.fileExists(atPath: path) else { return nil }
+                return NSImage(contentsOfFile: path)
+            }.value
+
+            guard !Task.isCancelled, previewImageCardImagePath == path else { return }
+            previewImageCardImage = image
+            previewImageCardLoadTask = nil
         }
     }
 

@@ -19,16 +19,22 @@ enum TodoStyle {
 
 struct TodoView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject var settings: IslandSettings
     @StateObject private var model = TodoViewModel()
     @StateObject private var reminderProvider = ReminderProvider()
     @State private var isShowingNewTaskSheet = false
+    @State private var isShowingTodoSettings = false
     @State private var errorMessage: String?
+    @State private var syncTask: Task<Void, Never>?
+    @State private var createTask: Task<Void, Never>?
+    @State private var completionTasks: [TodoTask.ID: Task<Void, Never>] = [:]
 
     var body: some View {
         TodoMainContentView(
             model: model,
             isShowingNewTaskSheet: $isShowingNewTaskSheet,
             onSync: syncReminders,
+            onOpenSettings: { isShowingTodoSettings = true },
             onToggleCompletion: toggleCompletion
         )
         .background(TodoStyle.pageBackground)
@@ -45,23 +51,23 @@ struct TodoView: View {
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
             model.refreshForCurrentDate()
         }
+        .onDisappear {
+            syncTask?.cancel()
+            syncTask = nil
+            createTask?.cancel()
+            createTask = nil
+            completionTasks.values.forEach { $0.cancel() }
+            completionTasks.removeAll()
+        }
         .sheet(isPresented: $isShowingNewTaskSheet) {
             NewTodoSheetView(
                 initialDate: model.selectedDate,
                 onCancel: { isShowingNewTaskSheet = false },
-                onSave: { draft in
-                    Task {
-                        guard let identifier = await reminderProvider.createTodoReminder(
-                            request: draft.reminderCreationRequest
-                        ) else {
-                            errorMessage = "无法保存到系统提醒事项，请检查权限后重试。"
-                            return
-                        }
-                        model.addTask(draft, reminderIdentifier: identifier)
-                        isShowingNewTaskSheet = false
-                    }
-                }
+                onSave: createTodo
             )
+        }
+        .sheet(isPresented: $isShowingTodoSettings) {
+            TodoSettingsSheetView(settings: settings)
         }
         .alert(
             "待办事项",
@@ -77,20 +83,44 @@ struct TodoView: View {
     }
 
     private func syncReminders() {
-        Task {
+        guard syncTask == nil else { return }
+        syncTask = Task { @MainActor in
+            defer { syncTask = nil }
             let tasks = await reminderProvider.loadTodoTasksForSync()
+            guard !Task.isCancelled else { return }
             model.replaceTasks(tasks)
         }
     }
 
     private func toggleCompletion(_ task: TodoTask) {
-        Task {
+        guard completionTasks[task.id] == nil else { return }
+        completionTasks[task.id] = Task { @MainActor in
+            defer { completionTasks[task.id] = nil }
             let succeeded = await model.completeTask(id: task.id) { identifier in
                 await reminderProvider.completeTodoReminder(identifier: identifier)
             }
+            guard !Task.isCancelled else { return }
             if !succeeded {
                 errorMessage = "未能完成系统提醒事项，任务状态未更改。"
             }
+        }
+    }
+
+    private func createTodo(_ draft: TodoTaskDraft) {
+        guard createTask == nil else { return }
+        createTask = Task { @MainActor in
+            defer { createTask = nil }
+            guard let identifier = await reminderProvider.createTodoReminder(
+                request: draft.reminderCreationRequest
+            ) else {
+                guard !Task.isCancelled else { return }
+                errorMessage = "无法保存到系统提醒事项，请检查权限后重试。"
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            model.addTask(draft, reminderIdentifier: identifier)
+            isShowingNewTaskSheet = false
         }
     }
 }
@@ -99,6 +129,7 @@ private struct TodoMainContentView: View {
     @ObservedObject var model: TodoViewModel
     @Binding var isShowingNewTaskSheet: Bool
     let onSync: () -> Void
+    let onOpenSettings: () -> Void
     let onToggleCompletion: (TodoTask) -> Void
 
     var body: some View {
@@ -117,6 +148,11 @@ private struct TodoMainContentView: View {
                             .font(AppTypography.sectionTitle)
                             .foregroundStyle(AppColor.accent)
                     }
+                    Button(action: onOpenSettings) {
+                        Label("设置", systemImage: "slider.horizontal.3")
+                    }
+                    .buttonStyle(AppButtonStyle(role: .secondary))
+                    .help("待办设置")
                     Button(action: onSync) {
                         Label("同步", systemImage: "arrow.triangle.2.circlepath")
                     }
@@ -144,6 +180,262 @@ private struct TodoMainContentView: View {
                     onToggleCompletion: onToggleCompletion
                 )
             }
+        }
+    }
+}
+
+private struct TodoSettingsSheetView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var settings: IslandSettings
+
+    @AppStorage(TodoCardStorageKeys.showDateSelector) private var showDateSelector = true
+    @AppStorage(TodoCardStorageKeys.showTime) private var showTime = true
+    @AppStorage(TodoCardStorageKeys.showCategory) private var showCategory = true
+    @AppStorage(TodoCardStorageKeys.showCompleted) private var showCompleted = false
+    @AppStorage(TodoCardStorageKeys.maxVisibleItems) private var maxVisibleItems = 2
+    @AppStorage(TodoCardStorageKeys.defaultRange) private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
+    @AppStorage(TodoCardStorageKeys.sortMode) private var sortModeRaw = TodoSortMode.timeAsc.rawValue
+    @AppStorage(TodoCardStorageKeys.highlightColor) private var highlightColorRaw = TodoHighlightColor.blue.rawValue
+    @AppStorage(TodoCardStorageKeys.useCompactMode) private var useCompactMode = false
+    @AppStorage(TodoCardStorageKeys.showEdgeGlow) private var showEdgeGlow = true
+    @AppStorage(TodoCardStorageKeys.showReminderBadge) private var showReminderBadge = true
+    @AppStorage(TodoCardStorageKeys.dueSoonMinutes) private var dueSoonMinutes = 15
+
+    var body: some View {
+        VStack(spacing: 0) {
+            sheetHeader
+
+            ScrollView {
+                VStack(spacing: AppSpacing.section) {
+                    SettingsSectionCard(title: "模块", subtitle: "控制待办在灵动岛中的显示") {
+                        AppSettingsToggleRow(
+                            icon: "checklist",
+                            title: "显示待办卡片",
+                            subtitle: "关闭后，灵动岛首页不再显示待办模块。",
+                            showsDivider: false,
+                            isOn: $settings.showTodoModule
+                        )
+                    }
+
+                    SettingsSectionCard(title: "卡片显示", subtitle: "调整灵动岛待办卡片中的信息密度") {
+                        AppSettingsToggleRow(
+                            icon: "calendar",
+                            title: "显示日期选择器",
+                            subtitle: "在卡片顶部显示可切换日期。",
+                            isOn: $showDateSelector
+                        )
+                        AppSettingsToggleRow(
+                            icon: "clock",
+                            title: "显示时间",
+                            subtitle: "任务行展示提醒时间。",
+                            isOn: $showTime
+                        )
+                        AppSettingsToggleRow(
+                            icon: "tag",
+                            title: "显示标签",
+                            subtitle: "展示分组、优先级等标签信息。",
+                            isOn: $showCategory
+                        )
+                        AppSettingsToggleRow(
+                            icon: "checkmark.circle",
+                            title: "显示已完成事项",
+                            subtitle: "卡片列表中包含已完成任务。",
+                            isOn: $showCompleted
+                        )
+                        TodoSettingsStepperRow(
+                            icon: "number",
+                            title: "最大显示数量",
+                            subtitle: "限制卡片中直接展示的任务数量。",
+                            value: $maxVisibleItems,
+                            range: 1...4,
+                            showsDivider: false
+                        )
+                    }
+
+                    SettingsSectionCard(title: "筛选与排序", subtitle: "设置卡片默认展示范围和排序规则") {
+                        TodoSettingsRawPickerRow<TodoDefaultRange>(
+                            icon: "calendar.day.timeline.left",
+                            title: "默认显示范围",
+                            subtitle: "打开卡片时默认查看的待办范围。",
+                            selection: $defaultRangeRaw,
+                            values: TodoDefaultRange.allCases
+                        )
+                        TodoSettingsRawPickerRow<TodoSortMode>(
+                            icon: "arrow.up.arrow.down",
+                            title: "默认排序方式",
+                            subtitle: "影响待办卡片和弹窗列表的排列顺序。",
+                            selection: $sortModeRaw,
+                            values: TodoSortMode.allCases,
+                            showsDivider: false
+                        )
+                    }
+
+                    SettingsSectionCard(title: "视觉与提醒", subtitle: "调整卡片强调色和提醒提示") {
+                        TodoSettingsRawPickerRow<TodoHighlightColor>(
+                            icon: "paintpalette",
+                            title: "高亮颜色",
+                            subtitle: "用于选中日期、按钮和提醒状态。",
+                            selection: $highlightColorRaw,
+                            values: TodoHighlightColor.allCases
+                        )
+                        AppSettingsToggleRow(
+                            icon: "sparkles",
+                            title: "边缘光",
+                            subtitle: "在卡片边缘显示轻微强调效果。",
+                            isOn: $showEdgeGlow
+                        )
+                        AppSettingsToggleRow(
+                            icon: "rectangle.compress.vertical",
+                            title: "紧凑模式",
+                            subtitle: "减少卡片内边距，适合较小模块尺寸。",
+                            isOn: $useCompactMode
+                        )
+                        AppSettingsToggleRow(
+                            icon: "bell.badge",
+                            title: "显示提醒标识",
+                            subtitle: "临近提醒时在任务旁展示提示。",
+                            isOn: $showReminderBadge
+                        )
+                        TodoSettingsValuePickerRow(
+                            icon: "timer",
+                            title: "即将到期",
+                            subtitle: "距离提醒多少分钟内显示临近状态。",
+                            selection: $dueSoonMinutes,
+                            options: [5, 15, 30, 60],
+                            titleForValue: { $0 == 60 ? "1 小时" : "\($0) 分钟" },
+                            showsDivider: false
+                        )
+                    }
+                }
+                .padding(AppSpacing.xxl)
+            }
+            .scrollIndicators(.automatic)
+        }
+        .frame(width: 620, height: 680)
+        .background(AppColor.pageBackground)
+        .preferredColorScheme(.light)
+    }
+
+    private var sheetHeader: some View {
+        HStack(spacing: AppSpacing.md) {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 19, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(AppColor.accent)
+                .frame(width: 38, height: 38)
+                .background {
+                    RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous)
+                        .fill(AppColor.accentSoft)
+                }
+
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                Text("待办设置")
+                    .font(AppTypography.pageTitle)
+                    .foregroundStyle(AppColor.textPrimary)
+                Text("管理灵动岛待办卡片的显示、筛选、排序与提醒。")
+                    .font(AppTypography.pageSubtitle)
+                    .foregroundStyle(AppColor.textSecondary)
+            }
+
+            Spacer()
+
+            Button("完成") {
+                dismiss()
+            }
+            .buttonStyle(AppButtonStyle(role: .primary))
+        }
+        .padding(.horizontal, AppSpacing.xxl)
+        .padding(.top, AppSpacing.xxl)
+        .padding(.bottom, AppSpacing.lg)
+    }
+}
+
+private struct TodoSettingsStepperRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var showsDivider = true
+
+    var body: some View {
+        SettingsRow(
+            icon: icon,
+            title: title,
+            subtitle: subtitle,
+            showsDivider: showsDivider
+        ) {
+            Stepper(value: $value, in: range) {
+                Text("\(value) 项")
+                    .font(AppTypography.control.monospacedDigit())
+                    .foregroundStyle(AppColor.textBody)
+                    .frame(minWidth: 46, alignment: .trailing)
+            }
+            .fixedSize()
+        }
+    }
+}
+
+private struct TodoSettingsRawPickerRow<Value>: View where Value: RawRepresentable & CaseIterable & Hashable, Value.RawValue == String, Value.AllCases: RandomAccessCollection {
+    let icon: String
+    let title: String
+    let subtitle: String
+    @Binding var selection: String
+    let values: Value.AllCases
+    var showsDivider = true
+
+    var body: some View {
+        TodoSettingsValuePickerRow(
+            icon: icon,
+            title: title,
+            subtitle: subtitle,
+            selection: $selection,
+            options: values.map(\.rawValue),
+            titleForValue: { rawValue in
+                values.first(where: { $0.rawValue == rawValue }).map(displayTitle) ?? rawValue
+            },
+            showsDivider: showsDivider
+        )
+    }
+
+    private func displayTitle(for value: Value) -> String {
+        switch value {
+        case let range as TodoDefaultRange:
+            range.title
+        case let sort as TodoSortMode:
+            sort.title
+        case let color as TodoHighlightColor:
+            color.title
+        default:
+            String(describing: value)
+        }
+    }
+}
+
+private struct TodoSettingsValuePickerRow<Value: Hashable>: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    @Binding var selection: Value
+    let options: [Value]
+    let titleForValue: (Value) -> String
+    var showsDivider = true
+
+    var body: some View {
+        SettingsRow(
+            icon: icon,
+            title: title,
+            subtitle: subtitle,
+            showsDivider: showsDivider
+        ) {
+            Picker("", selection: $selection) {
+                ForEach(options, id: \.self) { value in
+                    Text(titleForValue(value)).tag(value)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 190)
         }
     }
 }

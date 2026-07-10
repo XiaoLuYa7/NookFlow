@@ -50,6 +50,34 @@ struct FilePathSegment: Identifiable, Hashable {
     var id: String { url.path }
 }
 
+struct FileOperationResult: Equatable, Sendable {
+    var isSuccess: Bool
+    var errorMessage: String?
+
+    static let success = FileOperationResult(isSuccess: true, errorMessage: nil)
+
+    static func failure(_ message: String) -> FileOperationResult {
+        FileOperationResult(isSuccess: false, errorMessage: message)
+    }
+}
+
+struct FileImportResult: Equatable, Sendable {
+    var importedCount: Int
+    var failures: [String]
+
+    var importedAny: Bool {
+        importedCount > 0
+    }
+
+    var failureMessage: String? {
+        guard !failures.isEmpty else { return nil }
+        if failures.count == 1 {
+            return failures[0]
+        }
+        return "\(failures.count) 个文件未能导入：\(failures.prefix(3).joined(separator: "、"))"
+    }
+}
+
 enum FileCategory: String, CaseIterable, Identifiable {
     case all
     case image
@@ -224,15 +252,19 @@ final class FileDataProvider: ObservableObject {
     }
 
     @discardableResult
-    nonisolated static func importFilesToStaging(_ urls: [URL]) -> Bool {
+    nonisolated static func importFilesToStaging(_ urls: [URL]) -> FileImportResult {
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: stagingDirectoryURL(), withIntermediateDirectories: true)
         } catch {
-            return false
+            return FileImportResult(
+                importedCount: 0,
+                failures: ["无法创建 FileData 文件夹：\(error.localizedDescription)"]
+            )
         }
 
-        var importedAny = false
+        var importedCount = 0
+        var failures: [String] = []
         for sourceURL in urls {
             let didStartAccess = sourceURL.startAccessingSecurityScopedResource()
             defer {
@@ -244,17 +276,17 @@ final class FileDataProvider: ObservableObject {
             let destinationURL = uniqueDestinationURL(for: sourceURL, fileManager: fm)
             do {
                 if sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
-                    importedAny = true
+                    importedCount += 1
                 } else {
                     try fm.copyItem(at: sourceURL, to: destinationURL)
-                    importedAny = true
+                    importedCount += 1
                 }
             } catch {
-                continue
+                failures.append("\(sourceURL.lastPathComponent)：\(error.localizedDescription)")
             }
         }
 
-        return importedAny
+        return FileImportResult(importedCount: importedCount, failures: failures)
     }
 
     private var hasLoadedCustomOrder = false
@@ -351,38 +383,56 @@ final class FileDataProvider: ObservableObject {
 
     /// Move a file from the current directory into a visible folder.
     @discardableResult
-    func moveFile(_ file: StagingFileItem, toFolder folder: StagingFileItem) -> Bool {
-        guard canMove(file, into: folder) else { return false }
-
-        let fm = FileManager.default
-        var isDirectory: ObjCBool = false
-        guard fm.fileExists(atPath: file.url.path),
-              fm.fileExists(atPath: folder.url.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
-            return false
+    func moveFile(_ file: StagingFileItem, toFolder folder: StagingFileItem) async -> FileOperationResult {
+        guard canMove(file, into: folder) else {
+            return .failure("无法将“\(file.name)”移动到“\(folder.name)”。")
         }
 
-        let destinationURL = Self.uniqueDestinationURL(for: file.url, in: folder.url, fileManager: fm)
-        do {
-            try fm.moveItem(at: file.url, to: destinationURL)
-        } catch {
-            return false
-        }
-
-        files.removeAll { $0.id == file.id }
-
+        let sourceURL = file.url
+        let folderURL = folder.url
+        let sourceID = file.id
         let currentDirKey = currentDirectory.standardizedFileURL.path
+        let targetDirKey = folder.url.standardizedFileURL.path
+
+        let moveTask = Task.detached(priority: .userInitiated) { () -> (destinationURL: URL?, errorMessage: String?) in
+            let fm = FileManager.default
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: sourceURL.path),
+                  fm.fileExists(atPath: folderURL.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                return (nil, "源文件或目标文件夹不存在。")
+            }
+
+            let destinationURL = FileDataProvider.uniqueDestinationURL(for: sourceURL, in: folderURL, fileManager: fm)
+            do {
+                try fm.moveItem(at: sourceURL, to: destinationURL)
+                return (destinationURL, nil)
+            } catch {
+                return (nil, "移动“\(sourceURL.lastPathComponent)”失败：\(error.localizedDescription)")
+            }
+        }
+        let moveResult = await moveTask.value
+
+        guard let destinationURL = moveResult.destinationURL else {
+            return .failure(moveResult.errorMessage ?? "移动“\(file.name)”失败。")
+        }
+
+        guard currentDirectory.standardizedFileURL.path == currentDirKey else {
+            return .success
+        }
+
+        files.removeAll { $0.id == sourceID }
+
         customFileOrder[currentDirKey] = files.map(\.id)
 
-        let targetDirKey = folder.url.standardizedFileURL.path
         if var targetOrder = customFileOrder[targetDirKey] {
-            targetOrder.removeAll { $0 == file.id || $0 == destinationURL.path }
+            targetOrder.removeAll { $0 == sourceID || $0 == destinationURL.path }
             targetOrder.append(destinationURL.path)
             customFileOrder[targetDirKey] = targetOrder
         }
 
         saveCustomOrder()
-        return true
+        return .success
     }
 
     private func canMove(_ file: StagingFileItem, into folder: StagingFileItem) -> Bool {
@@ -543,6 +593,14 @@ actor ThreadSafeImageCache {
     private let fallbackIconCache = NSCache<NSString, NSImage>()
     private let scale: CGFloat = 2
 
+    private init() {
+        iconCache.countLimit = 400
+        iconCache.totalCostLimit = 24 * 1024 * 1024
+        thumbnailCache.countLimit = 160
+        thumbnailCache.totalCostLimit = 32 * 1024 * 1024
+        fallbackIconCache.countLimit = 8
+    }
+
     func icon(for url: URL, targetSize: NSSize) async -> NSImage {
         let key = cacheKey(for: url, targetSize: targetSize, variant: "icon")
         if let cached = iconCache.object(forKey: key) {
@@ -554,12 +612,12 @@ actor ThreadSafeImageCache {
         }
 
         if let image = await quickLookImage(for: url, targetSize: targetSize, representations: .icon) {
-            iconCache.setObject(image, forKey: key)
+            iconCache.setObject(image, forKey: key, cost: cacheCost(for: image))
             return image
         }
 
         let fallback = await fallbackIcon(for: url, targetSize: targetSize)
-        iconCache.setObject(fallback, forKey: key)
+        iconCache.setObject(fallback, forKey: key, cost: cacheCost(for: fallback))
         return fallback
     }
 
@@ -581,7 +639,7 @@ actor ThreadSafeImageCache {
         }
 
         guard !Task.isCancelled, let image else { return nil }
-        thumbnailCache.setObject(image, forKey: key)
+        thumbnailCache.setObject(image, forKey: key, cost: cacheCost(for: image))
         return image
     }
 
@@ -697,6 +755,12 @@ actor ThreadSafeImageCache {
         }
         fallbackIconCache.setObject(image, forKey: key)
         return image
+    }
+
+    private func cacheCost(for image: NSImage) -> Int {
+        let pixelWidth = max(1, Int((image.size.width * scale).rounded(.up)))
+        let pixelHeight = max(1, Int((image.size.height * scale).rounded(.up)))
+        return pixelWidth * pixelHeight * 4
     }
 
     private func cacheKey(for url: URL, targetSize: NSSize, variant: String) -> NSString {

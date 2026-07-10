@@ -107,6 +107,12 @@ final class ReminderProvider: ObservableObject {
         requestReminderAccess()
     }
 
+    func stop() {
+        hasStarted = false
+        loadTask?.cancel()
+        loadTask = nil
+    }
+
     func addReminder(title: String) {
         let request = ReminderCreationRequest(
             title: title,

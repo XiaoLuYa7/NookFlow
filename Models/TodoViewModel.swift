@@ -67,7 +67,6 @@ enum TodoSortMode: String, Codable, CaseIterable, Sendable {
     case timeDesc
     case priority
     case createdAt
-    case manual
 
     var title: String {
         switch self {
@@ -75,7 +74,6 @@ enum TodoSortMode: String, Codable, CaseIterable, Sendable {
         case .timeDesc: "按时间降序"
         case .priority: "按优先级"
         case .createdAt: "按创建时间"
-        case .manual: "手动排序"
         }
     }
 }
@@ -125,6 +123,21 @@ struct TodoCardSettings: Codable, Equatable, Sendable {
     var showEdgeGlow = true
     var showReminderBadge = true
     var dueSoonMinutes = 15
+}
+
+enum TodoCardStorageKeys {
+    static let sortMode = "todo.card.sortMode"
+    static let showDateSelector = "todo.card.showDateSelector"
+    static let showTime = "todo.card.showTime"
+    static let showCategory = "todo.card.showCategory"
+    static let showCompleted = "todo.card.showCompleted"
+    static let maxVisibleItems = "todo.card.maxVisibleItems"
+    static let defaultRange = "todo.card.defaultRange"
+    static let highlightColor = "todo.card.highlightColor"
+    static let useCompactMode = "todo.card.useCompactMode"
+    static let showEdgeGlow = "todo.card.showEdgeGlow"
+    static let showReminderBadge = "todo.card.showReminderBadge"
+    static let dueSoonMinutes = "todo.card.dueSoonMinutes"
 }
 
 struct TodoTask: Identifiable, Equatable, Sendable {
@@ -413,7 +426,7 @@ private func compareTodoTasks(
             return lhs.priority.rawValue > rhs.priority.rawValue
         }
         return compareTodoTime(lhs, rhs, ascending: true)
-    case .createdAt, .manual:
+    case .createdAt:
         return lhs.createdAt < rhs.createdAt
     }
 }

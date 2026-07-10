@@ -10,6 +10,7 @@ struct ExpandedIslandView: View {
     let secondaryContentRevealProgress: Double
     @ObservedObject var settings: IslandSettings
     let onOpenSettings: () -> Void
+    let onOpenTodoSettings: () -> Void
     let onOpenFeedback: () -> Void
 
     @StateObject private var applicationsProvider = ApplicationsProvider()
@@ -19,7 +20,6 @@ struct ExpandedIslandView: View {
     @StateObject private var dragController = ModuleDragController()
     @StateObject private var calendarProvider = CalendarProvider()
     @StateObject private var reminderProvider = ReminderProvider()
-    @State private var todoTasks: [TodoTask] = []
     @State private var todoSyncTask: Task<Void, Never>?
     @State private var isScrubbingPlayback = false
     @State private var calendarWeekOffset = 0
@@ -37,6 +37,9 @@ struct ExpandedIslandView: View {
     @State private var playbackScrubProgress = 0.0
     @State private var containerFrame: CGRect = .zero
     @State private var isSettingsMenuPresented = false
+    @State private var imageCardImage: NSImage?
+    @State private var imageCardImagePath = ""
+    @State private var imageCardLoadTask: Task<Void, Never>?
 
     var body: some View {
         panelSurface
@@ -60,10 +63,12 @@ struct ExpandedIslandView: View {
             )
             .onAppear {
                 startContentProvidersIfNeeded()
+                loadImageCardIfNeeded()
             }
             .onChange(of: isContentReady) { _, ready in
                 if ready {
                     startContentProvidersIfNeeded()
+                    loadImageCardIfNeeded()
                 }
             }
             .onChange(of: viewModel.presentationPhase) { _, phase in
@@ -72,11 +77,17 @@ struct ExpandedIslandView: View {
                 }
 
                 if phase == .expanded {
+                    startContentProvidersIfNeeded()
                     syncTodoTasksIfNeeded(force: true)
+                } else if phase == .collapsed {
+                    stopContentProviders()
                 }
             }
             .onChange(of: settings.calendarStyle) { _, _ in
                 resetCalendarSelectionToToday()
+            }
+            .onChange(of: settings.imageCardPath) { _, _ in
+                loadImageCardIfNeeded()
             }
             .onChange(of: viewModel.fileDataRefreshToken) { _, _ in
                 fileProvider.load()
@@ -105,9 +116,13 @@ struct ExpandedIslandView: View {
                 }
             }
             .onDisappear {
+                closeTodoFloatingPanel()
+                stopContentProviders()
                 isSettingsMenuPresented = false
                 todoSyncTask?.cancel()
                 todoSyncTask = nil
+                imageCardLoadTask?.cancel()
+                imageCardLoadTask = nil
             }
     }
 
@@ -144,10 +159,15 @@ struct ExpandedIslandView: View {
     }
 
     private var selectedPageContent: some View {
-        ZStack(alignment: .topLeading) {
-            stablePage(moduleGrid, tab: .home)
-            stablePage(ApplicationsGridView(provider: applicationsProvider), tab: .applications)
-            stablePage(FilesGridView(provider: fileProvider), tab: .files)
+        Group {
+            switch viewModel.selectedTopTab {
+            case .home:
+                stablePage(moduleGrid, tab: .home)
+            case .applications:
+                stablePage(ApplicationsGridView(provider: applicationsProvider), tab: .applications)
+            case .files:
+                stablePage(FilesGridView(provider: fileProvider), tab: .files)
+            }
         }
         .frame(
             width: transitionContentHostSize.width,
@@ -344,6 +364,15 @@ struct ExpandedIslandView: View {
         }
     }
 
+    private func closeTodoFloatingPanel() {
+        TodoFloatingPanelPresenter.shared.close()
+        handleTodoFloatingFrameChange(nil)
+    }
+
+    private func handleTodoFloatingFrameChange(_ frame: CGRect?) {
+        viewModel.setExternalInteractiveFrame(frame)
+    }
+
     private var moduleGrid: some View {
         Group {
             if visibleModules.isEmpty {
@@ -457,14 +486,23 @@ struct ExpandedIslandView: View {
         syncTodoTasksIfNeeded()
     }
 
+    private func stopContentProviders() {
+        weatherProvider.stop()
+        deviceInfoProvider.stop()
+        calendarProvider.stop()
+        reminderProvider.stop()
+        todoSyncTask?.cancel()
+        todoSyncTask = nil
+    }
+
     private func syncTodoTasksIfNeeded(force: Bool = false) {
-        guard force || todoTasks.isEmpty else { return }
+        guard force || viewModel.todoTasks.isEmpty else { return }
         guard todoSyncTask == nil else { return }
 
         todoSyncTask = Task { @MainActor in
             let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
             if !Task.isCancelled {
-                todoTasks = tasks
+                viewModel.setTodoTasks(tasks)
             }
             todoSyncTask = nil
         }
@@ -849,7 +887,7 @@ struct ExpandedIslandView: View {
                         .fill(Color(red: 0.20, green: 0.20, blue: 0.20))
                         .frame(width: cardSide, height: cardSide)
 
-                    if let image = selectedCardImage {
+                    if let image = imageCardImage {
                         Image(nsImage: image)
                             .resizable()
                             .scaledToFill()
@@ -878,14 +916,50 @@ struct ExpandedIslandView: View {
         }
     }
 
-    private var selectedCardImage: NSImage? {
-        if !settings.imageCardPath.isEmpty,
-           FileManager.default.fileExists(atPath: settings.imageCardPath),
-           let image = NSImage(contentsOfFile: settings.imageCardPath) {
-            return image
+    private func loadImageCardIfNeeded() {
+        guard isContentReady else { return }
+
+        let path = settings.imageCardPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else {
+            imageCardLoadTask?.cancel()
+            imageCardLoadTask = nil
+            imageCardImagePath = ""
+            imageCardImage = nil
+            return
         }
 
-        return nil
+        guard path != imageCardImagePath || imageCardImage == nil else { return }
+
+        imageCardLoadTask?.cancel()
+        imageCardImagePath = path
+        imageCardImage = nil
+        let url = URL(fileURLWithPath: path)
+
+        imageCardLoadTask = Task { @MainActor in
+            let exists = await Task.detached(priority: .utility) {
+                FileManager.default.fileExists(atPath: path)
+            }.value
+            guard exists, !Task.isCancelled else {
+                if imageCardImagePath == path {
+                    imageCardImage = nil
+                    imageCardLoadTask = nil
+                }
+                return
+            }
+
+            let image = await ThreadSafeImageCache.shared.preview(
+                for: url,
+                targetSize: NSSize(width: 320, height: 320)
+            )
+            guard !Task.isCancelled,
+                  imageCardImagePath == path,
+                  settings.imageCardPath.trimmingCharacters(in: .whitespacesAndNewlines) == path else {
+                return
+            }
+
+            imageCardImage = image
+            imageCardLoadTask = nil
+        }
     }
 
     private var deviceInfoModuleContent: some View {
@@ -1217,7 +1291,7 @@ struct ExpandedIslandView: View {
             _ = await reminderProvider.createTodoReminder(request: draft.reminderCreationRequest)
             let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
             withAnimation(.easeOut(duration: 0.18)) {
-                todoTasks = tasks
+                viewModel.setTodoTasks(tasks)
             }
         }
     }
@@ -1229,7 +1303,7 @@ struct ExpandedIslandView: View {
             guard await reminderProvider.completeTodoReminder(identifier: identifier) else { return }
             let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
             withAnimation(.easeOut(duration: 0.18)) {
-                todoTasks = tasks
+                viewModel.setTodoTasks(tasks)
             }
         }
     }
@@ -1241,7 +1315,7 @@ struct ExpandedIslandView: View {
             guard await reminderProvider.restoreTodoReminder(identifier: identifier) else { return }
             let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
             withAnimation(.easeOut(duration: 0.18)) {
-                todoTasks = tasks
+                viewModel.setTodoTasks(tasks)
             }
         }
     }
@@ -1253,7 +1327,7 @@ struct ExpandedIslandView: View {
             guard await reminderProvider.deleteTodoReminder(identifier: identifier) else { return }
             let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
             withAnimation(.easeOut(duration: 0.18)) {
-                todoTasks = tasks
+                viewModel.setTodoTasks(tasks)
             }
         }
     }
@@ -2706,14 +2780,14 @@ struct ExpandedIslandView: View {
 
     private var todoModuleContent: some View {
         TodoScheduleCardView(
-            tasks: todoTasks,
+            tasks: viewModel.todoTasks,
             onCreate: createTodoFromCard,
             onComplete: completeTodoFromCard,
             onRestore: restoreTodoFromCard,
             onDelete: deleteTodoFromCard,
-            onExternalInteractiveFrameChange: viewModel.setExternalInteractiveFrame,
+            onExternalInteractiveFrameChange: handleTodoFloatingFrameChange,
             allowsFloatingContent: viewModel.presentationPhase == .expanded && viewModel.selectedTopTab == .home,
-            onOpenSettings: onOpenSettings
+            onOpenSettings: onOpenTodoSettings
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .help("日程待办")
@@ -3854,19 +3928,20 @@ private struct TodoScheduleCardView: View {
     @State private var isMoreButtonPressed = false
     @State private var currentCardHeight: CGFloat = 0
     @State private var currentCardWidth: CGFloat = 0
+    @State private var moreButtonScreenFrame: CGRect?
 
-    @AppStorage("todo.card.sortMode") private var sortModeRaw = TodoSortMode.timeAsc.rawValue
-    @AppStorage("todo.card.showDateSelector") private var showDateSelector = true
-    @AppStorage("todo.card.showTime") private var showTime = true
-    @AppStorage("todo.card.showCategory") private var showCategory = true
-    @AppStorage("todo.card.showCompleted") private var showCompleted = false
-    @AppStorage("todo.card.maxVisibleItems") private var maxVisibleItems = 2
-    @AppStorage("todo.card.defaultRange") private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
-    @AppStorage("todo.card.highlightColor") private var highlightColorRaw = TodoHighlightColor.blue.rawValue
-    @AppStorage("todo.card.useCompactMode") private var useCompactMode = false
-    @AppStorage("todo.card.showEdgeGlow") private var showEdgeGlow = true
-    @AppStorage("todo.card.showReminderBadge") private var showReminderBadge = true
-    @AppStorage("todo.card.dueSoonMinutes") private var dueSoonMinutes = 15
+    @AppStorage(TodoCardStorageKeys.sortMode) private var sortModeRaw = TodoSortMode.timeAsc.rawValue
+    @AppStorage(TodoCardStorageKeys.showDateSelector) private var showDateSelector = true
+    @AppStorage(TodoCardStorageKeys.showTime) private var showTime = true
+    @AppStorage(TodoCardStorageKeys.showCategory) private var showCategory = true
+    @AppStorage(TodoCardStorageKeys.showCompleted) private var showCompleted = false
+    @AppStorage(TodoCardStorageKeys.maxVisibleItems) private var maxVisibleItems = 2
+    @AppStorage(TodoCardStorageKeys.defaultRange) private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
+    @AppStorage(TodoCardStorageKeys.highlightColor) private var highlightColorRaw = TodoHighlightColor.blue.rawValue
+    @AppStorage(TodoCardStorageKeys.useCompactMode) private var useCompactMode = false
+    @AppStorage(TodoCardStorageKeys.showEdgeGlow) private var showEdgeGlow = true
+    @AppStorage(TodoCardStorageKeys.showReminderBadge) private var showReminderBadge = true
+    @AppStorage(TodoCardStorageKeys.dueSoonMinutes) private var dueSoonMinutes = 15
 
     private let calendar: Calendar
     private let tasks: [TodoTask]
@@ -4031,8 +4106,13 @@ private struct TodoScheduleCardView: View {
     private func moreButton(isCompact: Bool, isNarrow: Bool) -> some View {
         Button {
             guard allowsFloatingContent else { return }
+            if TodoFloatingPanelPresenter.shared.isPresented {
+                closeFloatingMenu()
+                return
+            }
+
             isMoreButtonPressed = true
-            presentFloatingMenu(anchor: NSEvent.mouseLocation)
+            presentFloatingMenu(anchor: fixedMenuAnchor())
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
                 isMoreButtonPressed = false
             }
@@ -4045,13 +4125,20 @@ private struct TodoScheduleCardView: View {
                     height: isCompact ? 23 : (isNarrow ? 23 : TodoScheduleCardMetrics.moreButtonSize)
                 )
                 .background {
-                    Circle()
-                        .fill(Color.white.opacity(0.014))
-                        .overlay {
-                            Circle()
-                                .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
+                    ZStack {
+                        ScreenFrameReporter { frame in
+                            moreButtonScreenFrame = frame
                         }
-                        .shadow(color: accentColor.opacity(showEdgeGlow ? 0.24 : 0), radius: 8, y: 1)
+                        .allowsHitTesting(false)
+
+                        Circle()
+                            .fill(Color.white.opacity(0.014))
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
+                            }
+                            .shadow(color: accentColor.opacity(showEdgeGlow ? 0.24 : 0), radius: 8, y: 1)
+                    }
                 }
                 .contentShape(Circle())
         }
@@ -4059,6 +4146,17 @@ private struct TodoScheduleCardView: View {
         .scaleEffect(isMoreButtonPressed ? 0.94 : 1)
         .handCursor()
         .help("更多待办操作")
+    }
+
+    private func fixedMenuAnchor() -> NSPoint {
+        guard let frame = moreButtonScreenFrame,
+              frame.width > 0,
+              frame.height > 0
+        else {
+            return NSEvent.mouseLocation
+        }
+
+        return NSPoint(x: frame.midX, y: frame.midY)
     }
 
     private func presentFloatingMenu(anchor: NSPoint) {
@@ -4081,6 +4179,11 @@ private struct TodoScheduleCardView: View {
             onExternalFrameChange: onExternalInteractiveFrameChange,
             onOpenSettings: onOpenSettings
         )
+    }
+
+    private func closeFloatingMenu() {
+        TodoFloatingPanelPresenter.shared.close()
+        onExternalInteractiveFrameChange(nil)
     }
 
     private func selectDate(_ date: Date) {
@@ -4144,9 +4247,111 @@ private struct TodoScheduleCardView: View {
     }
 }
 
+private struct ScreenFrameReporter: NSViewRepresentable {
+    let onChange: (CGRect) -> Void
+
+    func makeNSView(context: Context) -> ScreenFrameReportingView {
+        let view = ScreenFrameReportingView()
+        view.onFrameChange = onChange
+        return view
+    }
+
+    func updateNSView(_ nsView: ScreenFrameReportingView, context: Context) {
+        nsView.onFrameChange = onChange
+        nsView.scheduleReport()
+    }
+}
+
+private final class ScreenFrameReportingView: NSView {
+    var onFrameChange: ((CGRect) -> Void)?
+
+    private var windowObserver: NSObjectProtocol?
+    private var lastReportedFrame = CGRect.null
+
+    deinit {
+        if let windowObserver {
+            NotificationCenter.default.removeObserver(windowObserver)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+
+        if let windowObserver {
+            NotificationCenter.default.removeObserver(windowObserver)
+            self.windowObserver = nil
+        }
+
+        if let window {
+            windowObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didMoveNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.scheduleReport()
+            }
+        }
+
+        scheduleReport()
+    }
+
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        super.setFrameOrigin(newOrigin)
+        scheduleReport()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        scheduleReport()
+    }
+
+    override func layout() {
+        super.layout()
+        scheduleReport()
+    }
+
+    func scheduleReport() {
+        DispatchQueue.main.async { [weak self] in
+            self?.reportFrameIfNeeded()
+        }
+    }
+
+    private func reportFrameIfNeeded() {
+        guard let window else { return }
+
+        let rectInWindow = convert(bounds, to: nil)
+        let screenFrame = window.convertToScreen(rectInWindow)
+        guard screenFrame != lastReportedFrame else { return }
+
+        lastReportedFrame = screenFrame
+        onFrameChange?(screenFrame)
+    }
+}
+
 private final class TodoFloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+private final class TodoFloatingHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool { false }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        keepBackgroundClear()
+        window?.isOpaque = false
+        window?.backgroundColor = .clear
+    }
+
+    override func layout() {
+        super.layout()
+        keepBackgroundClear()
+    }
+
+    private func keepBackgroundClear() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
 }
 
 @MainActor
@@ -4156,7 +4361,11 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
     private var panel: TodoFloatingPanel?
     private var anchor: NSPoint = .zero
     private var onExternalFrameChange: ((CGRect?) -> Void)?
-    private var isClosing = false
+    private var requestedFrame: NSRect?
+
+    var isPresented: Bool {
+        panel != nil
+    }
 
     func present(
         anchor: NSPoint,
@@ -4174,6 +4383,7 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
         onOpenSettings: @escaping () -> Void
     ) {
         self.anchor = anchor
+        requestedFrame = nil
         self.onExternalFrameChange?(nil)
         self.onExternalFrameChange = onExternalFrameChange
 
@@ -4202,35 +4412,68 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
                 self?.close()
             },
             onOpenSettings: onOpenSettings,
-            onSizeChange: { [weak self] size in
-                self?.resize(to: size)
+            onSizeChange: { [weak self] size, animated in
+                self?.resize(to: size, animated: animated)
             }
         )
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = TodoFloatingHostingView(rootView: rootView)
         hostingView.frame = NSRect(origin: .zero, size: initialSize)
         hostingView.autoresizingMask = [.width, .height]
+        hostingView.appearance = NSAppearance(named: .darkAqua)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         activePanel.contentView = hostingView
 
-        resize(to: initialSize)
+        resize(to: initialSize, animated: false)
         activePanel.orderFrontRegardless()
     }
 
     func close() {
-        guard let panel, !isClosing else { return }
-        isClosing = true
-        panel.close()
-        isClosing = false
+        guard let closingPanel = panel else {
+            requestedFrame = nil
+            onExternalFrameChange = nil
+            return
+        }
+
+        let frameChange = onExternalFrameChange
+        panel = nil
+        requestedFrame = nil
+        onExternalFrameChange = nil
+        closingPanel.delegate = nil
+
+        frameChange?(nil)
+        closingPanel.orderOut(nil)
+
+        // Releasing the hosting view while one of its buttons is still handling
+        // the mouse event can leave AppKit's tracking cycle in an invalid state.
+        // Finish teardown on the next main-loop turn instead.
+        DispatchQueue.main.async {
+            closingPanel.contentView = nil
+            closingPanel.close()
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
         guard let currentPanel = panel,
               let closingPanel = notification.object as? NSPanel,
               closingPanel === currentPanel else { return }
-        onExternalFrameChange?(nil)
+        clearPanelIfNeeded(closingPanel)
+    }
+
+    private func clearPanelIfNeeded(_ closingPanel: NSPanel) {
+        guard let currentPanel = panel,
+              closingPanel === currentPanel else { return }
+
+        let frameChange = onExternalFrameChange
         closingPanel.delegate = nil
-        closingPanel.contentView = nil
         panel = nil
+        requestedFrame = nil
         onExternalFrameChange = nil
+        frameChange?(nil)
+
+        DispatchQueue.main.async {
+            closingPanel.contentView = nil
+        }
     }
 
     private func makePanel(size: CGSize) -> TodoFloatingPanel {
@@ -4244,6 +4487,7 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
         panel.worksWhenModal = true
@@ -4260,13 +4504,26 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
         return panel
     }
 
-    private func resize(to size: CGSize) {
+    private func resize(to size: CGSize, animated _: Bool) {
         guard let panel else { return }
         let normalizedSize = CGSize(
             width: max(1, ceil(size.width)),
             height: max(1, ceil(size.height))
         )
         let frame = frame(for: normalizedSize)
+
+        if let requestedFrame, requestedFrame.equalTo(frame) {
+            onExternalFrameChange?(frame)
+            return
+        }
+
+        self.requestedFrame = frame
+
+        guard !panel.frame.equalTo(frame) else {
+            onExternalFrameChange?(frame)
+            return
+        }
+
         panel.setFrame(frame, display: true)
         onExternalFrameChange?(frame)
     }
@@ -4299,24 +4556,24 @@ private struct TodoFloatingPanelRootView: View {
     let onTodayOnlyChanged: (Bool) -> Void
     let onClose: () -> Void
     let onOpenSettings: () -> Void
-    let onSizeChange: (CGSize) -> Void
+    let onSizeChange: (CGSize, Bool) -> Void
 
     @State private var showTodayOnly: Bool
     @State private var activePanel: TodoCardPanel?
     @State private var createDraft: TodoCardCreateDraft
 
-    @AppStorage("todo.card.sortMode") private var sortModeRaw = TodoSortMode.timeAsc.rawValue
-    @AppStorage("todo.card.showDateSelector") private var showDateSelector = true
-    @AppStorage("todo.card.showTime") private var showTime = true
-    @AppStorage("todo.card.showCategory") private var showCategory = true
-    @AppStorage("todo.card.showCompleted") private var showCompleted = false
-    @AppStorage("todo.card.maxVisibleItems") private var maxVisibleItems = 2
-    @AppStorage("todo.card.defaultRange") private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
-    @AppStorage("todo.card.highlightColor") private var highlightColorRaw = TodoHighlightColor.blue.rawValue
-    @AppStorage("todo.card.useCompactMode") private var useCompactMode = false
-    @AppStorage("todo.card.showEdgeGlow") private var showEdgeGlow = true
-    @AppStorage("todo.card.showReminderBadge") private var showReminderBadge = true
-    @AppStorage("todo.card.dueSoonMinutes") private var dueSoonMinutes = 15
+    @AppStorage(TodoCardStorageKeys.sortMode) private var sortModeRaw = TodoSortMode.timeAsc.rawValue
+    @AppStorage(TodoCardStorageKeys.showDateSelector) private var showDateSelector = true
+    @AppStorage(TodoCardStorageKeys.showTime) private var showTime = true
+    @AppStorage(TodoCardStorageKeys.showCategory) private var showCategory = true
+    @AppStorage(TodoCardStorageKeys.showCompleted) private var showCompleted = false
+    @AppStorage(TodoCardStorageKeys.maxVisibleItems) private var maxVisibleItems = 2
+    @AppStorage(TodoCardStorageKeys.defaultRange) private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
+    @AppStorage(TodoCardStorageKeys.highlightColor) private var highlightColorRaw = TodoHighlightColor.blue.rawValue
+    @AppStorage(TodoCardStorageKeys.useCompactMode) private var useCompactMode = false
+    @AppStorage(TodoCardStorageKeys.showEdgeGlow) private var showEdgeGlow = true
+    @AppStorage(TodoCardStorageKeys.showReminderBadge) private var showReminderBadge = true
+    @AppStorage(TodoCardStorageKeys.dueSoonMinutes) private var dueSoonMinutes = 15
 
     init(
         tasks: [TodoTask],
@@ -4331,7 +4588,7 @@ private struct TodoFloatingPanelRootView: View {
         onTodayOnlyChanged: @escaping (Bool) -> Void,
         onClose: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
-        onSizeChange: @escaping (CGSize) -> Void
+        onSizeChange: @escaping (CGSize, Bool) -> Void
     ) {
         self.tasks = tasks
         self.selectedDate = selectedDate
@@ -4354,11 +4611,13 @@ private struct TodoFloatingPanelRootView: View {
 
         content
             .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .environment(\.colorScheme, .dark)
+            .tint(TodoScheduleCardMetrics.selectedBlue)
             .onAppear {
-                onSizeChange(size)
+                onSizeChange(size, false)
             }
             .onChange(of: activePanel?.id) { _, _ in
-                onSizeChange(contentSize)
+                onSizeChange(contentSize, false)
             }
     }
 
@@ -4366,7 +4625,7 @@ private struct TodoFloatingPanelRootView: View {
     private var content: some View {
         if let activePanel {
             todoPanel(activePanel)
-                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .topTrailing)))
+                .transition(panelContentTransition)
         } else {
             TodoMoreMenuView(
                 showTodayOnly: showTodayOnly,
@@ -4377,13 +4636,21 @@ private struct TodoFloatingPanelRootView: View {
                 onSort: { openPanel(.sort) },
                 onSettings: { openPanel(.settings) }
             )
-            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .topTrailing)))
+            .transition(panelContentTransition)
         }
     }
 
     private var contentSize: CGSize {
-        if let activePanel {
-            return CGSize(width: panelWidth, height: panelHeight(for: activePanel))
+        contentSize(for: activePanel)
+    }
+
+    private var panelContentTransition: AnyTransition {
+        .identity
+    }
+
+    private func contentSize(for panel: TodoCardPanel?) -> CGSize {
+        if let panel {
+            return CGSize(width: panelWidth, height: panelHeight(for: panel))
         }
 
         return CGSize(
@@ -4473,7 +4740,7 @@ private struct TodoFloatingPanelRootView: View {
         let cardHeight = max(104, cardSize.height)
         switch panel {
         case .create:
-            return max(300, min(390, cardHeight + 190))
+            return max(360, min(390, cardHeight + 210))
         case .all:
             return max(300, min(430, cardHeight + 210))
         case .completed:
@@ -4491,7 +4758,11 @@ private struct TodoFloatingPanelRootView: View {
     }
 
     private func openPanel(_ panel: TodoCardPanel) {
-        withAnimation(.smooth(duration: 0.18, extraBounce: 0)) {
+        onSizeChange(contentSize(for: panel), false)
+
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             activePanel = panel
         }
     }
@@ -4523,18 +4794,18 @@ private struct TodoFloatingPanelRootView: View {
             switch sortMode {
             case .timeAsc:
                 return (lhs.dueTime ?? lhs.date) < (rhs.dueTime ?? rhs.date)
-            case .timeDesc:
-                return (lhs.dueTime ?? lhs.date) > (rhs.dueTime ?? rhs.date)
-            case .priority:
-                if lhs.priority.rawValue != rhs.priority.rawValue {
-                    return lhs.priority.rawValue > rhs.priority.rawValue
-                }
-                return (lhs.dueTime ?? lhs.date) < (rhs.dueTime ?? rhs.date)
-            case .createdAt, .manual:
-                return lhs.createdAt < rhs.createdAt
+        case .timeDesc:
+            return (lhs.dueTime ?? lhs.date) > (rhs.dueTime ?? rhs.date)
+        case .priority:
+            if lhs.priority.rawValue != rhs.priority.rawValue {
+                return lhs.priority.rawValue > rhs.priority.rawValue
             }
+            return (lhs.dueTime ?? lhs.date) < (rhs.dueTime ?? rhs.date)
+        case .createdAt:
+            return lhs.createdAt < rhs.createdAt
         }
     }
+}
 }
 
 private struct TodoDateSelectorView: View {
@@ -4544,6 +4815,27 @@ private struct TodoDateSelectorView: View {
     let isNarrow: Bool
     let accentColor: Color
     let onSelect: (Date) -> Void
+    @State private var scrollPosition: Date?
+
+    init(
+        dates: [TodoDateOption],
+        selectedDate: Date,
+        isCompact: Bool,
+        isNarrow: Bool,
+        accentColor: Color,
+        onSelect: @escaping (Date) -> Void
+    ) {
+        self.dates = dates
+        self.selectedDate = selectedDate
+        self.isCompact = isCompact
+        self.isNarrow = isNarrow
+        self.accentColor = accentColor
+        self.onSelect = onSelect
+
+        let selectedIndex = dates.firstIndex(where: \.isSelected)
+        let startIndex = selectedIndex.map { max(dates.startIndex, $0 - 1) }
+        _scrollPosition = State(initialValue: startIndex.map { dates[$0].id })
+    }
 
     private var visibleWindowStartDayID: Date? {
         guard let selectedIndex = dates.firstIndex(where: \.isSelected) else { return nil }
@@ -4553,33 +4845,34 @@ private struct TodoDateSelectorView: View {
 
     var body: some View {
         let spacing: CGFloat = isCompact ? 3 : (isNarrow ? 3 : 4)
-        let metrics = HorizontalDateStripMetrics(visibleItemCount: 4, spacing: spacing)
+        let metrics = HorizontalDateStripMetrics(
+            visibleItemCount: isNarrow ? 3 : 4,
+            spacing: spacing
+        )
 
         GeometryReader { proxy in
             let itemWidth = metrics.itemWidth(for: proxy.size.width)
 
-            ScrollViewReader { scrollProxy in
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: spacing) {
-                        ForEach(dates) { item in
-                            dateButton(item)
-                                .frame(width: itemWidth)
-                                .id(item.id)
-                        }
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: spacing) {
+                    ForEach(dates) { item in
+                        dateButton(item)
+                            .frame(width: itemWidth)
+                            .id(item.id)
                     }
-                    .scrollTargetLayout()
                 }
-                .scrollIndicators(.hidden)
-                .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
-                .onAppear {
-                    scrollToSelectedDay(using: scrollProxy, animated: false)
-                }
-                .onChange(of: selectedDate) { _, _ in
-                    scrollToSelectedDay(using: scrollProxy, animated: true)
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+            .scrollPosition(id: $scrollPosition, anchor: .leading)
+            .onChange(of: selectedDate) { _, _ in
+                withAnimation(.smooth(duration: 0.18, extraBounce: 0)) {
+                    scrollPosition = visibleWindowStartDayID
                 }
             }
         }
-        .frame(height: isCompact ? 34 : (isNarrow ? 36 : TodoScheduleCardMetrics.dateItemHeight))
+        .frame(height: isCompact ? 28 : (isNarrow ? 30 : 32))
         .frame(maxWidth: .infinity, alignment: .trailing)
         .contentShape(Rectangle())
     }
@@ -4588,47 +4881,36 @@ private struct TodoDateSelectorView: View {
         Button {
             onSelect(item.date)
         } label: {
-            VStack(spacing: isCompact ? 3 : 3.5) {
+            HStack(spacing: isCompact ? 2 : 3) {
                 Text(item.weekday)
-                    .font(.system(size: isCompact ? 7.6 : (isNarrow ? 7.8 : 8.4), weight: .semibold, design: .rounded))
+                    .font(.system(size: isCompact ? 8.4 : (isNarrow ? 9 : 9.6), weight: .semibold, design: .rounded))
                     .foregroundStyle(weekdayColor(isSelected: item.isSelected))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.82)
+                    .minimumScaleFactor(0.78)
 
                 Text(item.day)
-                    .font(.system(size: isCompact ? 18 : (isNarrow ? 19 : 21), weight: .bold, design: .rounded))
+                    .font(.system(size: isCompact ? 15.5 : (isNarrow ? 17 : 18), weight: .bold, design: .rounded))
                     .foregroundStyle(dayColor(isSelected: item.isSelected))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                    .minimumScaleFactor(0.76)
                     .shadow(
                         color: item.isSelected ? accentColor.opacity(0.24) : .clear,
                         radius: 5,
                         y: 1
                     )
-
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .overlay(alignment: .bottom) {
                 Capsule()
                     .fill(accentColor.opacity(item.isSelected ? 0.62 : 0))
                     .frame(width: isCompact ? 12 : 15, height: 2)
                     .blur(radius: item.isSelected ? 3 : 0)
                     .opacity(item.isSelected ? 1 : 0)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .handCursor()
-    }
-
-    private func scrollToSelectedDay(using proxy: ScrollViewProxy, animated: Bool) {
-        guard let visibleWindowStartDayID else { return }
-
-        if animated {
-            withAnimation(.smooth(duration: 0.18, extraBounce: 0)) {
-                proxy.scrollTo(visibleWindowStartDayID, anchor: .leading)
-            }
-        } else {
-            proxy.scrollTo(visibleWindowStartDayID, anchor: .leading)
-        }
     }
 
     private func weekdayColor(isSelected: Bool) -> Color {
@@ -4662,7 +4944,7 @@ private struct TodoMoreMenuView: View {
             TodoMoreMenuRow(icon: "slider.horizontal.3", title: "卡片设置", action: onSettings)
         }
         .padding(5)
-        .todoGlassPanel(cornerRadius: 18, edgeGlow: true)
+        .todoGlassPanel(cornerRadius: 18, edgeGlow: true, castsShadow: false)
     }
 }
 
@@ -4729,72 +5011,592 @@ private struct TodoCreateSheetView: View {
     let onSave: (TodoCardCreateDraft) -> Void
 
     @FocusState private var titleFocused: Bool
+    @State private var isDateCalendarPresented = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            panelHeader(title: "新建待办", subtitle: "添加到当前日期", onClose: onCancel)
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 12) {
+                panelHeader(title: "新建待办", subtitle: "添加到当前日期", onClose: onCancel)
 
-            TextField("输入待办标题", text: $draft.title)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .padding(.horizontal, 12)
-                .frame(height: 38)
-                .background(TodoRoundedFieldBackground(isActive: titleFocused, accentColor: accentColor))
-                .focused($titleFocused)
+                TextField("输入待办标题", text: $draft.title)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .padding(.horizontal, 12)
+                    .frame(height: 38)
+                    .background(TodoRoundedFieldBackground(isActive: titleFocused, accentColor: accentColor))
+                    .focused($titleFocused)
 
-            HStack(spacing: 10) {
-                DatePicker("日期", selection: $draft.date, displayedComponents: .date)
-                    .labelsHidden()
-                    .datePickerStyle(.compact)
+                HStack(spacing: 8) {
+                    TodoDateField(
+                        date: $draft.date,
+                        isCalendarPresented: $isDateCalendarPresented,
+                        accentColor: accentColor
+                    )
 
-                Toggle("时间", isOn: $draft.hasTime)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.72))
-
-                if draft.hasTime {
-                    DatePicker("时间", selection: $draft.time, displayedComponents: .hourAndMinute)
+                    Toggle("启用时间", isOn: $draft.hasTime)
                         .labelsHidden()
-                        .datePickerStyle(.compact)
+                        .toggleStyle(.checkbox)
+                        .frame(width: 16, height: 28)
+                        .help("启用时间")
+
+                    Group {
+                        if draft.hasTime {
+                            DatePicker("时间", selection: $draft.time, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                                .datePickerStyle(.compact)
+                                .colorScheme(.dark)
+                                .tint(accentColor)
+                        } else {
+                            Text("时间")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.72))
+                        }
+                    }
+                    .frame(width: 64, height: 28, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 8) {
+                    TodoInlinePicker(title: "分组", selection: $draft.category, values: TodoCategory.allCases)
+                    TodoInlinePicker(title: "优先级", selection: $draft.priority, values: TodoPriority.allCases)
+                }
+
+                TextField("备注，可选", text: $draft.note, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.80))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .lineLimit(2, reservesSpace: true)
+                    .frame(height: 56, alignment: .topLeading)
+                    .background(TodoRoundedFieldBackground(isActive: false, accentColor: accentColor))
+
+                Toggle("保存时提醒", isOn: $draft.hasReminder)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.78))
+
+                HStack(spacing: 8) {
+                    Button("取消", action: onCancel)
+                        .buttonStyle(TodoPanelButtonStyle(role: .secondary, accentColor: accentColor))
+                    Button("保存") { onSave(draft) }
+                        .buttonStyle(TodoPanelButtonStyle(role: .primary, accentColor: accentColor))
+                        .disabled(!draft.canSave)
                 }
             }
 
-            HStack(spacing: 8) {
-                TodoInlinePicker(title: "分组", selection: $draft.category, values: TodoCategory.allCases)
-                TodoInlinePicker(title: "优先级", selection: $draft.priority, values: TodoPriority.allCases)
-            }
-
-            TextField("备注，可选", text: $draft.note)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.80))
-                .padding(.horizontal, 12)
-                .frame(height: 34)
-                .background(TodoRoundedFieldBackground(isActive: false, accentColor: accentColor))
-
-            Toggle("保存时提醒", isOn: $draft.hasReminder)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.78))
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: 8) {
-                Button("取消", action: onCancel)
-                    .buttonStyle(TodoPanelButtonStyle(role: .secondary, accentColor: accentColor))
-                Button("保存") { onSave(draft) }
-                    .buttonStyle(TodoPanelButtonStyle(role: .primary, accentColor: accentColor))
-                    .disabled(!draft.canSave)
+            if isDateCalendarPresented {
+                TodoDarkCalendarPopover(
+                    selectedDate: $draft.date,
+                    isPresented: $isDateCalendarPresented,
+                    accentColor: accentColor
+                )
+                .frame(width: 152)
+                .offset(x: 0, y: 146)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topLeading)))
+                .zIndex(2)
             }
         }
         .padding(14)
-        .todoGlassPanel(cornerRadius: 22, edgeGlow: true)
+        .todoGlassPanel(cornerRadius: 22, edgeGlow: true, castsShadow: false)
+        .task {
+            try? await Task.sleep(nanoseconds: 240_000_000)
+            guard !Task.isCancelled else { return }
+            titleFocused = true
+        }
+    }
+}
+
+private struct TodoDateField: View {
+    @Binding var date: Date
+    @Binding var isCalendarPresented: Bool
+    let accentColor: Color
+
+    @State private var isFocused = false
+    @State private var dateText = ""
+
+    var body: some View {
+        HStack(spacing: 2) {
+            TodoDateInputField(
+                text: $dateText,
+                isFocused: $isFocused,
+                onCommit: commitDateText
+            )
+                .padding(.leading, 7)
+                .frame(width: 84, height: 32)
+
+            Button {
+                commitDateText()
+                withAnimation(.smooth(duration: 0.16, extraBounce: 0)) {
+                    isCalendarPresented.toggle()
+                }
+            } label: {
+                Image(systemName: isCalendarPresented ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.58))
+                    .frame(width: 20, height: 28)
+            }
+            .buttonStyle(.plain)
+            .handCursor()
+        }
+        .frame(width: 112, height: 34)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(isDateActive ? 0.105 : 0.075))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(
+                            isDateActive
+                                ? accentColor.opacity(0.52)
+                                : Color.white.opacity(0.09),
+                            lineWidth: 0.8
+                        )
+                }
+        }
         .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                titleFocused = true
+            syncDateText()
+        }
+        .onChange(of: date) { _, _ in
+            syncDateText()
+        }
+    }
+
+    private var isDateActive: Bool {
+        isFocused || isCalendarPresented
+    }
+
+    private static func dateText(for date: Date) -> String {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d/%02d/%02d",
+            components.year ?? 0,
+            components.month ?? 1,
+            components.day ?? 1
+        )
+    }
+
+    private func syncDateText() {
+        let nextText = Self.dateText(for: date)
+        guard dateText != nextText else { return }
+        dateText = nextText
+    }
+
+    private func commitDateText() {
+        guard let parsedDate = Self.parseDate(from: dateText) else {
+            syncDateText()
+            return
+        }
+
+        let normalizedDate = Calendar.current.startOfDay(for: parsedDate)
+        if !Calendar.current.isDate(normalizedDate, inSameDayAs: date) {
+            date = normalizedDate
+        } else {
+            syncDateText()
+        }
+    }
+
+    private static func parseDate(from text: String) -> Date? {
+        let digits = text.filter(\.isNumber)
+        guard digits.count == 8,
+              let year = Int(digits.prefix(4)),
+              let month = Int(digits.dropFirst(4).prefix(2)),
+              let day = Int(digits.dropFirst(6).prefix(2))
+        else { return nil }
+
+        var calendar = Calendar.current
+        calendar.timeZone = .current
+
+        var components = DateComponents()
+        components.calendar = calendar
+        components.year = year
+        components.month = month
+        components.day = day
+
+        guard let date = calendar.date(from: components) else { return nil }
+
+        let resolved = calendar.dateComponents([.year, .month, .day], from: date)
+        guard resolved.year == year,
+              resolved.month == month,
+              resolved.day == day
+        else {
+            return nil
+        }
+
+        return date
+    }
+}
+
+private struct TodoDateInputField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    let onCommit: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.delegate = context.coordinator
+        field.isBordered = false
+        field.drawsBackground = false
+        field.backgroundColor = .clear
+        field.focusRingType = .none
+        field.font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+        field.textColor = NSColor.white.withAlphaComponent(0.90)
+        field.alignment = .left
+        field.lineBreakMode = .byClipping
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        field.stringValue = text
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        field.delegate = context.coordinator
+        field.font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+        field.textColor = NSColor.white.withAlphaComponent(0.90)
+
+        guard field.currentEditor() == nil else { return }
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: TodoDateInputField
+
+        init(parent: TodoDateInputField) {
+            self.parent = parent
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            parent.isFocused = true
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            parent.isFocused = false
+            parent.onCommit()
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField,
+                  let textView = field.currentEditor() as? NSTextView
+            else { return }
+
+            let rawText = textView.string
+            let rawSelection = textView.selectedRange()
+            let digitsBeforeCursor = TodoDateInputFormatter.digitCount(
+                in: rawText,
+                before: rawSelection.location
+            )
+            let formattedText = TodoDateInputFormatter.formattedDateInput(from: rawText)
+            let cursorLocation = TodoDateInputFormatter.cursorLocation(
+                afterDigitCount: digitsBeforeCursor,
+                in: formattedText
+            )
+
+            if rawText != formattedText {
+                textView.string = formattedText
+                field.stringValue = formattedText
+                textView.setSelectedRange(NSRange(location: cursorLocation, length: 0))
+            }
+
+            if parent.text != formattedText {
+                parent.text = formattedText
             }
         }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            doCommandBy commandSelector: Selector
+        ) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)) else {
+                return false
+            }
+
+            parent.onCommit()
+            control.window?.makeFirstResponder(nil)
+            return true
+        }
+    }
+}
+
+private enum TodoDateInputFormatter {
+    static func digitCount(in text: String, before offset: Int) -> Int {
+        guard offset > 0 else { return 0 }
+        let nsText = text as NSString
+        let safeOffset = min(offset, nsText.length)
+        return nsText.substring(to: safeOffset).filter(\.isNumber).count
+    }
+
+    static func formattedDateInput(from text: String) -> String {
+        let digits = String(text.filter(\.isNumber).prefix(8))
+        guard !digits.isEmpty else { return "" }
+        guard digits.count > 4 else { return digits }
+
+        let year = String(digits.prefix(4))
+        let month = String(digits.dropFirst(4).prefix(2))
+        guard digits.count > 6 else { return "\(year)/\(month)" }
+
+        let day = String(digits.dropFirst(6).prefix(2))
+        return "\(year)/\(month)/\(day)"
+    }
+
+    static func cursorLocation(afterDigitCount digitCount: Int, in formattedText: String) -> Int {
+        guard digitCount > 0 else { return 0 }
+
+        var seenDigits = 0
+        for (offset, character) in formattedText.enumerated() {
+            if character.isNumber {
+                seenDigits += 1
+                if seenDigits == digitCount {
+                    return offset + 1
+                }
+            }
+        }
+
+        return formattedText.count
+    }
+}
+
+private struct TodoDarkCalendarPopover: View {
+    @Binding var selectedDate: Date
+    @Binding var isPresented: Bool
+    let accentColor: Color
+
+    @State private var displayedMonth = Date()
+    @State private var monthSlideDirection = 1
+
+    private var calendar: Calendar {
+        var calendar = Calendar.current
+        calendar.locale = Locale(identifier: "zh_CN")
+        return calendar
+    }
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 5) {
+                ZStack(alignment: .leading) {
+                    Text(monthTitle)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .lineLimit(1)
+                        .id(monthPageID)
+                        .transition(monthSlideTransition)
+                }
+                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                .clipped()
+
+                calendarStepButton(systemName: "chevron.left") {
+                    changeMonth(by: -1)
+                }
+
+                calendarStepButton(systemName: "chevron.right") {
+                    changeMonth(by: 1)
+                }
+            }
+
+            ZStack(alignment: .top) {
+                monthPage
+                    .id(monthPageID)
+                    .transition(monthSlideTransition)
+            }
+            .frame(height: calendarPageHeight)
+            .clipped()
+        }
+        .padding(8)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.050, green: 0.055, blue: 0.064),
+                            Color(red: 0.014, green: 0.016, blue: 0.020)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.16),
+                                    accentColor.opacity(0.24),
+                                    Color.white.opacity(0.06)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 0.8
+                        )
+                }
+        }
+        .onAppear {
+            displayedMonth = monthStart(for: selectedDate)
+        }
+    }
+
+    private var monthPage: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 0) {
+                ForEach(weekdaySymbols, id: \.self) { symbol in
+                    Text(symbol)
+                        .font(.system(size: 7.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.38))
+                        .frame(maxWidth: .infinity)
+                }
+            }
+
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 1.5), count: 7),
+                spacing: 1.5
+            ) {
+                ForEach(calendarDays) { day in
+                    dayButton(day)
+                }
+            }
+        }
+    }
+
+    private var monthTitle: String {
+        let components = calendar.dateComponents([.year, .month], from: displayedMonth)
+        return "\(components.year ?? 0)年\(components.month ?? 1)月"
+    }
+
+    private var monthPageID: String {
+        let components = calendar.dateComponents([.year, .month], from: displayedMonth)
+        return "\(components.year ?? 0)-\(components.month ?? 1)"
+    }
+
+    private var monthSlideTransition: AnyTransition {
+        let insertionEdge: Edge = monthSlideDirection > 0 ? .trailing : .leading
+        let removalEdge: Edge = monthSlideDirection > 0 ? .leading : .trailing
+        return .asymmetric(
+            insertion: .move(edge: insertionEdge).combined(with: .opacity),
+            removal: .move(edge: removalEdge).combined(with: .opacity)
+        )
+    }
+
+    private var weekdaySymbols: [String] {
+        ["日", "一", "二", "三", "四", "五", "六"]
+    }
+
+    private var calendarDays: [TodoCalendarDay] {
+        let monthStart = monthStart(for: displayedMonth)
+        let weekday = calendar.component(.weekday, from: monthStart)
+        let firstGridDate = calendar.date(
+            byAdding: .day,
+            value: -(weekday - 1),
+            to: monthStart
+        ) ?? monthStart
+
+        return (0..<(calendarWeekCount * 7)).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: firstGridDate) else {
+                return nil
+            }
+
+            return TodoCalendarDay(
+                date: date,
+                isCurrentMonth: calendar.isDate(date, equalTo: monthStart, toGranularity: .month)
+            )
+        }
+    }
+
+    private var calendarWeekCount: Int {
+        let monthStart = monthStart(for: displayedMonth)
+        let leadingDayCount = calendar.component(.weekday, from: monthStart) - 1
+        let dayCount = calendar.range(of: .day, in: .month, for: monthStart)?.count ?? 31
+        return min(6, max(4, (leadingDayCount + dayCount + 6) / 7))
+    }
+
+    private var calendarPageHeight: CGFloat {
+        let dayRowHeight: CGFloat = 16
+        let gridSpacing: CGFloat = 1.5
+        let weekdayAndSectionHeight: CGFloat = 14
+        return weekdayAndSectionHeight
+            + CGFloat(calendarWeekCount) * dayRowHeight
+            + CGFloat(max(0, calendarWeekCount - 1)) * gridSpacing
+    }
+
+    private func dayButton(_ day: TodoCalendarDay) -> some View {
+        let isSelected = calendar.isDate(day.date, inSameDayAs: selectedDate)
+        let isToday = calendar.isDateInToday(day.date)
+
+        return Button {
+            selectedDate = calendar.startOfDay(for: day.date)
+            withAnimation(.easeOut(duration: 0.12)) {
+                isPresented = false
+            }
+        } label: {
+            Text("\(calendar.component(.day, from: day.date))")
+                .font(.system(size: 8.8, weight: isSelected ? .bold : .semibold, design: .rounded))
+                .foregroundStyle(dayTextColor(day: day, isSelected: isSelected))
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? accentColor.opacity(0.90) : Color.white.opacity(isToday ? 0.075 : 0))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(isToday && !isSelected ? accentColor.opacity(0.32) : .clear, lineWidth: 0.7)
+                }
+        }
+        .buttonStyle(.plain)
+        .handCursor()
+    }
+
+    private func calendarStepButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 8.5, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.70))
+                .frame(width: 18, height: 18)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.white.opacity(0.07))
+                }
+        }
+        .buttonStyle(.plain)
+        .handCursor()
+    }
+
+    private func dayTextColor(day: TodoCalendarDay, isSelected: Bool) -> Color {
+        if isSelected { return Color.white.opacity(0.96) }
+        return day.isCurrentMonth ? Color.white.opacity(0.84) : Color.white.opacity(0.24)
+    }
+
+    private func changeMonth(by offset: Int) {
+        guard let nextMonth = calendar.date(byAdding: .month, value: offset, to: displayedMonth) else {
+            return
+        }
+
+        monthSlideDirection = offset > 0 ? 1 : -1
+        withAnimation(.smooth(duration: 0.20, extraBounce: 0)) {
+            displayedMonth = monthStart(for: nextMonth)
+        }
+    }
+
+    private func monthStart(for date: Date) -> Date {
+        let components = calendar.dateComponents([.year, .month], from: date)
+        return calendar.date(from: components) ?? calendar.startOfDay(for: date)
+    }
+}
+
+private struct TodoCalendarDay: Identifiable {
+    let date: Date
+    let isCurrentMonth: Bool
+
+    var id: String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
     }
 }
 
@@ -4824,11 +5626,7 @@ private struct TodoAllListView: View {
             .frame(height: 34)
             .background(TodoRoundedFieldBackground(isActive: false, accentColor: accentColor))
 
-            Picker("状态", selection: $showsCompleted) {
-                Text("未完成").tag(false)
-                Text("已完成").tag(true)
-            }
-            .pickerStyle(.segmented)
+            TodoStatusSegmentedControl(showsCompleted: $showsCompleted, accentColor: accentColor)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
@@ -4851,7 +5649,7 @@ private struct TodoAllListView: View {
             }
         }
         .padding(14)
-        .todoGlassPanel(cornerRadius: 22, edgeGlow: true)
+        .todoGlassPanel(cornerRadius: 22, edgeGlow: true, castsShadow: false)
     }
 
     private var filteredItems: [TodoSchedulePreviewItem] {
@@ -4886,6 +5684,68 @@ private struct TodoAllListView: View {
     }
 }
 
+private struct TodoStatusSegmentedControl: View {
+    @Binding var showsCompleted: Bool
+    let accentColor: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("状态")
+                .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.82))
+
+            HStack(spacing: 2) {
+                statusButton(title: "未完成", isCompleted: false)
+                statusButton(title: "已完成", isCompleted: true)
+            }
+            .padding(3)
+            .frame(maxWidth: 252)
+            .frame(height: 32)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.075))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.white.opacity(0.055), lineWidth: 0.7)
+                    }
+            }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
+
+    private func statusButton(title: String, isCompleted: Bool) -> some View {
+        let isSelected = showsCompleted == isCompleted
+
+        return Button {
+            guard showsCompleted != isCompleted else { return }
+
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                showsCompleted = isCompleted
+            }
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(isSelected ? Color.white.opacity(0.96) : Color.white.opacity(0.66))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isSelected ? accentColor.opacity(0.78) : Color.clear)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .handCursor()
+    }
+}
+
 private struct TodoCompletedListView: View {
     let items: [TodoSchedulePreviewItem]
     let accentColor: Color
@@ -4910,14 +5770,19 @@ private struct TodoCompletedListView: View {
                                     .font(.system(size: 9.5, weight: .medium, design: .rounded))
                                     .foregroundStyle(Color.white.opacity(0.30))
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                            Spacer()
-
-                            Button("恢复") { onRestore(item) }
-                                .buttonStyle(TodoPanelButtonStyle(role: .secondary, accentColor: accentColor))
-                            Button("删除") { onDelete(item) }
-                                .buttonStyle(TodoPanelButtonStyle(role: .danger, accentColor: accentColor))
+                            HStack(spacing: 8) {
+                                Button("恢复") { onRestore(item) }
+                                    .buttonStyle(TodoPanelCompactButtonStyle(role: .secondary, accentColor: accentColor))
+                                    .frame(width: 52)
+                                Button("删除") { onDelete(item) }
+                                    .buttonStyle(TodoPanelCompactButtonStyle(role: .danger, accentColor: accentColor))
+                                    .frame(width: 52)
+                            }
+                            .frame(width: 112, alignment: .trailing)
                         }
+                        .frame(maxWidth: .infinity)
                         .padding(10)
                         .background(TodoListRowBackground())
                     }
@@ -4929,7 +5794,7 @@ private struct TodoCompletedListView: View {
             }
         }
         .padding(14)
-        .todoGlassPanel(cornerRadius: 22, edgeGlow: true)
+        .todoGlassPanel(cornerRadius: 22, edgeGlow: true, castsShadow: false)
     }
 }
 
@@ -4974,7 +5839,7 @@ private struct TodoSortMenuView: View {
             }
         }
         .padding(14)
-        .todoGlassPanel(cornerRadius: 22, edgeGlow: true)
+        .todoGlassPanel(cornerRadius: 22, edgeGlow: true, castsShadow: false)
     }
 
     private func sortIcon(for mode: TodoSortMode) -> String {
@@ -4983,7 +5848,6 @@ private struct TodoSortMenuView: View {
         case .timeDesc: "clock.badge.checkmark"
         case .priority: "exclamationmark.triangle.fill"
         case .createdAt: "calendar.badge.clock"
-        case .manual: "line.3.horizontal.decrease"
         }
     }
 }
@@ -5013,10 +5877,10 @@ private struct TodoCardSettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     settingsSection("显示设置") {
-                        TodoSettingsToggle(title: "显示日期选择器", isOn: $showDateSelector)
-                        TodoSettingsToggle(title: "显示时间", isOn: $showTime)
-                        TodoSettingsToggle(title: "显示标签", isOn: $showCategory)
-                        TodoSettingsToggle(title: "显示已完成事项", isOn: $showCompleted)
+                        TodoSettingsToggle(title: "显示日期选择器", isOn: $showDateSelector, accentColor: accentColor)
+                        TodoSettingsToggle(title: "显示时间", isOn: $showTime, accentColor: accentColor)
+                        TodoSettingsToggle(title: "显示标签", isOn: $showCategory, accentColor: accentColor)
+                        TodoSettingsToggle(title: "显示已完成事项", isOn: $showCompleted, accentColor: accentColor)
                         Stepper("最大显示数量：\(maxVisibleItems)", value: $maxVisibleItems, in: 1...4)
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.70))
@@ -5032,18 +5896,20 @@ private struct TodoCardSettingsView: View {
 
                     settingsSection("视觉设置") {
                         TodoRawPicker<TodoHighlightColor>(title: "高亮颜色", selection: $highlightColorRaw, values: TodoHighlightColor.allCases)
-                        TodoSettingsToggle(title: "边缘光", isOn: $showEdgeGlow)
-                        TodoSettingsToggle(title: "紧凑模式", isOn: $useCompactMode)
+                        TodoSettingsToggle(title: "边缘光", isOn: $showEdgeGlow, accentColor: accentColor)
+                        TodoSettingsToggle(title: "紧凑模式", isOn: $useCompactMode, accentColor: accentColor)
                     }
 
                     settingsSection("提醒设置") {
-                        TodoSettingsToggle(title: "显示提醒标识", isOn: $showReminderBadge)
+                        TodoSettingsToggle(title: "显示提醒标识", isOn: $showReminderBadge, accentColor: accentColor)
                         Picker("即将到期", selection: $dueSoonMinutes) {
                             Text("5 分钟").tag(5)
                             Text("15 分钟").tag(15)
                             Text("30 分钟").tag(30)
                             Text("1 小时").tag(60)
                         }
+                        .colorScheme(.dark)
+                        .tint(accentColor)
                     }
                 }
             }
@@ -5052,10 +5918,10 @@ private struct TodoCardSettingsView: View {
                 onClose()
                 onOpenFullSettings()
             }
-            .buttonStyle(TodoPanelButtonStyle(role: .secondary, accentColor: accentColor))
+            .buttonStyle(TodoPanelCompactButtonStyle(role: .secondary, accentColor: accentColor))
         }
         .padding(14)
-        .todoGlassPanel(cornerRadius: 22, edgeGlow: true)
+        .todoGlassPanel(cornerRadius: 22, edgeGlow: true, castsShadow: false)
     }
 
     private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -5076,19 +5942,62 @@ private struct TodoRawPicker<Value>: View where Value: RawRepresentable & CaseIt
     let values: Value.AllCases
 
     var body: some View {
-        HStack {
+        HStack(spacing: 10) {
             Text(title)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.70))
+                .foregroundStyle(Color.white.opacity(0.64))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
-            Picker(title, selection: $selection) {
+            Menu {
                 ForEach(values, id: \.self) { value in
-                    Text(displayTitle(for: value)).tag(value.rawValue)
+                    Button {
+                        selection = value.rawValue
+                    } label: {
+                        HStack {
+                            Text(displayTitle(for: value))
+                            if value.rawValue == selection {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(selectedTitle)
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.82))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.86)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8.8, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                }
+                .padding(.horizontal, 10)
+                .frame(width: 132, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(Color.white.opacity(0.045), lineWidth: 0.7)
+                        }
                 }
             }
-            .labelsHidden()
-            .frame(width: 132)
+            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .focusable(false)
+            .handCursor()
         }
+    }
+
+    private var selectedTitle: String {
+        guard let value = values.first(where: { $0.rawValue == selection }) else {
+            return selection
+        }
+
+        return displayTitle(for: value)
     }
 
     private func displayTitle(for value: Value) -> String {
@@ -5102,12 +6011,50 @@ private struct TodoRawPicker<Value>: View where Value: RawRepresentable & CaseIt
 private struct TodoSettingsToggle: View {
     let title: String
     @Binding var isOn: Bool
+    let accentColor: Color
 
     var body: some View {
         Toggle(title, isOn: $isOn)
-            .toggleStyle(.switch)
+            .toggleStyle(TodoAccentSwitchToggleStyle(accentColor: accentColor))
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .foregroundStyle(Color.white.opacity(0.70))
+    }
+}
+
+private struct TodoAccentSwitchToggleStyle: ToggleStyle {
+    let accentColor: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            configuration.label
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                withAnimation(.easeOut(duration: 0.14)) {
+                    configuration.isOn.toggle()
+                }
+            } label: {
+                ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                    Capsule()
+                        .fill(configuration.isOn ? accentColor.opacity(0.82) : Color.white.opacity(0.12))
+                        .overlay {
+                            Capsule()
+                                .stroke(configuration.isOn ? accentColor.opacity(0.38) : Color.white.opacity(0.08), lineWidth: 0.7)
+                        }
+
+                    Circle()
+                        .fill(Color.white.opacity(configuration.isOn ? 0.96 : 0.76))
+                        .shadow(color: Color.black.opacity(0.22), radius: 2, y: 1)
+                        .frame(width: 18, height: 18)
+                        .padding(3)
+                }
+                .frame(width: 44, height: 24)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .handCursor()
+        }
     }
 }
 
@@ -5117,12 +6064,49 @@ private struct TodoInlinePicker<Value>: View where Value: CaseIterable & Hashabl
     let values: Value.AllCases
 
     var body: some View {
-        Picker(title, selection: $selection) {
-            ForEach(values, id: \.self) { value in
-                Text(displayTitle(for: value)).tag(value)
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.78))
+
+            Menu {
+                ForEach(values, id: \.self) { value in
+                    Button {
+                        selection = value
+                    } label: {
+                        HStack {
+                            Text(displayTitle(for: value))
+                            if value == selection {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Text(displayTitle(for: selection))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.82))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8.8, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.50))
+                }
+                .padding(.horizontal, 10)
+                .frame(minWidth: 70)
+                .frame(height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                }
             }
+            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .focusable(false)
+            .handCursor()
         }
-        .pickerStyle(.menu)
         .frame(maxWidth: .infinity)
     }
 
@@ -5186,7 +6170,6 @@ private struct TodoListPreviewView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(.easeOut(duration: 0.18), value: items)
     }
 }
 
@@ -5220,33 +6203,33 @@ private struct TodoListPreviewRow: View {
             .handCursor()
             .disabled(item.isCompleted)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.title)
-                    .font(.system(size: isCompact ? 9.5 : 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(item.isCompleted ? 0.42 : 0.84))
-                    .lineLimit(1)
-                    .strikethrough(item.isCompleted, color: Color.white.opacity(0.30))
-
-                HStack(spacing: 5) {
-                    if showTime, !item.time.isEmpty {
-                        Text(item.time)
-                    }
-                    if showCategory, item.category != .none {
-                        Text(item.category.title)
-                    }
-                    if item.priority != .normal {
-                        Text(item.priority.title)
-                            .foregroundStyle(accentColor.opacity(0.68))
-                    }
-                }
-                .font(.system(size: isCompact ? 7.8 : 8.8, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(item.isCompleted ? 0.25 : 0.45))
+            Text(item.title)
+                .font(.system(size: isCompact ? 10.5 : 12.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(item.isCompleted ? 0.42 : 0.86))
                 .lineLimit(1)
-            }
+                .strikethrough(item.isCompleted, color: Color.white.opacity(0.30))
+                .layoutPriority(1)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 6)
+
+            HStack(spacing: 6) {
+                if showTime, !item.time.isEmpty {
+                    Text(item.time)
+                }
+                if showCategory, item.category != .none {
+                    Text(item.category.title)
+                }
+                if item.priority != .normal {
+                    Text(item.priority.title)
+                        .foregroundStyle(accentColor.opacity(0.72))
+                }
+            }
+            .font(.system(size: isCompact ? 8.5 : 10, weight: .medium, design: .rounded))
+            .foregroundStyle(Color.white.opacity(item.isCompleted ? 0.25 : 0.50))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .frame(maxWidth: .infinity, minHeight: isCompact ? 22 : 27, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: isCompact ? 20 : 24, alignment: .leading)
     }
 }
 
@@ -5381,9 +6364,36 @@ private struct TodoPanelButtonStyle: ButtonStyle {
     }
 }
 
+private struct TodoPanelCompactButtonStyle: ButtonStyle {
+    let role: TodoPanelButtonStyle.Role
+    let accentColor: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.white.opacity(0.76))
+            .frame(maxWidth: .infinity)
+            .frame(height: 26)
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(fillColor.opacity(configuration.isPressed ? 0.72 : 1))
+            }
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+    }
+
+    private var fillColor: Color {
+        switch role {
+        case .primary: accentColor.opacity(0.72)
+        case .secondary: Color.white.opacity(0.070)
+        case .danger: Color.red.opacity(0.30)
+        }
+    }
+}
+
 private struct TodoGlassPanelModifier: ViewModifier {
     let cornerRadius: CGFloat
     let edgeGlow: Bool
+    let castsShadow: Bool
 
     func body(content: Content) -> some View {
         content
@@ -5391,7 +6401,10 @@ private struct TodoGlassPanelModifier: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [Color.black.opacity(0.86), Color.black.opacity(0.72)],
+                            colors: [
+                                Color(red: 0.030, green: 0.033, blue: 0.038),
+                                Color(red: 0.006, green: 0.007, blue: 0.010)
+                            ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -5411,8 +6424,16 @@ private struct TodoGlassPanelModifier: ViewModifier {
                                 lineWidth: 0.9
                             )
                     }
-                    .shadow(color: Color.black.opacity(0.42), radius: 18, y: 10)
-                    .shadow(color: TodoScheduleCardMetrics.selectedBlue.opacity(edgeGlow ? 0.16 : 0), radius: 16, y: 2)
+                    .shadow(
+                        color: Color.black.opacity(castsShadow ? 0.42 : 0),
+                        radius: castsShadow ? 18 : 0,
+                        y: castsShadow ? 10 : 0
+                    )
+                    .shadow(
+                        color: TodoScheduleCardMetrics.selectedBlue.opacity(castsShadow && edgeGlow ? 0.16 : 0),
+                        radius: castsShadow ? 16 : 0,
+                        y: castsShadow ? 2 : 0
+                    )
             }
     }
 }
@@ -5438,12 +6459,12 @@ private extension View {
         modifier(ModuleCardClipModifier(shape: shape, isEnabled: isEnabled))
     }
 
-    func todoGlassPanel(cornerRadius: CGFloat, edgeGlow: Bool) -> some View {
-        modifier(TodoGlassPanelModifier(cornerRadius: cornerRadius, edgeGlow: edgeGlow))
+    func todoGlassPanel(cornerRadius: CGFloat, edgeGlow: Bool, castsShadow: Bool = true) -> some View {
+        modifier(TodoGlassPanelModifier(cornerRadius: cornerRadius, edgeGlow: edgeGlow, castsShadow: castsShadow))
     }
 }
 
-struct DeviceInfoSnapshot {
+struct DeviceInfoSnapshot: Sendable {
     var cpuPercent: Int
     var memoryPercent: Int
     var diskPercent: Int
@@ -5463,21 +6484,35 @@ struct DeviceInfoSnapshot {
     )
 }
 
+private struct DeviceInfoCPUCoreLoad: Sendable {
+    var user: UInt64
+    var system: UInt64
+    var nice: UInt64
+    var idle: UInt64
+}
+
+private struct DeviceInfoNetworkSample: Sendable {
+    var received: UInt64
+    var sent: UInt64
+    var date: Date
+}
+
+private struct DeviceInfoSampleState: Sendable {
+    var cpuLoads: [DeviceInfoCPUCoreLoad] = []
+    var networkSample: DeviceInfoNetworkSample?
+}
+
 @MainActor
 final class DeviceInfoProvider: ObservableObject {
     @Published private(set) var snapshot = DeviceInfoSnapshot.placeholder
 
     private var timer: Timer?
-    private var previousCPUInfo: processor_info_array_t?
-    private var previousCPUInfoCount: mach_msg_type_number_t = 0
-    private var previousCPUCount: natural_t = 0
-    private var previousNetworkSample: (received: UInt64, sent: UInt64, date: Date)?
+    private var refreshTask: Task<Void, Never>?
+    private var sampleState = DeviceInfoSampleState()
 
     deinit {
-        if let previousCPUInfo {
-            let size = vm_size_t(previousCPUInfoCount) * vm_size_t(MemoryLayout<integer_t>.stride)
-            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: previousCPUInfo), size)
-        }
+        timer?.invalidate()
+        refreshTask?.cancel()
     }
 
     func start() {
@@ -5490,21 +6525,64 @@ final class DeviceInfoProvider: ObservableObject {
         }
     }
 
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        refreshTask?.cancel()
+        refreshTask = nil
+        sampleState = DeviceInfoSampleState()
+    }
+
     func refresh() {
-        let disk = diskUsage()
-        let network = networkSpeed()
-        snapshot = DeviceInfoSnapshot(
-            cpuPercent: cpuUsagePercent(),
-            memoryPercent: memoryUsagePercent(),
+        guard refreshTask == nil else { return }
+
+        let previousSnapshot = snapshot
+        let state = sampleState
+        refreshTask = Task { @MainActor in
+            let result = await Task.detached(priority: .utility) {
+                DeviceInfoProvider.makeSnapshot(previousSnapshot: previousSnapshot, state: state)
+            }.value
+
+            guard !Task.isCancelled else { return }
+            snapshot = result.snapshot
+            sampleState = result.state
+            refreshTask = nil
+        }
+    }
+
+    nonisolated private static func makeSnapshot(
+        previousSnapshot: DeviceInfoSnapshot,
+        state: DeviceInfoSampleState
+    ) -> (snapshot: DeviceInfoSnapshot, state: DeviceInfoSampleState) {
+        var nextState = state
+        let cpu = cpuUsagePercent(previousLoads: state.cpuLoads, fallback: previousSnapshot.cpuPercent)
+        nextState.cpuLoads = cpu.loads
+
+        let disk = diskUsage(fallback: previousSnapshot)
+        let network = networkSpeed(
+            previousSample: state.networkSample,
+            fallbackUpload: previousSnapshot.uploadBytesPerSecond,
+            fallbackDownload: previousSnapshot.downloadBytesPerSecond
+        )
+        nextState.networkSample = network.sample
+
+        let snapshot = DeviceInfoSnapshot(
+            cpuPercent: cpu.percent,
+            memoryPercent: memoryUsagePercent(fallback: previousSnapshot.memoryPercent),
             diskPercent: disk.percent,
             usedDiskText: disk.used,
             totalDiskText: disk.total,
             uploadBytesPerSecond: network.upload,
             downloadBytesPerSecond: network.download
         )
+
+        return (snapshot, nextState)
     }
 
-    private func cpuUsagePercent() -> Int {
+    nonisolated private static func cpuUsagePercent(
+        previousLoads: [DeviceInfoCPUCoreLoad],
+        fallback: Int
+    ) -> (percent: Int, loads: [DeviceInfoCPUCoreLoad]) {
         var cpuInfo: processor_info_array_t?
         var cpuInfoCount: mach_msg_type_number_t = 0
         var cpuCount: natural_t = 0
@@ -5517,37 +6595,47 @@ final class DeviceInfoProvider: ObservableObject {
             &cpuInfoCount
         )
 
-        guard result == KERN_SUCCESS, let cpuInfo else { return snapshot.cpuPercent }
+        guard result == KERN_SUCCESS, let cpuInfo else {
+            return (fallback, previousLoads)
+        }
         defer {
             let size = vm_size_t(cpuInfoCount) * vm_size_t(MemoryLayout<integer_t>.stride)
-            if let previousCPUInfo {
-                vm_deallocate(mach_task_self_, vm_address_t(bitPattern: previousCPUInfo), size)
-            }
-            previousCPUInfo = cpuInfo
-            previousCPUInfoCount = cpuInfoCount
-            previousCPUCount = cpuCount
+            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: cpuInfo), size)
         }
 
-        guard let previousCPUInfo, previousCPUCount == cpuCount else { return snapshot.cpuPercent }
+        let currentLoads = (0..<Int(cpuCount)).map { cpu in
+            let offset = Int(CPU_STATE_MAX) * cpu
+            return DeviceInfoCPUCoreLoad(
+                user: unsignedCounter(cpuInfo[offset + Int(CPU_STATE_USER)]),
+                system: unsignedCounter(cpuInfo[offset + Int(CPU_STATE_SYSTEM)]),
+                nice: unsignedCounter(cpuInfo[offset + Int(CPU_STATE_NICE)]),
+                idle: unsignedCounter(cpuInfo[offset + Int(CPU_STATE_IDLE)])
+            )
+        }
+
+        guard previousLoads.count == currentLoads.count else {
+            return (fallback, currentLoads)
+        }
 
         var totalUsage: Double = 0
-        for cpu in 0..<Int(cpuCount) {
-            let offset = Int(CPU_STATE_MAX) * cpu
-            let user = Double(cpuInfo[offset + Int(CPU_STATE_USER)] - previousCPUInfo[offset + Int(CPU_STATE_USER)])
-            let system = Double(cpuInfo[offset + Int(CPU_STATE_SYSTEM)] - previousCPUInfo[offset + Int(CPU_STATE_SYSTEM)])
-            let nice = Double(cpuInfo[offset + Int(CPU_STATE_NICE)] - previousCPUInfo[offset + Int(CPU_STATE_NICE)])
-            let idle = Double(cpuInfo[offset + Int(CPU_STATE_IDLE)] - previousCPUInfo[offset + Int(CPU_STATE_IDLE)])
+        for index in currentLoads.indices {
+            let current = currentLoads[index]
+            let previous = previousLoads[index]
+            let user = Double(counterDelta(current.user, previous.user))
+            let system = Double(counterDelta(current.system, previous.system))
+            let nice = Double(counterDelta(current.nice, previous.nice))
+            let idle = Double(counterDelta(current.idle, previous.idle))
             let total = user + system + nice + idle
             if total > 0 {
                 totalUsage += (total - idle) / total
             }
         }
 
-        let average = totalUsage / Double(max(1, Int(cpuCount)))
-        return Int((average * 100).rounded()).clamped(to: 0...100)
+        let average = totalUsage / Double(max(1, currentLoads.count))
+        return (Int((average * 100).rounded()).clamped(to: 0...100), currentLoads)
     }
 
-    private func memoryUsagePercent() -> Int {
+    nonisolated private static func memoryUsagePercent(fallback: Int) -> Int {
         var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.stride / MemoryLayout<integer_t>.stride)
         var stats = vm_statistics64()
 
@@ -5557,12 +6645,12 @@ final class DeviceInfoProvider: ObservableObject {
             }
         }
 
-        guard result == KERN_SUCCESS else { return snapshot.memoryPercent }
+        guard result == KERN_SUCCESS else { return fallback }
 
         let pageSize = UInt64(vm_kernel_page_size)
         let total = ProcessInfo.processInfo.physicalMemory
 
-        guard total > 0 else { return snapshot.memoryPercent }
+        guard total > 0 else { return fallback }
         let reclaimablePages = UInt64(stats.free_count)
             + UInt64(stats.inactive_count)
             + UInt64(stats.speculative_count)
@@ -5571,33 +6659,36 @@ final class DeviceInfoProvider: ObservableObject {
         return Int((Double(used) / Double(total) * 100).rounded()).clamped(to: 0...100)
     }
 
-    private func networkSpeed() -> (upload: UInt64, download: UInt64) {
+    nonisolated private static func networkSpeed(
+        previousSample: DeviceInfoNetworkSample?,
+        fallbackUpload: UInt64,
+        fallbackDownload: UInt64
+    ) -> (upload: UInt64, download: UInt64, sample: DeviceInfoNetworkSample?) {
         guard let totals = networkByteTotals() else {
-            return (snapshot.uploadBytesPerSecond, snapshot.downloadBytesPerSecond)
+            return (fallbackUpload, fallbackDownload, previousSample)
         }
 
         let now = Date()
-        defer {
-            previousNetworkSample = (totals.received, totals.sent, now)
-        }
+        let nextSample = DeviceInfoNetworkSample(received: totals.received, sent: totals.sent, date: now)
 
-        guard let previousNetworkSample else { return (0, 0) }
-        let elapsed = now.timeIntervalSince(previousNetworkSample.date)
-        guard elapsed > 0 else { return (0, 0) }
+        guard let previousSample else { return (0, 0, nextSample) }
+        let elapsed = now.timeIntervalSince(previousSample.date)
+        guard elapsed > 0 else { return (0, 0, nextSample) }
 
-        let receivedDelta = totals.received >= previousNetworkSample.received
-            ? totals.received - previousNetworkSample.received
+        let receivedDelta = totals.received >= previousSample.received
+            ? totals.received - previousSample.received
             : 0
-        let sentDelta = totals.sent >= previousNetworkSample.sent
-            ? totals.sent - previousNetworkSample.sent
+        let sentDelta = totals.sent >= previousSample.sent
+            ? totals.sent - previousSample.sent
             : 0
         return (
             UInt64((Double(sentDelta) / elapsed).rounded()),
-            UInt64((Double(receivedDelta) / elapsed).rounded())
+            UInt64((Double(receivedDelta) / elapsed).rounded()),
+            nextSample
         )
     }
 
-    private func networkByteTotals() -> (received: UInt64, sent: UInt64)? {
+    nonisolated private static func networkByteTotals() -> (received: UInt64, sent: UInt64)? {
         var firstAddress: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&firstAddress) == 0, let firstAddress else { return nil }
         defer { freeifaddrs(firstAddress) }
@@ -5623,24 +6714,24 @@ final class DeviceInfoProvider: ObservableObject {
         return (received, sent)
     }
 
-    private func diskUsage() -> (percent: Int, used: String, total: String) {
+    nonisolated private static func diskUsage(fallback: DeviceInfoSnapshot) -> (percent: Int, used: String, total: String) {
         do {
             let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]
             )
             let available = UInt64(max(0, values.volumeAvailableCapacityForImportantUsage ?? 0))
             let total = UInt64(max(0, values.volumeTotalCapacity ?? 0))
-            guard total > 0 else { return (snapshot.diskPercent, snapshot.usedDiskText, snapshot.totalDiskText) }
+            guard total > 0 else { return (fallback.diskPercent, fallback.usedDiskText, fallback.totalDiskText) }
 
             let used = total > available ? total - available : 0
             let percent = Int((Double(used) / Double(total) * 100).rounded()).clamped(to: 0...100)
             return (percent, formattedBytes(used), formattedBytes(total))
         } catch {
-            return (snapshot.diskPercent, snapshot.usedDiskText, snapshot.totalDiskText)
+            return (fallback.diskPercent, fallback.usedDiskText, fallback.totalDiskText)
         }
     }
 
-    private func formattedBytes(_ bytes: UInt64) -> String {
+    nonisolated private static func formattedBytes(_ bytes: UInt64) -> String {
         let gb = Double(bytes) / 1_000_000_000
         if gb >= 999 {
             let tb = gb / 1000
@@ -5648,6 +6739,14 @@ final class DeviceInfoProvider: ObservableObject {
         }
 
         return "\(Int(gb.rounded()))G"
+    }
+
+    nonisolated private static func unsignedCounter(_ value: integer_t) -> UInt64 {
+        UInt64(UInt32(bitPattern: value))
+    }
+
+    nonisolated private static func counterDelta(_ current: UInt64, _ previous: UInt64) -> UInt64 {
+        current >= previous ? current - previous : 0
     }
 }
 
@@ -5696,11 +6795,15 @@ enum IslandPanelModule: String, CaseIterable, Identifiable {
     }
 }
 
-private struct FinderGlyph: View {
-    private let iconPath = Bundle.main.path(forResource: "finder_icon", ofType: "png")
+enum AppCachedImageAssets {
+    static let finderIcon: NSImage? = Bundle.main
+        .path(forResource: "finder_icon", ofType: "png")
+        .flatMap(NSImage.init(contentsOfFile:))
+}
 
+private struct FinderGlyph: View {
     var body: some View {
-        if let iconPath, let image = NSImage(contentsOfFile: iconPath) {
+        if let image = AppCachedImageAssets.finderIcon {
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
@@ -6663,21 +7766,19 @@ private struct MusicArtworkCover: View {
     private var artworkContent: some View {
         switch source {
         case .file(let url, let version):
-            if let image = PlaybackArtworkImageCache.shared.image(for: url, version: version) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: width, height: height)
-            } else {
+            AsyncPlaybackArtworkImage(
+                source: .file(url, version: version),
+                width: width,
+                height: height
+            ) {
                 placeholder
             }
         case .imageData(let data, let id):
-            if let image = PlaybackArtworkImageCache.shared.image(for: data, id: id) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: width, height: height)
-            } else {
+            AsyncPlaybackArtworkImage(
+                source: .imageData(data, id: id),
+                width: width,
+                height: height
+            ) {
                 placeholder
             }
         case .remote(let url):
@@ -7065,19 +8166,19 @@ private struct PlaybackArtworkTile: View {
     private var artworkContent: some View {
         switch source {
         case .file(let url, let version):
-            if let image = PlaybackArtworkImageCache.shared.image(for: url, version: version) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
+            AsyncPlaybackArtworkImage(
+                source: .file(url, version: version),
+                width: size,
+                height: size
+            ) {
                 placeholder
             }
         case .imageData(let data, let id):
-            if let image = PlaybackArtworkImageCache.shared.image(for: data, id: id) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
+            AsyncPlaybackArtworkImage(
+                source: .imageData(data, id: id),
+                width: size,
+                height: size
+            ) {
                 placeholder
             }
         case .remote(let url):
@@ -7105,6 +8206,105 @@ private struct PlaybackArtworkTile: View {
     }
 }
 
+private struct AsyncPlaybackArtworkImage<Placeholder: View>: View {
+    let source: PlaybackArtworkSource?
+    let width: CGFloat
+    let height: CGFloat
+    @ViewBuilder var placeholder: Placeholder
+
+    @State private var image: NSImage?
+    @State private var loadedKey = ""
+    @State private var loadTask: Task<Void, Never>?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                placeholder
+            }
+        }
+        .frame(width: width, height: height)
+        .onAppear {
+            loadImageIfNeeded()
+        }
+        .onChange(of: cacheKey) { _, _ in
+            loadImageIfNeeded()
+        }
+        .onDisappear {
+            loadTask?.cancel()
+            loadTask = nil
+        }
+    }
+
+    private var cacheKey: String {
+        switch source {
+        case .file(let url, let version):
+            return PlaybackArtworkImageCache.cacheKey(for: url, version: version)
+        case .imageData(_, let id):
+            return PlaybackArtworkImageCache.cacheKey(forDataID: id)
+        case .remote, nil:
+            return ""
+        }
+    }
+
+    private func loadImageIfNeeded() {
+        let key = cacheKey
+        guard !key.isEmpty else {
+            loadTask?.cancel()
+            loadTask = nil
+            loadedKey = ""
+            image = nil
+            return
+        }
+
+        if loadedKey == key, image != nil {
+            return
+        }
+
+        loadTask?.cancel()
+        loadedKey = key
+
+        if let cached = cachedImage() {
+            image = cached
+            loadTask = nil
+            return
+        }
+
+        image = nil
+        let source = source
+        loadTask = Task { @MainActor in
+            let loadedImage = await Task.detached(priority: .utility) { () -> NSImage? in
+                switch source {
+                case .file(let url, let version):
+                    return PlaybackArtworkImageCache.shared.loadImage(for: url, version: version)
+                case .imageData(let data, let id):
+                    return PlaybackArtworkImageCache.shared.loadImage(for: data, id: id)
+                case .remote, nil:
+                    return nil
+                }
+            }.value
+
+            guard !Task.isCancelled, cacheKey == key else { return }
+            image = loadedImage
+            loadTask = nil
+        }
+    }
+
+    private func cachedImage() -> NSImage? {
+        switch source {
+        case .file(let url, let version):
+            return PlaybackArtworkImageCache.shared.cachedImage(for: url, version: version)
+        case .imageData(_, let id):
+            return PlaybackArtworkImageCache.shared.cachedImage(forDataID: id)
+        case .remote, nil:
+            return nil
+        }
+    }
+}
+
 private final class PlaybackArtworkImageCache {
     static let shared = PlaybackArtworkImageCache()
 
@@ -7114,8 +8314,24 @@ private final class PlaybackArtworkImageCache {
         cache.countLimit = 12
     }
 
-    func image(for url: URL, version: TimeInterval) -> NSImage? {
-        let key = "\(url.path)#\(version)" as NSString
+    static func cacheKey(for url: URL, version: TimeInterval) -> String {
+        "\(url.path)#\(version)"
+    }
+
+    static func cacheKey(forDataID id: String) -> String {
+        "data#\(id)"
+    }
+
+    func cachedImage(for url: URL, version: TimeInterval) -> NSImage? {
+        cache.object(forKey: Self.cacheKey(for: url, version: version) as NSString)
+    }
+
+    func cachedImage(forDataID id: String) -> NSImage? {
+        cache.object(forKey: Self.cacheKey(forDataID: id) as NSString)
+    }
+
+    func loadImage(for url: URL, version: TimeInterval) -> NSImage? {
+        let key = Self.cacheKey(for: url, version: version) as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }
@@ -7132,8 +8348,8 @@ private final class PlaybackArtworkImageCache {
         return image
     }
 
-    func image(for data: Data, id: String) -> NSImage? {
-        let key = "data#\(id)" as NSString
+    func loadImage(for data: Data, id: String) -> NSImage? {
+        let key = Self.cacheKey(forDataID: id) as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }

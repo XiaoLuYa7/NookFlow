@@ -19,6 +19,7 @@ struct FilesGridView: View {
     @State private var directoryContentOpacity = 0.0
     @State private var isDirectoryTransitioning = false
     @State private var directoryTransitionTask: Task<Void, Never>?
+    @State private var fileOperationError: String?
 
     // Drag state
     @State private var isDraggingFile = false
@@ -179,6 +180,17 @@ struct FilesGridView: View {
         }
         .onDisappear {
             cleanupTransientState()
+        }
+        .alert(
+            "文件操作失败",
+            isPresented: Binding(
+                get: { fileOperationError != nil },
+                set: { if !$0 { fileOperationError = nil } }
+            )
+        ) {
+            Button("知道了", role: .cancel) { fileOperationError = nil }
+        } message: {
+            Text(fileOperationError ?? "")
         }
         .overlay {
             if let file = previewFile {
@@ -836,7 +848,12 @@ struct FilesGridView: View {
         let finalFolderID = folderMoveTarget(at: location, candidate: folderCandidate(at: location)) ?? moveToFolderTargetID
         if let folderID = finalFolderID,
            let folder = visibleFiles.first(where: { $0.id == folderID }) {
-            _ = provider.moveFile(file, toFolder: folder)
+            Task { @MainActor in
+                let result = await provider.moveFile(file, toFolder: folder)
+                if let message = result.errorMessage {
+                    fileOperationError = message
+                }
+            }
             return
         }
 

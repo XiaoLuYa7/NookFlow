@@ -1,5 +1,7 @@
 import Foundation
+#if !SWIFT_PACKAGE
 import SwiftData
+#endif
 
 @MainActor
 protocol LyricsCaching {
@@ -24,27 +26,6 @@ extension LyricsCaching {
     }
 }
 
-@Model
-final class CachedLyrics {
-    @Attribute(.unique) var cacheKey: String
-    var title: String
-    var artist: String
-    var lyricsData: Data
-    var fetchedAt: Date
-
-    init(cacheKey: String, title: String, artist: String, lyrics: [LyricLine]) {
-        self.cacheKey = cacheKey
-        self.title = title
-        self.artist = artist
-        self.lyricsData = (try? JSONEncoder().encode(lyrics)) ?? Data()
-        self.fetchedAt = Date()
-    }
-
-    var lyrics: [LyricLine] {
-        (try? JSONDecoder().decode([LyricLine].self, from: lyricsData)) ?? []
-    }
-}
-
 // LyricLine Codable conformance
 extension LyricLine: Codable {
     enum CodingKeys: String, CodingKey {
@@ -63,6 +44,28 @@ extension LyricLine: Codable {
         try container.encode(startTimeMS, forKey: .startTimeMS)
         try container.encode(words, forKey: .words)
         try container.encodeIfPresent(translation, forKey: .translation)
+    }
+}
+
+#if !SWIFT_PACKAGE
+@Model
+final class CachedLyrics {
+    @Attribute(.unique) var cacheKey: String
+    var title: String
+    var artist: String
+    var lyricsData: Data
+    var fetchedAt: Date
+
+    init(cacheKey: String, title: String, artist: String, lyrics: [LyricLine]) {
+        self.cacheKey = cacheKey
+        self.title = title
+        self.artist = artist
+        self.lyricsData = (try? JSONEncoder().encode(lyrics)) ?? Data()
+        self.fetchedAt = Date()
+    }
+
+    var lyrics: [LyricLine] {
+        (try? JSONDecoder().decode([LyricLine].self, from: lyricsData)) ?? []
     }
 }
 
@@ -147,3 +150,57 @@ final class LyricsCacheService: LyricsCaching {
         }
     }
 }
+#else
+@MainActor
+final class LyricsCacheService: LyricsCaching {
+    private var entries: [String: (title: String, artist: String, lyrics: [LyricLine], fetchedAt: Date)] = [:]
+    private let maxEntries = 128
+
+    func cacheKey(
+        for trackID: String?,
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval
+    ) -> String {
+        if let trackID, !trackID.isEmpty {
+            return "lyrics_v2_itunes_\(trackID)"
+        }
+
+        let albumPart = album.normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let durationPart = duration > 0 ? String(Int(duration.rounded())) : ""
+        return ["lyrics_v2", title.normalized, artist.normalized, albumPart, durationPart]
+            .filter { !$0.isEmpty }
+            .joined(separator: "_")
+    }
+
+    func get(key: String, maxAge: TimeInterval = 30 * 24 * 3600) -> [LyricLine]? {
+        guard let entry = entries[key],
+              Date().timeIntervalSince(entry.fetchedAt) < maxAge else {
+            return nil
+        }
+
+        return entry.lyrics
+    }
+
+    func set(key: String, title: String, artist: String, lyrics: [LyricLine]) {
+        guard !lyrics.isEmpty else {
+            entries.removeValue(forKey: key)
+            return
+        }
+
+        entries[key] = (title, artist, lyrics, Date())
+        trimIfNeeded()
+    }
+
+    private func trimIfNeeded() {
+        guard entries.count > maxEntries else { return }
+
+        let keysToRemove = entries
+            .sorted { $0.value.fetchedAt < $1.value.fetchedAt }
+            .prefix(entries.count - maxEntries)
+            .map(\.key)
+        keysToRemove.forEach { entries.removeValue(forKey: $0) }
+    }
+}
+#endif

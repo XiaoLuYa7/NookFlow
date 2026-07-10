@@ -21,6 +21,9 @@ final class IslandWindowController: NSObject {
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
     private var didShowUnsupportedHardwareAlert = false
+    private var hasActiveExternalInteractiveFrame = false
+    private var externalInteractionDismissGraceDeadline: Date?
+    private let externalInteractionDismissGraceDelay: TimeInterval = 0.85
 
     deinit {
         NotificationCenter.default.removeObserver(self)
@@ -111,6 +114,9 @@ final class IslandWindowController: NSObject {
             onOpenSettings: { [weak self] in
                 self?.openSettingsFromIsland()
             },
+            onOpenTodoSettings: { [weak self] in
+                self?.openTodoSettingsFromIsland()
+            },
             onOpenFeedback: { [weak self] in
                 self?.openFeedbackFromIsland()
             }
@@ -155,11 +161,20 @@ final class IslandWindowController: NSObject {
             case .staging:
                 let viewModel = self.viewModel
                 Task { @MainActor in
-                    let didImport = await Task.detached(priority: .userInitiated) {
+                    let importResult = await Task.detached(priority: .userInitiated) {
                         FileDataProvider.importFilesToStaging(urls)
                     }.value
-                    if didImport {
+                    if importResult.importedAny {
                         viewModel.notifyFileDataChanged()
+                    }
+                    if let message = importResult.failureMessage {
+                        InAppNotificationWindowController.shared.show(
+                            InAppNotificationPayload(
+                                title: "文件导入失败",
+                                message: message,
+                                kind: .general
+                            )
+                        )
                     }
                 }
                 return true
@@ -454,9 +469,24 @@ final class IslandWindowController: NSObject {
     private func collapseImmediatelyIfPointerOutsidePanel() {
         if isPointerInsidePanel {
             viewModel.cancelCollapse()
+            externalInteractionDismissGraceDeadline = nil
         } else {
-            viewModel.scheduleCollapse(delay: 0)
+            viewModel.scheduleCollapse(delay: pointerExitCollapseDelay())
         }
+    }
+
+    private func pointerExitCollapseDelay() -> TimeInterval {
+        guard let deadline = externalInteractionDismissGraceDeadline else {
+            return 0
+        }
+
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else {
+            externalInteractionDismissGraceDeadline = nil
+            return 0
+        }
+
+        return remaining
     }
 
     private func reconcilePointerHoverState() {
@@ -691,6 +721,24 @@ final class IslandWindowController: NSObject {
             }
             .store(in: &cancellables)
 
+        viewModel.$externalInteractiveFrame
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] frame in
+                guard let self else { return }
+                if frame != nil {
+                    self.hasActiveExternalInteractiveFrame = true
+                    self.externalInteractionDismissGraceDeadline = nil
+                    self.viewModel.cancelCollapse()
+                } else if self.hasActiveExternalInteractiveFrame {
+                    self.hasActiveExternalInteractiveFrame = false
+                    self.externalInteractionDismissGraceDeadline = Date()
+                        .addingTimeInterval(self.externalInteractionDismissGraceDelay)
+                    self.collapseImmediatelyIfPointerOutsidePanel()
+                }
+            }
+            .store(in: &cancellables)
+
         viewModel.$hoverPhase
             .dropFirst()
             .receive(on: DispatchQueue.main)
@@ -879,6 +927,10 @@ final class IslandWindowController: NSObject {
 
     private func openSettingsFromIsland() {
         openSettingsWindow(page: .home, presentFeedback: false)
+    }
+
+    private func openTodoSettingsFromIsland() {
+        openSettingsWindow(page: .todo, presentFeedback: false)
     }
 
     private func openFeedbackFromIsland() {

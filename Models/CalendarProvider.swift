@@ -79,6 +79,16 @@ final class CalendarProvider: ObservableObject {
         requestCalendarAccess()
     }
 
+    func stop() {
+        hasStarted = false
+        refreshWorkItem?.cancel()
+        refreshWorkItem = nil
+        loadTask?.cancel()
+        loadTask = nil
+        notificationTokens.forEach(NotificationCenter.default.removeObserver)
+        notificationTokens.removeAll()
+    }
+
     private func observeCalendarChanges() {
         let center = NotificationCenter.default
 
