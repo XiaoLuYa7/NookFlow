@@ -174,7 +174,20 @@ final class FileDataProvider: ObservableObject {
 
     nonisolated private static func stagingDirectoryURL() -> URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent("Documents/L-Nook/FileData")
+        let documents = home.appendingPathComponent("Documents", isDirectory: true)
+        let directory = documents
+            .appendingPathComponent("NookFlow", isDirectory: true)
+            .appendingPathComponent("FileData", isDirectory: true)
+        let previousBrandDirectoryName = ["L", "-", "Nook"].joined()
+        let previousDirectory = documents
+            .appendingPathComponent(previousBrandDirectoryName, isDirectory: true)
+            .appendingPathComponent("FileData", isDirectory: true)
+
+        if !FileManager.default.fileExists(atPath: directory.path),
+           FileManager.default.fileExists(atPath: previousDirectory.path) {
+            return previousDirectory
+        }
+        return directory
     }
 
     deinit {

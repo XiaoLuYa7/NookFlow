@@ -24,10 +24,10 @@ struct PageHeaderView<Actions: View>: View {
             HStack(alignment: .top, spacing: AppSpacing.md) {
                 if let icon {
                     Image(systemName: icon)
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.system(size: 19, weight: .semibold))
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(AppColor.accent)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 38, height: 38)
                         .background {
                             RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
                                 .fill(AppColor.accentSoft)
@@ -62,16 +62,16 @@ extension PageHeaderView where Actions == EmptyView {
 }
 
 struct SettingsPageScaffold<Header: View, Content: View, Footer: View>: View {
-    private let horizontalPadding: CGFloat = 22
-    private let verticalPadding: CGFloat = 20
-    private let sectionSpacing: CGFloat = 16
+    private let horizontalPadding: CGFloat = AppSpacing.pageHorizontal
+    private let verticalPadding: CGFloat = AppSpacing.pageVertical
+    private let sectionSpacing: CGFloat = 18
     let contentMaxWidth: CGFloat
     @ViewBuilder let header: Header
     @ViewBuilder let content: Content
     @ViewBuilder let footer: Footer
 
     init(
-        contentMaxWidth: CGFloat = 1040,
+        contentMaxWidth: CGFloat = 1120,
         @ViewBuilder header: () -> Header,
         @ViewBuilder content: () -> Content,
         @ViewBuilder footer: () -> Footer
@@ -111,7 +111,7 @@ struct SettingsPageScaffold<Header: View, Content: View, Footer: View>: View {
 
 extension SettingsPageScaffold where Footer == EmptyView {
     init(
-        contentMaxWidth: CGFloat = 1040,
+        contentMaxWidth: CGFloat = 1120,
         @ViewBuilder header: () -> Header,
         @ViewBuilder content: () -> Content
     ) {
@@ -208,7 +208,7 @@ struct SettingsRow<Accessory: View>: View {
             }
             .padding(.horizontal, AppSpacing.rowHorizontal)
             .padding(.vertical, AppSpacing.rowVertical)
-            .frame(minHeight: 58)
+            .frame(minHeight: 60)
 
             if showsDivider {
                 Rectangle()
@@ -250,11 +250,11 @@ struct SettingsRow<Accessory: View>: View {
                 Image(systemName: icon)
                     .font(.system(size: AppIconStyle.rowSize, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(AppColor.textSecondary)
+                    .foregroundStyle(AppColor.accent)
                     .frame(width: AppIconStyle.rowFrame, height: AppIconStyle.rowFrame)
                     .background {
                         RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                            .fill(AppColor.controlFill)
+                            .fill(AppColor.accentSoft.opacity(0.78))
                     }
             }
 
@@ -525,6 +525,54 @@ struct ProBadge: View {
                             .stroke(AppColor.accentBorder, lineWidth: 1)
                     }
             }
+    }
+}
+
+enum SettingsStatusTone {
+    case neutral
+    case accent
+    case positive
+    case warning
+
+    var foreground: Color {
+        switch self {
+        case .neutral: AppColor.textSecondary
+        case .accent: AppColor.accent
+        case .positive: AppColor.positive
+        case .warning: AppColor.warning
+        }
+    }
+
+    var background: Color {
+        switch self {
+        case .neutral: AppColor.controlFill
+        case .accent: AppColor.accentSoft
+        case .positive: AppColor.positive.opacity(0.10)
+        case .warning: AppColor.warning.opacity(0.11)
+        }
+    }
+}
+
+struct SettingsStatusBadge: View {
+    let title: String
+    var systemImage: String? = nil
+    var tone: SettingsStatusTone = .neutral
+
+    var body: some View {
+        HStack(spacing: AppSpacing.xs) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 10, weight: .bold))
+            }
+            Text(title)
+                .font(AppTypography.caption)
+                .lineLimit(1)
+        }
+        .foregroundStyle(tone.foreground)
+        .padding(.horizontal, AppSpacing.sm)
+        .frame(height: 24)
+        .background(tone.background, in: Capsule(style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 }
 

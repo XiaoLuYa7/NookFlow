@@ -182,8 +182,8 @@ struct ShortcutsSettingsView: View {
     var body: some View {
         SettingsPageScaffold(contentMaxWidth: ShortcutSettingsStyle.contentMaxWidth) {
             PageHeaderView(
-                title: "快捷指令",
-                subtitle: "点击整行加入或移除，右侧按钮可以直接运行。",
+                title: "自动化中心",
+                subtitle: "管理灵动岛中的系统快捷指令与常用动作。",
                 icon: "bolt.fill"
             ) {
                 Button(action: viewModel.refresh) {
@@ -207,7 +207,7 @@ struct ShortcutsSettingsView: View {
 
             SettingsSectionCard(
                 title: "可用的快捷指令",
-                subtitle: "已选中项目会以柔和的蓝紫色标记"
+                subtitle: "已选中项目会以低饱和蓝色标记"
             ) {
                 ShortcutListContainerView(
                     shortcuts: viewModel.shortcuts,
@@ -346,19 +346,11 @@ struct ShortcutRowView: View {
             Spacer(minLength: AppSpacing.md)
 
             if shortcut.isPinnedToIsland {
-                Text("已加入")
-                    .font(AppTypography.badge)
-                    .foregroundStyle(AppColor.accent)
-                    .padding(.horizontal, AppSpacing.sm)
-                    .frame(height: 22)
-                    .background {
-                        RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                            .fill(AppColor.accentSoft)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                                    .stroke(AppColor.accentBorder, lineWidth: 1)
-                            }
-                    }
+                SettingsStatusBadge(
+                    title: "已加入",
+                    systemImage: "checkmark",
+                    tone: .accent
+                )
             }
 
             ShortcutRunButton(
@@ -449,5 +441,5 @@ private enum ShortcutSettingsStyle {
     static let divider = AppColor.divider
     static let cardRadius = AppRadius.largeCard
     static let sectionSpacing = AppSpacing.section
-    static let contentMaxWidth: CGFloat = 1040
+    static let contentMaxWidth: CGFloat = 1120
 }

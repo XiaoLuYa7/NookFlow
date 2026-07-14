@@ -37,28 +37,42 @@ struct NotchLyricView: View {
 
     // MARK: - No Notch: Centered with edge fade
 
+    @ViewBuilder
     private func flatLayout(text: String) -> some View {
         let textW = LyricTextMeasurer.width(of: text)
         let viewW = geometry.totalWidth - 20
         let needsScroll = textW > viewW
+        let initialProgress = currentProgress(at: Date())
+        let needsTimeline = TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: snapshot.isLive,
+                isPlaying: snapshot.state == .playing,
+                hasContent: !text.isEmpty,
+                needsScrolling: needsScroll && initialProgress < 1,
+                isTransitioning: false
+            )
+        )
 
-        return TimelineView(.animation) { timeline in
-            let progress = currentProgress(at: timeline.date)
-
-            Text(text)
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.82))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .offset(x: needsScroll ? flatOffset(progress: progress, textW: textW, viewW: viewW) : 0)
-                .opacity(needsScroll ? flatOpacity(progress: progress) : 1)
-                .mask {
-                    if needsScroll {
-                        NotchLyricMask.flatMask(width: viewW)
-                    } else {
-                        Color.white
-                    }
+        Group {
+            if needsTimeline {
+                TimelineView(.animation) { timeline in
+                    flatLyricText(
+                        text,
+                        progress: currentProgress(at: timeline.date),
+                        needsScroll: needsScroll,
+                        textW: textW,
+                        viewW: viewW
+                    )
                 }
+            } else {
+                flatLyricText(
+                    text,
+                    progress: initialProgress,
+                    needsScroll: needsScroll,
+                    textW: textW,
+                    viewW: viewW
+                )
+            }
         }
         .frame(width: viewW, height: geometry.height, alignment: .center)
         .padding(.horizontal, 10)
@@ -66,27 +80,82 @@ struct NotchLyricView: View {
 
     // MARK: - Notch: Dual-zone sliding
 
+    @ViewBuilder
     private func notchLayout(text: String) -> some View {
         let textW = LyricTextMeasurer.width(of: text)
         let viewW = geometry.totalWidth - 20
+        let initialProgress = currentProgress(at: Date())
+        let needsTimeline = TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: snapshot.isLive,
+                isPlaying: snapshot.state == .playing,
+                hasContent: !text.isEmpty,
+                needsScrolling: initialProgress < 1,
+                isTransitioning: false
+            )
+        )
 
-        return TimelineView(.animation) { timeline in
-            let progress = currentProgress(at: timeline.date)
-            let offset = scrollOffset(progress: progress, textW: textW, viewW: viewW)
-            let opacity = scrollOpacity(progress: progress)
-
-            Text(text)
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.82))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .offset(x: offset)
-                .opacity(opacity)
-                .mask { NotchLyricMask.notchMask(geometry: geometry) }
+        Group {
+            if needsTimeline {
+                TimelineView(.animation) { timeline in
+                    notchLyricText(
+                        text,
+                        progress: currentProgress(at: timeline.date),
+                        textW: textW,
+                        viewW: viewW
+                    )
+                }
+            } else {
+                notchLyricText(
+                    text,
+                    progress: initialProgress,
+                    textW: textW,
+                    viewW: viewW
+                )
+            }
         }
         .frame(width: geometry.totalWidth, height: geometry.height)
         .clipped()
         .padding(.horizontal, 10)
+    }
+
+    private func flatLyricText(
+        _ text: String,
+        progress: Double,
+        needsScroll: Bool,
+        textW: CGFloat,
+        viewW: CGFloat
+    ) -> some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.white.opacity(0.82))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .offset(x: needsScroll ? flatOffset(progress: progress, textW: textW, viewW: viewW) : 0)
+            .opacity(needsScroll ? flatOpacity(progress: progress) : 1)
+            .mask {
+                if needsScroll {
+                    NotchLyricMask.flatMask(width: viewW)
+                } else {
+                    Color.white
+                }
+            }
+    }
+
+    private func notchLyricText(
+        _ text: String,
+        progress: Double,
+        textW: CGFloat,
+        viewW: CGFloat
+    ) -> some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.white.opacity(0.82))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .offset(x: scrollOffset(progress: progress, textW: textW, viewW: viewW))
+            .opacity(scrollOpacity(progress: progress))
+            .mask { NotchLyricMask.notchMask(geometry: geometry) }
     }
 
     // MARK: - Scroll Math (Notch)

@@ -61,6 +61,10 @@
 		B6A100010000000000000001 /* NotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A100020000000000000001 /* NotificationSettingsView.swift */; };
 		F1A100010000000000000001 /* NotificationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A100020000000000000001 /* NotificationCoordinator.swift */; };
 		F1A100010000000000000002 /* InAppNotificationWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A100020000000000000002 /* InAppNotificationWindowController.swift */; };
+		F2A100010000000000000001 /* NotificationRuntimePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A100020000000000000001 /* NotificationRuntimePolicy.swift */; };
+		F2A100010000000000000002 /* TimelineRefreshPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A100020000000000000002 /* TimelineRefreshPolicy.swift */; };
+		F2A100010000000000000003 /* TodoCardSettingsStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A100020000000000000003 /* TodoCardSettingsStorage.swift */; };
+		F2A100010000000000000004 /* GridRevealScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A100020000000000000004 /* GridRevealScheduler.swift */; };
 		C6A100010000000000000001 /* DesktopLyricsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A100020000000000000001 /* DesktopLyricsWindowController.swift */; };
 		CD17DAD5C65B14898A093ED5 /* LyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CF1FD2BFCD44586E0ECBB77 /* LyricsView.swift */; };
 		D0ADDA089E00ED2D5B9D082E /* LyricsNetworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF846F0A3FB7A245AD8AD27 /* LyricsNetworkService.swift */; };
@@ -113,7 +117,7 @@
 		A2000020 /* TodoViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoViewModel.swift; sourceTree = "<group>"; };
 		A2000021 /* TodoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoView.swift; sourceTree = "<group>"; };
 		A20000B0 /* IslandShellLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandShellLayout.swift; sourceTree = "<group>"; };
-		A3000001 /* L-Nook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "L-Nook.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A3000001 /* NookFlow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NookFlow.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AE6C480E68B3DBE8666CFA83 /* LyricsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsModels.swift; sourceTree = "<group>"; };
 		B3A10002E5F2C9D47A680B3E /* NotchGeometryProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchGeometryProvider.swift; sourceTree = "<group>"; };
 		B3A10004E5F2C9D47A680B3E /* LyricTextMeasurer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricTextMeasurer.swift; sourceTree = "<group>"; };
@@ -132,6 +136,10 @@
 		B6A100020000000000000001 /* NotificationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationSettingsView.swift; sourceTree = "<group>"; };
 		F1A100020000000000000001 /* NotificationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationCoordinator.swift; sourceTree = "<group>"; };
 		F1A100020000000000000002 /* InAppNotificationWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppNotificationWindowController.swift; sourceTree = "<group>"; };
+		F2A100020000000000000001 /* NotificationRuntimePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationRuntimePolicy.swift; sourceTree = "<group>"; };
+		F2A100020000000000000002 /* TimelineRefreshPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineRefreshPolicy.swift; sourceTree = "<group>"; };
+		F2A100020000000000000003 /* TodoCardSettingsStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoCardSettingsStorage.swift; sourceTree = "<group>"; };
+		F2A100020000000000000004 /* GridRevealScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridRevealScheduler.swift; sourceTree = "<group>"; };
 		C6A100020000000000000001 /* DesktopLyricsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopLyricsWindowController.swift; sourceTree = "<group>"; };
 		D7A100020000000000000001 /* AppDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDesignSystem.swift; sourceTree = "<group>"; };
 		D7A100020000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
@@ -217,6 +225,7 @@
 				A200001C /* NewReminderPanelView.swift */,
 				A2000021 /* TodoView.swift */,
 				A200001E /* FilesGridView.swift */,
+				F2A100020000000000000004 /* GridRevealScheduler.swift */,
 				0CF1FD2BFCD44586E0ECBB77 /* LyricsView.swift */,
 				B3A1000AE5F2C9D47A680B3E /* CompactCapsuleContentView.swift */,
 				B3A10006E5F2C9D47A680B3E /* NotchLyricView.swift */,
@@ -236,15 +245,18 @@
 				A2000005 /* IslandState.swift */,
 				A2000006 /* IslandViewModel.swift */,
 				A2000010 /* IslandSettings.swift */,
-				A2000015 /* WeatherProvider.swift */,
-				F1A100020000000000000001 /* NotificationCoordinator.swift */,
-				A2000016 /* CalendarProvider.swift */,
-				A2000017 /* ReminderProvider.swift */,
-				A2000018 /* PlaybackProvider.swift */,
+					A2000015 /* WeatherProvider.swift */,
+					F1A100020000000000000001 /* NotificationCoordinator.swift */,
+					F2A100020000000000000001 /* NotificationRuntimePolicy.swift */,
+					F2A100020000000000000002 /* TimelineRefreshPolicy.swift */,
+					A2000016 /* CalendarProvider.swift */,
+					A2000017 /* ReminderProvider.swift */,
+					A2000018 /* PlaybackProvider.swift */,
 				A2000019 /* ApplicationsProvider.swift */,
-				A200001D /* FileDataProvider.swift */,
-				A2000020 /* TodoViewModel.swift */,
-				A20000C1 /* CompactMusicPresentation.swift */,
+					A200001D /* FileDataProvider.swift */,
+					A2000020 /* TodoViewModel.swift */,
+					F2A100020000000000000003 /* TodoCardSettingsStorage.swift */,
+					A20000C1 /* CompactMusicPresentation.swift */,
 				56E73D3FBB4C6AA2FBBF90C3 /* LyricsProvider.swift */,
 				AE6C480E68B3DBE8666CFA83 /* LyricsModels.swift */,
 				92AA4C01D0F31701723CD22E /* LyricsParser.swift */,
@@ -265,7 +277,7 @@
 		A5000007 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A3000001 /* L-Nook.app */,
+				A3000001 /* NookFlow.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -287,7 +299,7 @@
 			);
 			name = NookFlow;
 			productName = NookFlow;
-			productReference = A3000001 /* L-Nook.app */;
+			productReference = A3000001 /* NookFlow.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -371,6 +383,7 @@
 				A100001C /* NewReminderPanelView.swift in Sources */,
 				A100001D /* FileDataProvider.swift in Sources */,
 				A100001E /* FilesGridView.swift in Sources */,
+				F2A100010000000000000004 /* GridRevealScheduler.swift in Sources */,
 				A1000020 /* TodoViewModel.swift in Sources */,
 				A1000021 /* TodoView.swift in Sources */,
 				477540A27D8E4E5F4FC7DBC8 /* LyricsModels.swift in Sources */,
@@ -393,10 +406,13 @@
 				B5A100010000000000000002 /* ShortcutsStore.swift in Sources */,
 				B5A100010000000000000004 /* ShortcutsCardView.swift in Sources */,
 				B5A100010000000000000005 /* ShortcutsSettingsView.swift in Sources */,
-				B6A100010000000000000001 /* NotificationSettingsView.swift in Sources */,
-				F1A100010000000000000001 /* NotificationCoordinator.swift in Sources */,
-				F1A100010000000000000002 /* InAppNotificationWindowController.swift in Sources */,
-				D7A100010000000000000001 /* AppDesignSystem.swift in Sources */,
+					B6A100010000000000000001 /* NotificationSettingsView.swift in Sources */,
+					F1A100010000000000000001 /* NotificationCoordinator.swift in Sources */,
+					F1A100010000000000000002 /* InAppNotificationWindowController.swift in Sources */,
+					F2A100010000000000000001 /* NotificationRuntimePolicy.swift in Sources */,
+					F2A100010000000000000002 /* TimelineRefreshPolicy.swift in Sources */,
+					F2A100010000000000000003 /* TodoCardSettingsStorage.swift in Sources */,
+					D7A100010000000000000001 /* AppDesignSystem.swift in Sources */,
 				D7A100010000000000000002 /* SettingsComponents.swift in Sources */,
 				D7A100010000000000000003 /* SettingsAppShell.swift in Sources */,
 				E8A100010000000000000001 /* GeneralSettingsView.swift in Sources */,
@@ -522,22 +538,22 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "L-Nook";
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "L-Nook uses Apple Events to read playback information from music apps.";
-				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "L-Nook uses calendar access to show today's events.";
+				INFOPLIST_KEY_CFBundleDisplayName = NookFlow;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "NookFlow uses Apple Events to read playback information from music apps.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "NookFlow uses calendar access to show today's events.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSLocationUsageDescription = "L-Nook uses your location to show local weather.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "L-Nook uses your location to show local weather.";
+				INFOPLIST_KEY_NSLocationUsageDescription = "NookFlow uses your location to show local weather.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "NookFlow uses your location to show local weather.";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
-				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "L-Nook uses reminders access to show your incomplete tasks.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "NookFlow uses reminders access to show your incomplete tasks.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.personal.DynamicNook;
-				PRODUCT_NAME = "L-Nook";
+				PRODUCT_NAME = NookFlow;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -553,22 +569,22 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "L-Nook";
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "L-Nook uses Apple Events to read playback information from music apps.";
-				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "L-Nook uses calendar access to show today's events.";
+				INFOPLIST_KEY_CFBundleDisplayName = NookFlow;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "NookFlow uses Apple Events to read playback information from music apps.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "NookFlow uses calendar access to show today's events.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSLocationUsageDescription = "L-Nook uses your location to show local weather.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "L-Nook uses your location to show local weather.";
+				INFOPLIST_KEY_NSLocationUsageDescription = "NookFlow uses your location to show local weather.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "NookFlow uses your location to show local weather.";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
-				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "L-Nook uses reminders access to show your incomplete tasks.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "NookFlow uses reminders access to show your incomplete tasks.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.personal.DynamicNook;
-				PRODUCT_NAME = "L-Nook";
+				PRODUCT_NAME = NookFlow;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};

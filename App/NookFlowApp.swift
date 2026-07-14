@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct LNookApp: App {
+struct NookFlowApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {

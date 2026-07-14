@@ -10,7 +10,7 @@ enum TodoStyle {
     static let mutedText = AppColor.textTertiary
     static let checkFill = AppColor.accentSoft
 
-    static let contentMaxWidth: CGFloat = 980
+    static let contentMaxWidth: CGFloat = 1120
     static let dateCardWidth: CGFloat = 124
     static let dateCardHeight: CGFloat = 70
     static let dateCardRadius = AppRadius.row
@@ -149,9 +149,10 @@ private struct TodoMainContentView: View {
                             .foregroundStyle(AppColor.accent)
                     }
                     Button(action: onOpenSettings) {
-                        Label("设置", systemImage: "slider.horizontal.3")
+                        Image(systemName: "slider.horizontal.3")
+                            .accessibilityLabel("待办设置")
                     }
-                    .buttonStyle(AppButtonStyle(role: .secondary))
+                    .buttonStyle(AppButtonStyle(role: .icon))
                     .help("待办设置")
                     Button(action: onSync) {
                         Label("同步", systemImage: "arrow.triangle.2.circlepath")
@@ -188,18 +189,7 @@ private struct TodoSettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var settings: IslandSettings
 
-    @AppStorage(TodoCardStorageKeys.showDateSelector) private var showDateSelector = true
-    @AppStorage(TodoCardStorageKeys.showTime) private var showTime = true
-    @AppStorage(TodoCardStorageKeys.showCategory) private var showCategory = true
-    @AppStorage(TodoCardStorageKeys.showCompleted) private var showCompleted = false
-    @AppStorage(TodoCardStorageKeys.maxVisibleItems) private var maxVisibleItems = 2
-    @AppStorage(TodoCardStorageKeys.defaultRange) private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
-    @AppStorage(TodoCardStorageKeys.sortMode) private var sortModeRaw = TodoSortMode.timeAsc.rawValue
-    @AppStorage(TodoCardStorageKeys.highlightColor) private var highlightColorRaw = TodoHighlightColor.blue.rawValue
-    @AppStorage(TodoCardStorageKeys.useCompactMode) private var useCompactMode = false
-    @AppStorage(TodoCardStorageKeys.showEdgeGlow) private var showEdgeGlow = true
-    @AppStorage(TodoCardStorageKeys.showReminderBadge) private var showReminderBadge = true
-    @AppStorage(TodoCardStorageKeys.dueSoonMinutes) private var dueSoonMinutes = 15
+    private var todoSettings = TodoCardSettingsStorage()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -222,31 +212,31 @@ private struct TodoSettingsSheetView: View {
                             icon: "calendar",
                             title: "显示日期选择器",
                             subtitle: "在卡片顶部显示可切换日期。",
-                            isOn: $showDateSelector
+                            isOn: todoSettings.$showDateSelector
                         )
                         AppSettingsToggleRow(
                             icon: "clock",
                             title: "显示时间",
                             subtitle: "任务行展示提醒时间。",
-                            isOn: $showTime
+                            isOn: todoSettings.$showTime
                         )
                         AppSettingsToggleRow(
                             icon: "tag",
                             title: "显示标签",
                             subtitle: "展示分组、优先级等标签信息。",
-                            isOn: $showCategory
+                            isOn: todoSettings.$showCategory
                         )
                         AppSettingsToggleRow(
                             icon: "checkmark.circle",
                             title: "显示已完成事项",
                             subtitle: "卡片列表中包含已完成任务。",
-                            isOn: $showCompleted
+                            isOn: todoSettings.$showCompleted
                         )
                         TodoSettingsStepperRow(
                             icon: "number",
                             title: "最大显示数量",
                             subtitle: "限制卡片中直接展示的任务数量。",
-                            value: $maxVisibleItems,
+                            value: todoSettings.$maxVisibleItems,
                             range: 1...4,
                             showsDivider: false
                         )
@@ -257,14 +247,14 @@ private struct TodoSettingsSheetView: View {
                             icon: "calendar.day.timeline.left",
                             title: "默认显示范围",
                             subtitle: "打开卡片时默认查看的待办范围。",
-                            selection: $defaultRangeRaw,
+                            selection: todoSettings.$defaultRangeRaw,
                             values: TodoDefaultRange.allCases
                         )
                         TodoSettingsRawPickerRow<TodoSortMode>(
                             icon: "arrow.up.arrow.down",
                             title: "默认排序方式",
                             subtitle: "影响待办卡片和弹窗列表的排列顺序。",
-                            selection: $sortModeRaw,
+                            selection: todoSettings.$sortModeRaw,
                             values: TodoSortMode.allCases,
                             showsDivider: false
                         )
@@ -275,32 +265,32 @@ private struct TodoSettingsSheetView: View {
                             icon: "paintpalette",
                             title: "高亮颜色",
                             subtitle: "用于选中日期、按钮和提醒状态。",
-                            selection: $highlightColorRaw,
+                            selection: todoSettings.$highlightColorRaw,
                             values: TodoHighlightColor.allCases
                         )
                         AppSettingsToggleRow(
                             icon: "sparkles",
                             title: "边缘光",
                             subtitle: "在卡片边缘显示轻微强调效果。",
-                            isOn: $showEdgeGlow
+                            isOn: todoSettings.$showEdgeGlow
                         )
                         AppSettingsToggleRow(
                             icon: "rectangle.compress.vertical",
                             title: "紧凑模式",
                             subtitle: "减少卡片内边距，适合较小模块尺寸。",
-                            isOn: $useCompactMode
+                            isOn: todoSettings.$useCompactMode
                         )
                         AppSettingsToggleRow(
                             icon: "bell.badge",
                             title: "显示提醒标识",
                             subtitle: "临近提醒时在任务旁展示提示。",
-                            isOn: $showReminderBadge
+                            isOn: todoSettings.$showReminderBadge
                         )
                         TodoSettingsValuePickerRow(
                             icon: "timer",
                             title: "即将到期",
                             subtitle: "距离提醒多少分钟内显示临近状态。",
-                            selection: $dueSoonMinutes,
+                            selection: todoSettings.$dueSoonMinutes,
                             options: [5, 15, 30, 60],
                             titleForValue: { $0 == 60 ? "1 小时" : "\($0) 分钟" },
                             showsDivider: false
@@ -620,10 +610,8 @@ struct TodoTaskListView: View {
                             onToggleCompletion: { onToggleCompletion(task) },
                             onToggleSelection: { model.toggleSelection(for: task.id) }
                         )
-                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
-                .animation(AppMotion.standard, value: model.selectedTasks)
             }
         }
     }
@@ -747,7 +735,7 @@ struct NewTodoSheetView: View {
 
         var title: String {
             switch self {
-            case .morning: "早上"
+            case .morning: "上午"
             case .noon: "中午"
             case .afternoon: "下午"
             case .evening: "晚上"
@@ -803,19 +791,19 @@ struct NewTodoSheetView: View {
             sheetHeader
 
             ScrollView {
-                VStack(spacing: AppSpacing.md) {
+                VStack(spacing: 10) {
                     taskContentSection
                     scheduleSection
                     reminderDetailsSection
                 }
-                .padding(.horizontal, AppSpacing.xxl)
-                .padding(.bottom, AppSpacing.lg)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
             .scrollIndicators(.never)
 
             sheetFooter
         }
-        .frame(width: 560, height: 620)
+        .frame(width: 520, height: 650)
         .background(AppColor.pageBackground)
         .onAppear {
             isTitleFocused = true
@@ -823,65 +811,98 @@ struct NewTodoSheetView: View {
     }
 
     private var sheetHeader: some View {
-        HStack(spacing: AppSpacing.md) {
+        HStack(spacing: 12) {
             Image(systemName: "checklist")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(AppColor.accent)
-                .frame(width: 36, height: 36)
+                .frame(width: 40, height: 40)
                 .background {
-                    RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(AppColor.accentSoft)
                 }
 
-            Text("新建待办")
-                .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(TodoStyle.primaryText)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("新建待办")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(TodoStyle.primaryText)
+
+                Text("设置任务内容、日期与提醒")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(TodoStyle.secondaryText)
+            }
 
             Spacer()
 
             Button(action: onCancel) {
                 Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(TodoStyle.secondaryText)
+                    .frame(width: 34, height: 34)
+                    .background {
+                        Circle()
+                            .fill(AppColor.solidSurface)
+                            .overlay {
+                                Circle().stroke(AppColor.border, lineWidth: 1)
+                            }
+                            .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
+                    }
             }
-            .buttonStyle(AppButtonStyle(role: .icon))
+            .buttonStyle(.plain)
             .help("关闭")
             .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, AppSpacing.xxl)
-        .padding(.vertical, AppSpacing.lg)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(AppColor.solidSurface.opacity(0.84))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AppColor.divider)
+                .frame(height: 1)
+        }
     }
 
     private var taskContentSection: some View {
         sheetSection {
-            VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text("任务内容")
-                    .font(AppTypography.caption)
+                    .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(AppColor.textTertiary)
+                    .padding(.bottom, 4)
 
-                TextField("输入待办标题", text: $title)
+                TextField("输入待办标题…", text: $title)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(TodoStyle.primaryText)
+                    .frame(height: 44)
                     .focused($isTitleFocused)
 
                 Rectangle()
-                    .fill(AppColor.divider)
+                    .fill(isTitleFocused ? AppColor.accent.opacity(0.34) : AppColor.divider)
                     .frame(height: 1)
 
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $notes)
-                        .font(AppTypography.body)
-                        .foregroundStyle(TodoStyle.primaryText)
-                        .scrollContentBackground(.hidden)
-                        .frame(height: 48)
-                        .padding(.horizontal, -5)
-                        .padding(.vertical, -7)
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(AppColor.textTertiary)
+                        .padding(.top, 11)
 
-                    if notes.isEmpty {
-                        Text("添加备注（可选）")
-                            .font(AppTypography.body)
-                            .foregroundStyle(TodoStyle.secondaryText)
-                            .allowsHitTesting(false)
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $notes)
+                            .font(.system(size: 13.5, weight: .regular))
+                            .foregroundStyle(TodoStyle.primaryText)
+                            .scrollContentBackground(.hidden)
+                            .frame(height: 48)
+                            .padding(.horizontal, -5)
+                            .padding(.vertical, 1)
+
+                        if notes.isEmpty {
+                            Text("添加备注（可选）")
+                                .font(.system(size: 13.5, weight: .regular))
+                                .foregroundStyle(TodoStyle.secondaryText)
+                                .padding(.top, 11)
+                                .allowsHitTesting(false)
+                        }
                     }
                 }
             }
@@ -890,55 +911,44 @@ struct NewTodoSheetView: View {
 
     private var scheduleSection: some View {
         sheetSection {
-            sheetRow(systemName: "calendar", title: "日期") {
-                HStack(spacing: AppSpacing.xs) {
-                    numericField($yearText, placeholder: "YYYY", width: 70, maxLength: 4, isInvalid: dateValidationMessage != nil) {
-                        updateDateFromSegments()
-                    }
+            HStack(alignment: .top, spacing: 10) {
+                compactSchedulePanel(
+                    systemName: "calendar",
+                    title: "日期",
+                    subtitle: "选择年月日"
+                ) {
+                    dateSelectionControl
+                }
 
-                    dateTimeSeparator("/")
-
-                    numericField($monthText, placeholder: "MM", width: 42, maxLength: 2, isInvalid: dateValidationMessage != nil) {
-                        updateDateFromSegments()
-                    }
-
-                    dateTimeSeparator("/")
-
-                    numericField($dayText, placeholder: "DD", width: 42, maxLength: 2, isInvalid: dateValidationMessage != nil) {
-                        updateDateFromSegments()
-                    }
+                compactSchedulePanel(
+                    systemName: "clock",
+                    title: "时间",
+                    subtitle: "选择时分"
+                ) {
+                    timeSelectionControl
                 }
             }
 
-            if let dateValidationMessage {
-                validationMessage(dateValidationMessage)
+            if dateValidationMessage != nil || timeValidationMessage != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let dateValidationMessage {
+                        validationMessage(dateValidationMessage)
+                    }
+                    if let timeValidationMessage {
+                        validationMessage(timeValidationMessage)
+                    }
+                }
             }
 
             sectionDivider
 
-            VStack(alignment: .leading, spacing: AppSpacing.md) {
-                sheetRow(systemName: "clock", title: "时间") {
-                    HStack(spacing: AppSpacing.xs) {
-                        numericField($hourText, placeholder: "HH", width: 44, maxLength: 2, isInvalid: timeValidationMessage != nil) {
-                            updateTimeFromSegments()
-                        }
+            Text("快捷时间")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(AppColor.textTertiary)
 
-                        dateTimeSeparator(":")
-
-                        numericField($minuteText, placeholder: "MM", width: 44, maxLength: 2, isInvalid: timeValidationMessage != nil) {
-                            updateTimeFromSegments()
-                        }
-                    }
-                }
-
-                if let timeValidationMessage {
-                    validationMessage(timeValidationMessage)
-                }
-
-                HStack(spacing: AppSpacing.sm) {
-                    ForEach(TimeOption.allCases) { option in
-                        timeOptionButton(option)
-                    }
+            HStack(spacing: 6) {
+                ForEach(TimeOption.allCases) { option in
+                    timeOptionButton(option)
                 }
             }
         }
@@ -946,7 +956,11 @@ struct NewTodoSheetView: View {
 
     private var reminderDetailsSection: some View {
         sheetSection {
-            sheetRow(systemName: "alarm", title: "添加闹钟") {
+            sheetRow(
+                systemName: "bell.badge",
+                title: "到期时提醒",
+                subtitle: "开启后，任务到期将发送提醒"
+            ) {
                 Toggle("", isOn: $hasAlarm)
                     .labelsHidden()
                     .toggleStyle(AppSwitchToggleStyle())
@@ -954,19 +968,26 @@ struct NewTodoSheetView: View {
 
             sectionDivider
 
-            sheetRow(systemName: "location", title: "位置") {
-                TextField("添加位置", text: $location)
-                    .textFieldStyle(.plain)
-                    .font(AppTypography.control)
-                    .multilineTextAlignment(.trailing)
-                    .padding(.horizontal, AppSpacing.md)
-                    .frame(width: 210, height: AppControlStyle.regularHeight)
+            sheetRow(systemName: "location", title: "位置", subtitle: "添加任务地点") {
+                HStack(spacing: 7) {
+                    Image(systemName: "location.circle")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AppColor.accent)
+
+                    TextField("添加位置", text: $location)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(AppColor.accent)
+                        .multilineTextAlignment(.trailing)
+                }
+                    .padding(.horizontal, 11)
+                    .frame(width: 154, height: 34)
                     .background {
                         RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                            .fill(AppColor.controlFill)
+                            .fill(AppColor.accentSoft.opacity(0.7))
                             .overlay {
                                 RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                                    .stroke(AppColor.border, lineWidth: 1)
+                                    .stroke(AppColor.accentBorder, lineWidth: 1)
                             }
                     }
             }
@@ -974,11 +995,14 @@ struct NewTodoSheetView: View {
     }
 
     private var sheetFooter: some View {
-        HStack(spacing: AppSpacing.sm) {
+        HStack(spacing: 10) {
             Spacer()
 
             Button("取消", action: onCancel)
-                .buttonStyle(AppButtonStyle(role: .quiet))
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(TodoStyle.secondaryText)
+                .frame(width: 82, height: 40)
+                .buttonStyle(.plain)
 
             Button {
                 onSave(
@@ -993,14 +1017,30 @@ struct NewTodoSheetView: View {
                 )
             } label: {
                 Label("保存待办", systemImage: "checkmark")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 138, height: 40)
+                    .background {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(canSave ? AppColor.accentGradient : LinearGradient(
+                                colors: [AppColor.textDisabled, AppColor.textDisabled],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ))
+                    }
+                    .shadow(
+                        color: canSave ? AppColor.accent.opacity(0.26) : .clear,
+                        radius: 10,
+                        y: 4
+                    )
             }
-            .buttonStyle(AppButtonStyle(role: .primary))
+            .buttonStyle(.plain)
             .disabled(!canSave)
             .keyboardShortcut(.defaultAction)
         }
-        .padding(.horizontal, AppSpacing.xxl)
-        .padding(.vertical, AppSpacing.md)
-        .background(AppColor.elevatedSurface)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(AppColor.solidSurface.opacity(0.94))
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(AppColor.divider)
@@ -1010,14 +1050,23 @@ struct NewTodoSheetView: View {
 
     @ViewBuilder
     private func sheetSection<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.md, content: content)
+        VStack(alignment: .leading, spacing: 10, content: content)
             .padding(14)
-            .appSurface(.elevated, radius: AppRadius.card)
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AppColor.solidSurface.opacity(0.94))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(AppColor.border.opacity(0.76), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.045), radius: 10, y: 4)
+            }
     }
 
     private func sheetRow<Content: View>(
         systemName: String,
         title: String,
+        subtitle: String? = nil,
         @ViewBuilder accessory: () -> Content
     ) -> some View {
         HStack(spacing: 12) {
@@ -1025,55 +1074,220 @@ struct NewTodoSheetView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(TodoStyle.blue)
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .background {
-                    RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(AppColor.accentSoft)
                 }
 
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(TodoStyle.primaryText)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(TodoStyle.primaryText)
+
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 11.5, weight: .regular))
+                        .foregroundStyle(TodoStyle.secondaryText)
+                }
+            }
 
             Spacer(minLength: 16)
 
             accessory()
         }
-        .frame(minHeight: 36)
+        .frame(minHeight: 46)
+    }
+
+    private func compactSchedulePanel<Content: View>(
+        systemName: String,
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 9) {
+                Image(systemName: systemName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(TodoStyle.blue)
+                    .frame(width: 30, height: 30)
+                    .background {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(AppColor.accentSoft)
+                    }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(TodoStyle.primaryText)
+                    Text(subtitle)
+                        .font(.system(size: 10.5, weight: .regular))
+                        .foregroundStyle(TodoStyle.secondaryText)
+                }
+            }
+
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var sectionDivider: some View {
         Rectangle()
             .fill(AppColor.divider)
             .frame(height: 1)
-            .padding(.leading, 42)
+            .padding(.leading, 48)
     }
 
-    private func dateTimeSeparator(_ text: String) -> some View {
-        Text(text)
-            .font(AppTypography.control.monospacedDigit())
-            .foregroundStyle(TodoStyle.secondaryText)
+    private var dateSelectionControl: some View {
+        HStack(spacing: 6) {
+            selectionMenu(
+                selection: Int(yearText) ?? Calendar.current.component(.year, from: date),
+                options: yearOptions,
+                width: 78,
+                formatter: String.init,
+                onSelect: { selectDate(year: $0) }
+            )
+
+            selectionMenu(
+                selection: Int(monthText) ?? Calendar.current.component(.month, from: date),
+                options: Array(1...12),
+                width: 58,
+                formatter: { "\($0)月" },
+                onSelect: { selectDate(month: $0) }
+            )
+
+            selectionMenu(
+                selection: Int(dayText) ?? Calendar.current.component(.day, from: date),
+                options: dayOptions,
+                width: 58,
+                formatter: { "\($0)日" },
+                onSelect: { selectDate(day: $0) }
+            )
+        }
     }
 
-    private func numericField(
-        _ text: Binding<String>,
-        placeholder: String,
+    private var timeSelectionControl: some View {
+        HStack(spacing: 6) {
+            selectionMenu(
+                selection: Int(hourText) ?? 9,
+                options: Array(0...23),
+                width: 60,
+                formatter: { String(format: "%02d", $0) },
+                onSelect: selectHour
+            )
+
+            Text(":")
+                .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                .foregroundStyle(TodoStyle.secondaryText)
+
+            selectionMenu(
+                selection: Int(minuteText) ?? 0,
+                options: Array(0...59),
+                width: 60,
+                formatter: { String(format: "%02d", $0) },
+                onSelect: selectMinute
+            )
+        }
+    }
+
+    private func selectionMenu(
+        selection: Int,
+        options: [Int],
         width: CGFloat,
-        maxLength: Int,
-        isInvalid: Bool,
-        onValidChange: @escaping () -> Void
+        formatter: @escaping (Int) -> String,
+        onSelect: @escaping (Int) -> Void
     ) -> some View {
-        TextField(placeholder, text: text)
-            .textFieldStyle(TodoInlineFieldStyle(width: width, isInvalid: isInvalid))
-            .multilineTextAlignment(.center)
-            .onChange(of: text.wrappedValue) { _, newValue in
-                let sanitized = TodoDateTimeInputParser.digitsOnly(newValue, maxLength: maxLength)
-                if sanitized != newValue {
-                    text.wrappedValue = sanitized
-                    return
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    onSelect(option)
+                } label: {
+                    HStack {
+                        Text(formatter(option))
+                        if option == selection {
+                            Image(systemName: "checkmark")
+                        }
+                    }
                 }
-                onValidChange()
             }
+        } label: {
+            HStack(spacing: 7) {
+                Text(formatter(selection))
+                    .font(.system(size: 14.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(TodoStyle.primaryText)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(TodoStyle.secondaryText)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: width, height: 36)
+            .contentShape(Rectangle())
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(AppColor.controlFill.opacity(0.72))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(AppColor.border, lineWidth: 1)
+                    }
+            }
+        }
+        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .focusable(false)
+    }
+
+    private var yearOptions: [Int] {
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let selectedYear = Int(yearText) ?? currentYear
+        return Array(min(currentYear - 30, selectedYear)...max(currentYear + 30, selectedYear))
+    }
+
+    private var dayOptions: [Int] {
+        let components = Calendar.current.dateComponents([.year, .month], from: date)
+        let year = Int(yearText) ?? components.year ?? 2026
+        let month = Int(monthText) ?? components.month ?? 1
+        return Array(1...daysInMonth(year: year, month: month))
+    }
+
+    private func selectDate(year: Int? = nil, month: Int? = nil, day: Int? = nil) {
+        let current = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        let selectedYear = year ?? Int(yearText) ?? current.year ?? 2026
+        let selectedMonth = month ?? Int(monthText) ?? current.month ?? 1
+        let selectedDay = min(
+            day ?? Int(dayText) ?? current.day ?? 1,
+            daysInMonth(year: selectedYear, month: selectedMonth)
+        )
+
+        yearText = String(selectedYear)
+        monthText = String(selectedMonth)
+        dayText = String(selectedDay)
+        updateDateFromSegments()
+    }
+
+    private func daysInMonth(year: Int, month: Int) -> Int {
+        let calendar = Calendar.current
+        let components = DateComponents(year: year, month: month, day: 1)
+        guard let firstDay = calendar.date(from: components),
+              let range = calendar.range(of: .day, in: .month, for: firstDay) else {
+            return 31
+        }
+        return range.count
+    }
+
+    private func selectHour(_ hour: Int) {
+        hourText = String(format: "%02d", hour)
+        updateTimeFromSegments()
+    }
+
+    private func selectMinute(_ minute: Int) {
+        minuteText = String(format: "%02d", minute)
+        updateTimeFromSegments()
     }
 
     private func validationMessage(_ message: String) -> some View {
@@ -1084,34 +1298,52 @@ struct NewTodoSheetView: View {
                 .font(.system(size: 12, weight: .semibold))
         }
         .foregroundStyle(Color.red.opacity(0.78))
-        .padding(.leading, 42)
+        .padding(.leading, 38)
     }
 
     private func timeOptionButton(_ option: TimeOption) -> some View {
-        Button {
+        let isSelected = selectedTimeOption == option
+
+        return Button {
             selectedTimeOption = option
             syncTimeText(for: option)
         } label: {
-            VStack(spacing: 2) {
+            VStack(spacing: 3) {
                 Text(option.title)
-                    .font(AppTypography.caption)
+                    .font(.system(size: 11.5, weight: .semibold))
                 Text(timeTitle(for: option))
-                    .font(AppTypography.control.monospacedDigit())
+                    .font(.system(size: 13.5, weight: .semibold).monospacedDigit())
             }
-            .foregroundStyle(selectedTimeOption == option ? AppColor.accent : TodoStyle.primaryText)
+            .foregroundStyle(isSelected ? Color.white : TodoStyle.primaryText)
             .frame(maxWidth: .infinity)
-            .frame(height: 42)
+            .frame(height: 44)
             .background {
-                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .fill(selectedTimeOption == option ? AppColor.accentSoft : AppColor.controlFill)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? AppColor.accentGradient : LinearGradient(
+                        colors: [AppColor.controlFill, AppColor.controlFill],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ))
                     .overlay {
-                        RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(
-                                selectedTimeOption == option ? AppColor.accentBorder : AppColor.border,
+                                isSelected ? AppColor.accent.opacity(0.28) : AppColor.border,
                                 lineWidth: 1
                             )
                     }
             }
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 18, height: 18)
+                        .background(AppColor.accentViolet.opacity(0.58))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .padding(4)
+                }
+            }
+            .shadow(color: isSelected ? AppColor.accent.opacity(0.16) : .clear, radius: 7, y: 3)
         }
         .buttonStyle(.plain)
     }
@@ -1223,35 +1455,4 @@ struct NewTodoSheetView: View {
             && timeValidationMessage == nil
     }
 
-    private func normalizeDateText() {
-        guard let parsedDate = Self.parseDate(year: yearText, month: monthText, day: dayText) else { return }
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: parsedDate)
-        date = parsedDate
-        yearText = String(components.year ?? 2026)
-        monthText = String(components.month ?? 1)
-        dayText = String(components.day ?? 1)
-    }
-}
-
-private struct TodoInlineFieldStyle: TextFieldStyle {
-    let width: CGFloat
-    var isInvalid = false
-
-    func _body(configuration: TextField<Self._Label>) -> some View {
-        configuration
-            .font(.system(size: 18, weight: .semibold).monospacedDigit())
-            .foregroundStyle(isInvalid ? Color.red.opacity(0.86) : TodoStyle.primaryText)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .multilineTextAlignment(.center)
-            .frame(width: width, height: AppControlStyle.regularHeight)
-            .background {
-                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .fill(AppColor.controlFill)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                            .stroke(isInvalid ? Color.red.opacity(0.42) : AppColor.border, lineWidth: 1)
-                    }
-            }
-    }
 }

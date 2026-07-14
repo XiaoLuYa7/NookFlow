@@ -36,12 +36,11 @@ struct ApplicationsGridView: View {
 
     @ObservedObject var provider: ApplicationsProvider
     @StateObject private var autoScrollController = EdgeAutoScrollController()
+    @StateObject private var revealScheduler = GridRevealScheduler()
 
     @State private var searchText = ""
     @State private var selectedFilter: ApplicationFilter = .all
     @State private var selectedSort: ApplicationSortOption = .name
-    @State private var revealedItemIDs = Set<ApplicationItem.ID>()
-    @State private var revealGeneration = 0
     @State private var hasAnimatedInitialLoad = false
     @State private var isDraggingItem = false
     @State private var dragSourceItem: ApplicationItem?
@@ -164,6 +163,7 @@ struct ApplicationsGridView: View {
         }
         .onDisappear {
             cancelDrag()
+            revealScheduler.cancel()
             isSearchFocused = false
             NSCursor.arrow.set()
         }
@@ -419,7 +419,7 @@ struct ApplicationsGridView: View {
     }
 
     private func itemCell(_ item: ApplicationItem) -> some View {
-        let isRevealed = revealedItemIDs.contains(item.id)
+        let isRevealed = revealScheduler.revealedIDs.contains(item.id)
         let itemIndex = visibleItems.firstIndex(of: item)
         let isSource = isDraggingItem && dragSourceItem?.id == item.id
 
@@ -613,40 +613,14 @@ struct ApplicationsGridView: View {
             hasAnimatedInitialLoad = true
         }
 
-        scheduleReveal(for: visibleItems, staggered: shouldStagger)
-    }
-
-    private func scheduleReveal(for items: [ApplicationItem], staggered: Bool) {
-        let itemIDs = items.map(\.id)
-        let visibleIDSet = Set(itemIDs)
-        revealGeneration += 1
-        let generation = revealGeneration
-
-        withAnimation(Self.cellExitAnimation) {
-            revealedItemIDs.formIntersection(visibleIDSet)
-        }
-
-        guard staggered else {
-            withAnimation(Self.cellRevealAnimation) {
-                revealedItemIDs.formUnion(visibleIDSet)
-            }
-            return
-        }
-
-        for (index, id) in itemIDs.enumerated() where !revealedItemIDs.contains(id) {
-            let delay = min(Double(index) * Self.revealStagger, Self.maxRevealDelay)
-
-            Task { @MainActor in
-                if delay > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                }
-                guard revealGeneration == generation else { return }
-
-                withAnimation(Self.cellRevealAnimation) {
-                    _ = revealedItemIDs.insert(id)
-                }
-            }
-        }
+        revealScheduler.schedule(
+            ids: visibleItems.map(\.id),
+            staggered: shouldStagger,
+            revealAnimation: Self.cellRevealAnimation,
+            exitAnimation: Self.cellExitAnimation,
+            staggerDelay: Self.revealStagger,
+            maximumDelay: Self.maxRevealDelay
+        )
     }
 
     private func sortItems(_ left: ApplicationItem, _ right: ApplicationItem) -> Bool {

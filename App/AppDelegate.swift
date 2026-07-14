@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let islandWindowController = IslandWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
         islandWindowController.setup()
         NotificationCoordinator.shared.start()
     }

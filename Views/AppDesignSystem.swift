@@ -14,25 +14,42 @@ enum AppBrandAsset {
     }()
 }
 
-enum AppColor {
-    static let pageBackground = Color(red: 0.965, green: 0.972, blue: 0.982)
-    static let sidebarBackground = Color(red: 0.948, green: 0.957, blue: 0.971)
-    static let elevatedSurface = Color.white.opacity(0.92)
-    static let solidSurface = Color.white
-    static let controlFill = Color.black.opacity(0.045)
-    static let controlFillHover = Color.black.opacity(0.065)
-    static let divider = Color.black.opacity(0.075)
-    static let border = Color.black.opacity(0.085)
+struct AppBrandIconView: View {
+    let size: CGFloat
 
-    static let textPrimary = Color.black.opacity(0.84)
-    static let textSecondary = Color.black.opacity(0.58)
-    static let textBody = Color.black.opacity(0.72)
-    static let textTertiary = Color.black.opacity(0.42)
+    var body: some View {
+        Image(nsImage: AppBrandAsset.icon)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(width: size, height: size)
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: size * 0.22,
+                    style: .continuous
+                )
+            )
+    }
+}
+
+enum AppColor {
+    static let pageBackground = Color(red: 0.961, green: 0.961, blue: 0.969)
+    static let sidebarBackground = Color(red: 0.949, green: 0.957, blue: 0.969)
+    static let elevatedSurface = Color.white.opacity(0.96)
+    static let solidSurface = Color.white
+    static let controlFill = Color.black.opacity(0.038)
+    static let controlFillHover = Color.black.opacity(0.062)
+    static let divider = Color.black.opacity(0.070)
+    static let border = Color.black.opacity(0.080)
+
+    static let textPrimary = Color.black.opacity(0.87)
+    static let textSecondary = Color.black.opacity(0.56)
+    static let textBody = Color.black.opacity(0.70)
+    static let textTertiary = Color.black.opacity(0.44)
     static let textDisabled = Color.black.opacity(0.30)
 
-    static let accent = Color(red: 0.31, green: 0.48, blue: 0.94)
-    static let accentViolet = Color(red: 0.52, green: 0.42, blue: 0.92)
-    static let accentSoft = Color(red: 0.90, green: 0.93, blue: 0.995)
+    static let accent = Color(red: 0.29, green: 0.47, blue: 0.92)
+    static let accentViolet = Color(red: 0.28, green: 0.58, blue: 0.96)
+    static let accentSoft = Color(red: 0.91, green: 0.94, blue: 0.995)
     static let accentBorder = accent.opacity(0.24)
     static let positive = Color(red: 0.20, green: 0.63, blue: 0.39)
     static let warning = Color(red: 0.88, green: 0.55, blue: 0.12)
@@ -62,16 +79,16 @@ enum AppSpacing {
     static let xxl: CGFloat = 24
     static let xxxl: CGFloat = 32
 
-    static let pageHorizontal: CGFloat = 28
-    static let pageVertical: CGFloat = 26
+    static let pageHorizontal: CGFloat = 30
+    static let pageVertical: CGFloat = 28
     static let section: CGFloat = 20
     static let rowHorizontal: CGFloat = 16
     static let rowVertical: CGFloat = 12
 }
 
 enum AppRadius {
-    static let control: CGFloat = 8
-    static let row: CGFloat = 10
+    static let control: CGFloat = 10
+    static let row: CGFloat = 12
     static let card: CGFloat = 14
     static let largeCard: CGFloat = 16
     static let panel: CGFloat = 20
@@ -79,8 +96,8 @@ enum AppRadius {
 }
 
 enum AppTypography {
-    static let pageTitle = Font.system(size: 26, weight: .bold)
-    static let pageSubtitle = Font.system(size: 14, weight: .medium)
+    static let pageTitle = Font.system(size: 28, weight: .bold)
+    static let pageSubtitle = Font.system(size: 14, weight: .regular)
     static let sectionTitle = Font.system(size: 16, weight: .semibold)
     static let rowTitle = Font.system(size: 14, weight: .semibold)
     static let body = Font.system(size: 14, weight: .regular)
@@ -90,11 +107,11 @@ enum AppTypography {
     static let badge = Font.system(size: 10, weight: .bold)
 
     static func pageTitle(_ preference: AppFontPreference) -> Font {
-        preference.font(size: 26, weight: .bold)
+        preference.font(size: 28, weight: .bold)
     }
 
     static func pageSubtitle(_ preference: AppFontPreference) -> Font {
-        preference.font(size: 14, weight: .medium)
+        preference.font(size: 14, weight: .regular)
     }
 
     static func sectionTitle(_ preference: AppFontPreference) -> Font {
@@ -136,8 +153,8 @@ struct AppShadowStyle {
     let y: CGFloat
 
     static let card = AppShadowStyle(
-        color: .black.opacity(0.035),
-        radius: 10,
+        color: .black.opacity(0.032),
+        radius: 12,
         x: 0,
         y: 4
     )
@@ -152,9 +169,9 @@ struct AppShadowStyle {
 enum AppMotion {
     static let instant = Animation.easeOut(duration: 0.10)
     static let quick = Animation.easeOut(duration: 0.14)
-    static let standard = Animation.easeInOut(duration: 0.18)
-    static let page = Animation.smooth(duration: 0.24, extraBounce: 0)
-    static let gentleSpring = Animation.spring(response: 0.30, dampingFraction: 0.86)
+    static let standard = Animation.easeOut(duration: 0.18)
+    static let page = Animation.easeOut(duration: 0.20)
+    static let gentleSpring = Animation.spring(response: 0.28, dampingFraction: 0.90)
 
     static func resolved(_ animation: Animation, reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : animation
@@ -162,7 +179,7 @@ enum AppMotion {
 }
 
 enum AppIconStyle {
-    static let sidebarSize: CGFloat = 16
+    static let sidebarSize: CGFloat = 17
     static let rowSize: CGFloat = 15
     static let actionSize: CGFloat = 14
     static let emptyStateSize: CGFloat = 26
@@ -172,9 +189,9 @@ enum AppIconStyle {
 
 enum AppControlStyle {
     static let compactHeight: CGFloat = 30
-    static let regularHeight: CGFloat = 36
-    static let largeHeight: CGFloat = 42
-    static let iconButtonSize: CGFloat = 32
+    static let regularHeight: CGFloat = 38
+    static let largeHeight: CGFloat = 40
+    static let iconButtonSize: CGFloat = 34
     static let disabledOpacity = 0.48
     static let pressedOpacity = 0.82
     static let pressedScale: CGFloat = 0.985

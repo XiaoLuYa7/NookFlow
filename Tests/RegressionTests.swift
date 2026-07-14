@@ -1,5 +1,280 @@
+import AppKit
 import XCTest
 @testable import NookFlowCore
+
+final class NotificationRuntimePolicyTests: XCTestCase {
+    func testAllNotificationsDisabledDoNotNeedRuntimeResources() {
+        XCTAssertEqual(
+            NotificationRuntimePolicy.requirements(for: NotificationSettingsSnapshot()),
+            .inactive
+        )
+    }
+
+    func testLocalDailyCareOnlyNeedsPeriodicChecks() {
+        let settings = NotificationSettingsSnapshot(
+            dailyCare: DailyCareNotificationSnapshot(
+                isEnabled: true,
+                waterReminderEnabled: true,
+                sitReminderEnabled: false,
+                sleepReminderEnabled: false
+            )
+        )
+
+        XCTAssertEqual(
+            NotificationRuntimePolicy.requirements(for: settings),
+            NotificationRuntimeRequirements(
+                needsPeriodicChecks: true,
+                needsNetworkMonitor: false,
+                needsWeatherSubscription: false
+            )
+        )
+    }
+
+    func testWeatherNotificationNeedsPeriodicChecksAndWeatherSubscription() {
+        let settings = NotificationSettingsSnapshot(
+            weather: WeatherNotificationSnapshot(isEnabled: true)
+        )
+
+        XCTAssertEqual(
+            NotificationRuntimePolicy.requirements(for: settings),
+            NotificationRuntimeRequirements(
+                needsPeriodicChecks: true,
+                needsNetworkMonitor: false,
+                needsWeatherSubscription: true
+            )
+        )
+    }
+
+    func testNetworkStatusOnlyNeedsNetworkMonitor() {
+        let settings = NotificationSettingsSnapshot(
+            device: DeviceNotificationSnapshot(
+                isEnabled: true,
+                networkStatusAlertEnabled: true
+            )
+        )
+
+        XCTAssertEqual(
+            NotificationRuntimePolicy.requirements(for: settings),
+            NotificationRuntimeRequirements(
+                needsPeriodicChecks: false,
+                needsNetworkMonitor: true,
+                needsWeatherSubscription: false
+            )
+        )
+    }
+
+    func testDeviceSamplingNotificationNeedsPeriodicChecks() {
+        let settings = NotificationSettingsSnapshot(
+            device: DeviceNotificationSnapshot(
+                isEnabled: true,
+                lowBatteryEnabled: true,
+                performanceAlertEnabled: true
+            )
+        )
+
+        XCTAssertEqual(
+            NotificationRuntimePolicy.requirements(for: settings),
+            NotificationRuntimeRequirements(
+                needsPeriodicChecks: true,
+                needsNetworkMonitor: false,
+                needsWeatherSubscription: false
+            )
+        )
+    }
+
+    func testMultipleNotificationsCombineRuntimeRequirements() {
+        let settings = NotificationSettingsSnapshot(
+            weather: WeatherNotificationSnapshot(isEnabled: true),
+            device: DeviceNotificationSnapshot(
+                isEnabled: true,
+                storageAlertEnabled: true,
+                networkStatusAlertEnabled: true
+            ),
+            dailyCare: DailyCareNotificationSnapshot(
+                isEnabled: true,
+                sleepReminderEnabled: true
+            )
+        )
+
+        XCTAssertEqual(
+            NotificationRuntimePolicy.requirements(for: settings),
+            NotificationRuntimeRequirements(
+                needsPeriodicChecks: true,
+                needsNetworkMonitor: true,
+                needsWeatherSubscription: true
+            )
+        )
+    }
+
+    func testRequirementsCanMoveFromAllOnToAllOff() {
+        let active = NotificationSettingsSnapshot(
+            weather: WeatherNotificationSnapshot(isEnabled: true),
+            device: DeviceNotificationSnapshot(
+                isEnabled: true,
+                lowBatteryEnabled: true,
+                networkStatusAlertEnabled: true
+            ),
+            dailyCare: DailyCareNotificationSnapshot(
+                isEnabled: true,
+                waterReminderEnabled: true
+            )
+        )
+
+        XCTAssertNotEqual(NotificationRuntimePolicy.requirements(for: active), .inactive)
+        XCTAssertEqual(
+            NotificationRuntimePolicy.requirements(for: NotificationSettingsSnapshot()),
+            .inactive
+        )
+    }
+
+    func testRequirementsCanMoveFromAllOffToPartialOn() {
+        let inactive = NotificationRuntimePolicy.requirements(for: NotificationSettingsSnapshot())
+        let partial = NotificationRuntimePolicy.requirements(for: NotificationSettingsSnapshot(
+            device: DeviceNotificationSnapshot(
+                isEnabled: true,
+                networkStatusAlertEnabled: true
+            )
+        ))
+
+        XCTAssertEqual(inactive, .inactive)
+        XCTAssertEqual(
+            partial,
+            NotificationRuntimeRequirements(
+                needsPeriodicChecks: false,
+                needsNetworkMonitor: true,
+                needsWeatherSubscription: false
+            )
+        )
+    }
+}
+
+final class TimelineRefreshPolicyTests: XCTestCase {
+    func testHiddenLyricDoesNotUseTimeline() {
+        XCTAssertFalse(TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: false,
+                isPlaying: true,
+                hasContent: true,
+                needsScrolling: true,
+                isTransitioning: false
+            )
+        ))
+    }
+
+    func testPausedLyricDoesNotUseTimeline() {
+        XCTAssertFalse(TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: true,
+                isPlaying: false,
+                hasContent: true,
+                needsScrolling: true,
+                isTransitioning: false
+            )
+        ))
+    }
+
+    func testEmptyLyricDoesNotUseTimeline() {
+        XCTAssertFalse(TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: true,
+                isPlaying: true,
+                hasContent: false,
+                needsScrolling: true,
+                isTransitioning: false
+            )
+        ))
+    }
+
+    func testShortLyricDoesNotUseTimeline() {
+        XCTAssertFalse(TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: true,
+                isPlaying: true,
+                hasContent: true,
+                needsScrolling: false,
+                isTransitioning: false
+            )
+        ))
+    }
+
+    func testShortLyricUsesTimelineWhileProgressScanIsActive() {
+        XCTAssertTrue(TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: true,
+                isPlaying: true,
+                hasContent: true,
+                needsScrolling: false,
+                needsProgressAnimation: true,
+                isTransitioning: false
+            )
+        ))
+    }
+
+    func testPlayingOverflowingLyricUsesTimeline() {
+        XCTAssertTrue(TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: true,
+                isPlaying: true,
+                hasContent: true,
+                needsScrolling: true,
+                isTransitioning: false
+            )
+        ))
+    }
+
+    func testVisibleTransitioningLyricUsesTimeline() {
+        XCTAssertTrue(TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: true,
+                isPlaying: false,
+                hasContent: true,
+                needsScrolling: false,
+                isTransitioning: true
+            )
+        ))
+    }
+
+    func testStaticWeatherDoesNotUseTimeline() {
+        XCTAssertFalse(TimelineRefreshPolicy.shouldUseContinuousWeatherTimeline(
+            kind: .staticIcon,
+            reduceMotion: false
+        ))
+    }
+
+    func testReduceMotionDisablesWeatherTimeline() {
+        XCTAssertFalse(TimelineRefreshPolicy.shouldUseContinuousWeatherTimeline(
+            kind: .animatedIcon,
+            reduceMotion: true
+        ))
+    }
+}
+
+final class TodoCardSettingsTests: XCTestCase {
+    func testDefaultsRemainStable() {
+        let defaults = TodoCardSettings.defaults
+
+        XCTAssertTrue(defaults.showDateSelector)
+        XCTAssertTrue(defaults.showTime)
+        XCTAssertTrue(defaults.showCategory)
+        XCTAssertFalse(defaults.showCompleted)
+        XCTAssertEqual(defaults.maxVisibleItems, 2)
+        XCTAssertEqual(defaults.defaultRange, .selectedDate)
+        XCTAssertEqual(defaults.sortMode, .timeAsc)
+        XCTAssertEqual(defaults.highlightColor, .blue)
+        XCTAssertFalse(defaults.useCompactMode)
+        XCTAssertTrue(defaults.showEdgeGlow)
+        XCTAssertTrue(defaults.showReminderBadge)
+        XCTAssertEqual(defaults.dueSoonMinutes, 15)
+    }
+
+    func testStorageKeysRemainStableAndUnique() {
+        XCTAssertEqual(Set(TodoCardStorageKeys.all).count, TodoCardStorageKeys.all.count)
+        XCTAssertEqual(TodoCardStorageKeys.maxVisibleItems, "todo.card.maxVisibleItems")
+        XCTAssertEqual(TodoCardStorageKeys.sortMode, "todo.card.sortMode")
+        XCTAssertEqual(TodoCardStorageKeys.showCompleted, "todo.card.showCompleted")
+        XCTAssertEqual(TodoCardStorageKeys.all.count, 12)
+    }
+}
 
 final class CompactMusicPresentationTests: XCTestCase {
     private let track = CompactMusicTrackSnapshot(
@@ -310,6 +585,35 @@ final class TodoViewModelTests: XCTestCase {
         XCTAssertTrue(calendar.isDate(model.selectedDate, inSameDayAs: today))
     }
 
+    func testReminderSyncPreservesStableTaskIdentity() {
+        let calendar = testCalendar
+        let today = date(2026, 6, 23, calendar: calendar)
+        let existingID = UUID()
+        let model = TodoViewModel(
+            seedDate: today,
+            calendar: calendar,
+            tasks: [
+                TodoTask(
+                    id: existingID,
+                    reminderIdentifier: "reminder-1",
+                    title: "Before sync",
+                    date: today
+                )
+            ]
+        )
+
+        model.replaceTasks([
+            TodoTask(
+                reminderIdentifier: "reminder-1",
+                title: "After sync",
+                date: today
+            )
+        ])
+
+        XCTAssertEqual(model.tasks.first?.id, existingID)
+        XCTAssertEqual(model.tasks.first?.title, "After sync")
+    }
+
     private var testCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -363,6 +667,33 @@ final class LyricsProviderRequestTests: XCTestCase {
         XCTAssertEqual(provider.lyrics.first?.words, "爱与梦 lyric")
     }
 
+    func testPausedPlaybackRestoresLyricAtCurrentElapsedPosition() {
+        let cache = MemoryLyricsCache()
+        cache.set(
+            key: "paused-id",
+            title: "Paused Song",
+            artist: "Artist",
+            lyrics: [
+                LyricLine(startTimeMS: 0, words: "Opening"),
+                LyricLine(startTimeMS: 60_000, words: "Current line"),
+                LyricLine(startTimeMS: 90_000, words: "Later line")
+            ]
+        )
+        let provider = LyricsProvider(networkService: DelayedLyricsNetwork(), cache: cache)
+        var paused = snapshot(title: "Paused Song")
+        paused.state = .paused
+        paused.elapsed = 65
+
+        provider.update(for: paused, trackID: "paused-id")
+
+        XCTAssertEqual(provider.currentLineIndex, 1)
+
+        paused.elapsed = 95
+        provider.update(for: paused, trackID: "paused-id")
+
+        XCTAssertEqual(provider.currentLineIndex, 2)
+    }
+
     private func snapshot(title: String) -> PlaybackSnapshot {
         PlaybackSnapshot(
             appName: "Music",
@@ -390,6 +721,376 @@ final class DateFormattingTests: XCTestCase {
         let date = components.date!
 
         XCTAssertEqual(CalendarSnapshot.formattedDate(date), "6 月 23 日")
+    }
+}
+
+final class SettingsLayoutContractTests: XCTestCase {
+    func testHomeCustomizationUsesFocusedEditingMode() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsRootView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("showsHomeCustomization ? \"完成自定义\" : \"自定义首页\""))
+        XCTAssertTrue(source.contains("showsHomeCustomization ? \"checkmark\" : \"slider.horizontal.3\""))
+        XCTAssertTrue(source.contains("role: showsHomeCustomization ? .primary : .secondary"))
+        XCTAssertTrue(source.contains("if showsHomeCustomization {\n                previewArea"))
+        XCTAssertTrue(source.contains("} else {\n                homeOverviewSection\n                homeOperationsSection"))
+    }
+
+    func testHomeDoesNotShowRecentActivityPlaceholder() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsRootView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(source.contains("homeRecentActivitySection"))
+        XCTAssertFalse(source.contains("最近活动"))
+        XCTAssertFalse(source.contains("暂无可显示的活动记录"))
+    }
+
+    func testNewTodoSheetUsesCompactScheduleLayout() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/TodoView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".frame(width: 520, height: 650)"))
+        XCTAssertTrue(source.contains("HStack(alignment: .top, spacing: 10)"))
+        XCTAssertTrue(source.contains("compactSchedulePanel("))
+        XCTAssertTrue(source.contains("Text(\"快捷时间\")"))
+    }
+
+    func testSidebarLabelsDisappearBeforeWidthCollapses() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsAppShell.swift"),
+            encoding: .utf8
+        )
+
+        let toggleStart = try XCTUnwrap(source.range(of: "private func toggleSidebar()"))
+        let toggleSource = source[toggleStart.lowerBound...]
+        let hideLabels = try XCTUnwrap(toggleSource.range(of: "areLabelsVisible = false"))
+        let collapseWidth = try XCTUnwrap(toggleSource.range(of: "isCollapsed = true"))
+
+        XCTAssertLessThan(hideLabels.lowerBound, collapseWidth.lowerBound)
+        XCTAssertTrue(toggleSource.contains("Task.sleep(for: .milliseconds(140))"))
+        XCTAssertTrue(toggleSource.contains("collapseAnimationTask?.cancel()"))
+        XCTAssertTrue(source.contains("if showsTitle"))
+    }
+
+    func testCollapsedSidebarContentIsCentered() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsAppShell.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)"))
+        XCTAssertTrue(source.contains(".padding(.horizontal, isCollapsed ? 0 : AppSpacing.xl)"))
+        XCTAssertTrue(source.contains("if !isCollapsed {\n                    Spacer(minLength: 0)"))
+    }
+
+    func testSidebarDoesNotRenderGroupLabels() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsAppShell.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(source.contains("Text(group.title)"))
+        XCTAssertFalse(source.contains("SettingsNavigationGroup(title:"))
+        XCTAssertTrue(source.contains("SettingsNavigationGroup(id:"))
+        XCTAssertTrue(source.contains("ForEach(navigationGroups)"))
+    }
+}
+
+final class AppBrandIconPresentationContractTests: XCTestCase {
+    func testSettingsBrandIconsCropTheOpaqueSourceCanvas() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let designSystem = try String(
+            contentsOf: root.appendingPathComponent("Views/AppDesignSystem.swift"),
+            encoding: .utf8
+        )
+        let about = try String(
+            contentsOf: root.appendingPathComponent("Views/AboutView.swift"),
+            encoding: .utf8
+        )
+        let sidebar = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsAppShell.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(designSystem.contains("struct AppBrandIconView: View"))
+        XCTAssertFalse(designSystem.contains("AppBrandAsset.displayScale"))
+        let componentStart = try XCTUnwrap(designSystem.range(of: "struct AppBrandIconView: View"))
+        let componentEnd = try XCTUnwrap(
+            designSystem.range(of: "enum AppColor", range: componentStart.upperBound..<designSystem.endIndex)
+        )
+        let componentSource = designSystem[componentStart.lowerBound..<componentEnd.lowerBound]
+        XCTAssertFalse(componentSource.contains(".scaleEffect("))
+        XCTAssertTrue(designSystem.contains(".clipShape("))
+        XCTAssertTrue(designSystem.contains("RoundedRectangle("))
+        XCTAssertTrue(about.contains("AppBrandIconView(size: 82)"))
+        XCTAssertTrue(sidebar.contains("AppBrandIconView(size: 38)"))
+        XCTAssertFalse(about.contains("Image(nsImage: AppBrandAsset.icon)"))
+        XCTAssertFalse(sidebar.contains("Image(nsImage: AppBrandAsset.icon)"))
+    }
+}
+
+final class AppIconAssetContractTests: XCTestCase {
+    func testAppIconAssetsUseCroppedMasterArtworkAtEveryRequiredSize() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let iconDirectory = root.appendingPathComponent("Assets.xcassets/AppIcon.appiconset")
+        let expectedSizes: [String: Int] = [
+            "AppIcon-16x16@1x.png": 16,
+            "AppIcon-16x16@2x.png": 32,
+            "AppIcon-32x32@1x.png": 32,
+            "AppIcon-32x32@2x.png": 64,
+            "AppIcon-128x128@1x.png": 128,
+            "AppIcon-128x128@2x.png": 256,
+            "AppIcon-256x256@1x.png": 256,
+            "AppIcon-256x256@2x.png": 512,
+            "AppIcon-512x512@1x.png": 512,
+            "AppIcon-512x512@2x.png": 1024,
+        ]
+
+        for (filename, expectedSize) in expectedSizes {
+            let image = try XCTUnwrap(NSImage(contentsOf: iconDirectory.appendingPathComponent(filename)))
+            let representation = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+            XCTAssertEqual(representation.pixelsWide, expectedSize, filename)
+            XCTAssertEqual(representation.pixelsHigh, expectedSize, filename)
+        }
+
+        let master = try XCTUnwrap(
+            NSImage(contentsOf: iconDirectory.appendingPathComponent("AppIcon-512x512@2x.png"))
+        )
+        let masterRepresentation = try XCTUnwrap(
+            NSBitmapImageRep(data: try XCTUnwrap(master.tiffRepresentation))
+        )
+        let leftEdgeColor = try XCTUnwrap(
+            masterRepresentation.colorAt(x: 32, y: masterRepresentation.pixelsHigh / 2)?
+                .usingColorSpace(.deviceRGB)
+        )
+
+        XCTAssertGreaterThan(
+            leftEdgeColor.blueComponent - leftEdgeColor.redComponent,
+            0.06,
+            "AppIcon 仍包含外圈灰色画布"
+        )
+    }
+}
+
+final class AboutLegalContentContractTests: XCTestCase {
+    func testPrivacyAndLicenseUseDetailedInAppDocuments() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/AboutView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".sheet(item: $model.presentedLegalInfo)"))
+        XCTAssertTrue(source.contains("NookFlow 不会出售你的个人信息"))
+        XCTAssertTrue(source.contains("Open-Meteo"))
+        XCTAssertTrue(source.contains("CC BY 4.0"))
+        XCTAssertTrue(source.contains("当前未发布开源许可证"))
+        XCTAssertTrue(source.contains("lujunfeng.lucky@foxmail.com"))
+    }
+}
+
+final class CompactPausedLyricContractTests: XCTestCase {
+    func testCompactLyricsResolvePausedPositionDuringStartup() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/IslandRootView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)"))
+        XCTAssertTrue(source.contains("resolvedCompactLyricIndex(requestedIndex: index, lyrics: lyrics)"))
+        XCTAssertTrue(source.contains("currentSnapshot.elapsed + 0.5"))
+        XCTAssertTrue(source.contains("lyrics.lastIndex { line in"))
+    }
+}
+
+final class SettingsActionMenuContractTests: XCTestCase {
+    func testExpandedSettingsButtonUsesNativeMacOSMenu() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("private var settingsButton: some View {\n        Menu {"))
+        XCTAssertTrue(source.contains("Label(\"打开设置\", systemImage: \"gearshape\")"))
+        XCTAssertTrue(source.contains("Label(\"问题反馈\", systemImage: \"bubble.left.and.exclamationmark\")"))
+        XCTAssertTrue(source.contains("Label(\"退出 NookFlow\", systemImage: \"power\")"))
+        XCTAssertTrue(source.contains(".menuStyle(.borderlessButton)"))
+        XCTAssertTrue(source.contains("Color.clear\n                .frame(width: 28, height: 28)"))
+        XCTAssertTrue(source.contains(".overlay {\n            SettingsMenuLabel()\n                .allowsHitTesting(false)"))
+        XCTAssertFalse(source.contains("isSettingsMenuPresented"))
+        XCTAssertFalse(source.contains("settingsActionMenuBackground"))
+    }
+}
+
+final class FeedbackEmailContractTests: XCTestCase {
+    func testFeedbackMailUsesConfiguredFoxmailAddress() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsRootView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("private let supportEmail = \"lujunfeng.lucky@foxmail.com\""))
+        XCTAssertFalse(source.contains("ardenpro@icloud.com"))
+    }
+}
+
+final class DockPresentationContractTests: XCTestCase {
+    func testAppRemainsVisibleInDockForEntireRuntime() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appDelegate = try String(
+            contentsOf: root.appendingPathComponent("App/AppDelegate.swift"),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Models/IslandSettings.swift"),
+            encoding: .utf8
+        )
+        let settingsWindow = try String(
+            contentsOf: root.appendingPathComponent("Panel/SettingsWindowController.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(appDelegate.contains("NSApp.setActivationPolicy(.regular)"))
+        XCTAssertFalse(settings.contains("@Published var hideDock"))
+        XCTAssertFalse(settings.contains(".accessory"))
+        XCTAssertTrue(settings.contains("defaults.removeObject(forKey: \"settings.hideDock\")"))
+        XCTAssertFalse(settingsWindow.contains("previousActivationPolicy"))
+        XCTAssertFalse(settingsWindow.contains("restoreActivationPolicyIfNeeded"))
+    }
+}
+
+final class SettingsWindowActivationContractTests: XCTestCase {
+    func testDockReopenKeepsSettingsWindowAtFrontWithoutLevelDemotion() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Panel/SettingsWindowController.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("window.level = .normal\n        window.orderFrontRegardless()"))
+        XCTAssertTrue(source.contains("window.makeKeyAndOrderFront(nil)"))
+        XCTAssertFalse(source.contains("window.level = .floating"))
+        XCTAssertFalse(source.contains("420_000_000"))
+    }
+}
+
+final class ModuleWidthContractTests: XCTestCase {
+    func testUtilityModulesUseCompactWidthWeights() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let tokens = try String(
+            contentsOf: root.appendingPathComponent("Views/IslandDesignTokens.swift"),
+            encoding: .utf8
+        )
+        let layout = try String(
+            contentsOf: root.appendingPathComponent("Views/IslandShellLayout.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(tokens.contains("quickAppsModuleWidthWeight: CGFloat = 0.86"))
+        XCTAssertTrue(tokens.contains("shortcutsModuleWidthWeight: CGFloat = 0.82"))
+        XCTAssertTrue(tokens.contains("deviceInfoModuleWidthWeight: CGFloat = 0.90"))
+        XCTAssertTrue(layout.contains("case .quickApps:\n            return IslandDesignTokens.quickAppsModuleWidthWeight"))
+        XCTAssertTrue(layout.contains("case .shortcuts:\n            return IslandDesignTokens.shortcutsModuleWidthWeight"))
+        XCTAssertTrue(layout.contains("case .deviceInfo:\n            return IslandDesignTokens.deviceInfoModuleWidthWeight"))
+    }
+}
+
+final class ShortcutsCardPresentationContractTests: XCTestCase {
+    func testShortcutCardUsesCompactBlueCommandRowsAndSemanticSymbols() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/ShortcutsCardView.swift"),
+            encoding: .utf8
+        )
+        let expandedView = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("Text(\"\\(configuredShortcutCount)/\\(ShortcutsStore.slotCount)\")"))
+        XCTAssertTrue(source.contains("shortcutSymbol(for: item.name)"))
+        XCTAssertTrue(source.contains("([\"音乐\", \"识别\"], \"waveform\")"))
+        XCTAssertTrue(source.contains("StrokeStyle(lineWidth: 1, dash: [4, 3])"))
+        XCTAssertTrue(source.contains("添加快捷指令"))
+        XCTAssertFalse(source.contains("shortcutTint("))
+        XCTAssertFalse(source.contains("let palette: [Color]"))
+        XCTAssertTrue(expandedView.contains("module == .weather || module == .todo || module == .shortcuts"))
+    }
+}
+
+final class WeatherPresentationContractTests: XCTestCase {
+    func testExpandedIslandReusesRootWeatherProvider() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let rootView = try String(
+            contentsOf: root.appendingPathComponent("Views/IslandRootView.swift"),
+            encoding: .utf8
+        )
+        let expandedView = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
+        let provider = try String(
+            contentsOf: root.appendingPathComponent("Models/WeatherProvider.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(rootView.contains("weatherProvider: weatherProvider"))
+        XCTAssertTrue(expandedView.contains("@ObservedObject var weatherProvider: WeatherProvider"))
+        XCTAssertFalse(expandedView.contains("@StateObject private var weatherProvider = WeatherProvider()"))
+        XCTAssertTrue(expandedView.contains("if weather.isLoading"))
+        XCTAssertTrue(provider.contains("var isLoading: Bool"))
+        XCTAssertTrue(provider.contains("condition == \"定位中\" || condition == \"加载中\""))
+        XCTAssertTrue(provider.contains("condition: \"加载中\""))
+        XCTAssertTrue(provider.contains("symbolName: \"\""))
     }
 }
 

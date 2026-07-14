@@ -109,6 +109,7 @@ final class DesktopLyricsWindowController: NSObject {
         NotificationCenter.default.removeObserver(self)
         cancellables.removeAll()
         stopMouseTracking()
+        timelineController.setWindowVisibility(false)
         timelineController.stop()
         panel?.contentView = nil
         panel?.close()
@@ -171,10 +172,12 @@ final class DesktopLyricsWindowController: NSObject {
 
         if snapshot.isLive, settings.showDesktopLyrics {
             panel.orderFrontRegardless()
+            timelineController.setWindowVisibility(panel.isVisible && panel.alphaValue > 0)
         } else {
             dragStartOrigin = nil
             timelineController.isHoverHidden = false
             panel.orderOut(nil)
+            timelineController.setWindowVisibility(false)
         }
     }
 
@@ -423,6 +426,7 @@ private final class LyricsTimelineController: ObservableObject {
     @Published private(set) var playbackAnchorDate = Date()
     @Published private(set) var playbackAnchorElapsed: TimeInterval = 0
     @Published private(set) var playbackIsPlaying = false
+    @Published private(set) var windowIsVisible = false
     @Published var windowPosition: CGPoint = .zero
     @Published var isInteractionEnabled = false
     @Published var isHoverHidden = false
@@ -481,6 +485,12 @@ private final class LyricsTimelineController: ObservableObject {
 
     func stop() {
         cancellables.removeAll()
+        windowIsVisible = false
+    }
+
+    func setWindowVisibility(_ isVisible: Bool) {
+        guard windowIsVisible != isVisible else { return }
+        windowIsVisible = isVisible
     }
 
     func documentCenterY(for index: Int) -> CGFloat {
@@ -722,7 +732,8 @@ private struct LyricsStackView: View {
                         palette: DesktopLyricsPalette(usesDarkText: appearance.usesDarkText),
                         playbackAnchorDate: timeline.playbackAnchorDate,
                         playbackAnchorElapsed: timeline.playbackAnchorElapsed,
-                        isPlaying: timeline.playbackIsPlaying
+                        isPlaying: timeline.playbackIsPlaying,
+                        isVisible: timeline.windowIsVisible && !timeline.isHoverHidden
                     )
                     .frame(
                         width: max(0, proxy.size.width - horizontalPadding * 2),
@@ -866,17 +877,18 @@ private struct LyricLineView: View {
     let playbackAnchorDate: Date
     let playbackAnchorElapsed: TimeInterval
     let isPlaying: Bool
+    let isVisible: Bool
 
     var body: some View {
         let effectiveShadowOpacity = palette.shadowOpacity * style.shadowStrength
 
         Group {
-            if style.isCurrent {
+            if needsContinuousTimeline {
                 TimelineView(.animation) { timeline in
                     lyricText(progress: playbackProgress(at: timeline.date))
                 }
             } else {
-                lyricText(progress: 0)
+                lyricText(progress: style.isCurrent ? playbackProgress(at: Date()) : 0)
             }
         }
         .padding(.horizontal, 6)
@@ -903,6 +915,18 @@ private struct LyricLineView: View {
             radius: palette.shadowRadius,
             x: 0,
             y: 1
+        )
+    }
+
+    private var needsContinuousTimeline: Bool {
+        TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: isVisible,
+                isPlaying: isPlaying,
+                hasContent: !entry.text.isEmpty,
+                needsScrolling: style.isCurrent && playbackProgress(at: Date()) < 1,
+                isTransitioning: false
+            )
         )
     }
 

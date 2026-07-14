@@ -28,6 +28,10 @@ struct WeatherSnapshot {
         guard let temperature else { return "--°" }
         return "\(Int(temperature.rounded()))°"
     }
+
+    var isLoading: Bool {
+        !isLive && (condition == "定位中" || condition == "加载中")
+    }
 }
 
 struct WeatherDailySummary: Identifiable {
@@ -144,7 +148,7 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
                     condition: "未授权",
                     locationName: "当前位置",
                     symbolName: "location.slash.fill",
-                    detail: "请允许 L-Nook 访问定位",
+                    detail: "请允许 NookFlow 访问定位",
                     isLive: false
                 )
             )
@@ -173,7 +177,7 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
                     humidity: nil,
                     condition: "加载中",
                     locationName: "当前位置",
-                    symbolName: "cloud.fill",
+                    symbolName: "",
                     detail: "正在更新天气",
                     isLive: false
                 )
@@ -181,9 +185,10 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
         }
 
         weatherTask?.cancel()
-        weatherTask = Task { [location] in
+        weatherTask = Task { [weak self, location] in
+            guard let self else { return }
             do {
-                async let placeName = Self.placeName(for: location)
+                async let placeName = self.placeName(for: location)
                 async let weather = Self.weather(for: location)
                 let resolvedPlaceName = await placeName
                 let weatherSnapshot = try await weather
@@ -293,9 +298,9 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
         )
     }
 
-    private static func placeName(for location: CLLocation) async -> String {
+    private func placeName(for location: CLLocation) async -> String {
         await withCheckedContinuation { continuation in
-            CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
+            geocoder.reverseGeocodeLocation(location) { placemarks, _ in
                 let placemark = placemarks?.first
                 let name = placemark?.locality
                     ?? placemark?.subLocality

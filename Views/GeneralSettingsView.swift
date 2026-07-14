@@ -42,9 +42,9 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            SettingsPageScaffold(contentMaxWidth: 980) {
+            SettingsPageScaffold(contentMaxWidth: 1120) {
                 PageHeaderView(
-                    title: "通用设置",
+                    title: "通用",
                     subtitle: "统一管理应用入口、灵动岛开关、外观与交互行为。",
                     icon: "gearshape.fill"
                 ) {

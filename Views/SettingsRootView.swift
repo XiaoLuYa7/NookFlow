@@ -485,9 +485,11 @@ final class SettingsEditorModel: ObservableObject {
 }
 
 struct SettingsRootView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var settings: IslandSettings
     @StateObject private var model: SettingsEditorModel
     @State private var isSidebarCollapsed = false
+    @State private var showsHomeCustomization = false
     @State private var previewImageCardImage: NSImage?
     @State private var previewImageCardImagePath = ""
     @State private var previewImageCardLoadTask: Task<Void, Never>?
@@ -553,58 +555,225 @@ struct SettingsRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        ZStack(alignment: .topLeading) {
-            if model.selectedSettingsPage == .home {
-                homePage
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else if model.selectedSettingsPage == .todo {
-                TodoView(settings: settings)
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else if model.selectedSettingsPage == .music {
-                musicPage
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else if model.selectedSettingsPage == .quickApps {
-                QuickAppsSettingsView()
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else if model.selectedSettingsPage == .shortcuts {
-                ShortcutsSettingsView()
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else if model.selectedSettingsPage == .notifications {
-                NotificationSettingsView()
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else if model.selectedSettingsPage == .general {
-                GeneralSettingsView(settings: settings)
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else if model.selectedSettingsPage == .about {
-                AboutView {
-                    model.showFeedbackSheet = true
-                }
-                .transition(.opacity.combined(with: .move(edge: .trailing)))
-            }
-        }
-        .animation(AppMotion.page, value: model.selectedSettingsPage)
+        selectedPageContent
+            .id(model.selectedSettingsPage)
+            .transition(.opacity)
+            .animation(
+                AppMotion.resolved(AppMotion.page, reduceMotion: reduceMotion),
+                value: model.selectedSettingsPage
+            )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(AppColor.pageBackground)
     }
 
-    private var homePage: some View {
-        SettingsPageScaffold {
-            PageHeaderView(
-                title: "灵动岛主页",
-                subtitle: "调整紧凑状态、左右信息和展开后的常用模块。",
-                icon: "capsule"
-            )
-        } content: {
-            previewArea
-            sideIconConfigurationCard
-            widgetsCard
+    @ViewBuilder
+    private var selectedPageContent: some View {
+        switch model.selectedSettingsPage {
+        case .home:
+            homePage
+        case .todo:
+            TodoView(settings: settings)
+        case .music:
+            musicPage
+        case .quickApps:
+            QuickAppsSettingsView()
+        case .shortcuts:
+            ShortcutsSettingsView()
+        case .notifications:
+            NotificationSettingsView()
+        case .general:
+            GeneralSettingsView(settings: settings)
+        case .about:
+            AboutView {
+                model.showFeedbackSheet = true
+            }
         }
+    }
+
+    private var homePage: some View {
+        SettingsPageScaffold(contentMaxWidth: 1120) {
+            PageHeaderView(
+                title: "首页",
+                subtitle: "你的效率工作空间，一切尽在掌控。",
+                icon: "house.fill"
+            ) {
+                Button {
+                    withAnimation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion)) {
+                        showsHomeCustomization.toggle()
+                    }
+                } label: {
+                    Label(
+                        showsHomeCustomization ? "完成自定义" : "自定义首页",
+                        systemImage: showsHomeCustomization ? "checkmark" : "slider.horizontal.3"
+                    )
+                }
+                .buttonStyle(
+                    AppButtonStyle(
+                        role: showsHomeCustomization ? .primary : .secondary,
+                        isSelected: showsHomeCustomization
+                    )
+                )
+            }
+        } content: {
+            if showsHomeCustomization {
+                previewArea
+                    .transition(.opacity.combined(with: .offset(y: -6)))
+                sideIconConfigurationCard
+                    .transition(.opacity)
+                widgetsCard
+                    .transition(.opacity)
+            } else {
+                homeOverviewSection
+                homeOperationsSection
+            }
+        }
+    }
+
+    private var homeOverviewSection: some View {
+        SettingsSectionCard(title: "今日概览") {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 150), spacing: 0)],
+                spacing: AppSpacing.md
+            ) {
+                DashboardMetricCell(
+                    icon: "capsule",
+                    title: "灵动岛",
+                    value: settings.isIslandEnabled ? "运行中" : "已关闭",
+                    detail: settings.isIslandEnabled ? "状态显示正常" : "可在快速控制中开启",
+                    tone: settings.isIslandEnabled ? .positive : .neutral
+                )
+                DashboardMetricCell(
+                    icon: "music.note",
+                    title: "播放来源",
+                    value: enabledMusicSourceTitle,
+                    detail: "微光乐境",
+                    tone: enabledMusicSourceTitle == "未启用" ? .neutral : .accent
+                )
+                DashboardMetricCell(
+                    icon: "checkmark.circle",
+                    title: "待办",
+                    value: settings.showTodoModule ? "显示中" : "未显示",
+                    detail: "系统提醒事项同步",
+                    tone: settings.showTodoModule ? .positive : .neutral
+                )
+                DashboardMetricCell(
+                    icon: "command",
+                    title: "快捷操作",
+                    value: "\(enabledQuickActionCount) 项",
+                    detail: "应用与快捷指令",
+                    tone: enabledQuickActionCount > 0 ? .accent : .neutral
+                )
+            }
+        }
+    }
+
+    private var homeOperationsSection: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: AppSpacing.lg) {
+                homeQuickControls
+                    .frame(maxWidth: .infinity, alignment: .top)
+                homeSystemPulse
+                    .frame(width: 310, alignment: .top)
+            }
+
+            VStack(spacing: AppSpacing.lg) {
+                homeQuickControls
+                homeSystemPulse
+            }
+        }
+    }
+
+    private var homeQuickControls: some View {
+        SettingsSectionCard(
+            title: "快速控制",
+            subtitle: "常用功能与设置入口"
+        ) {
+            AppSettingsToggleRow(
+                icon: "capsule",
+                title: "灵动岛",
+                subtitle: "在屏幕顶部显示状态与快捷操作",
+                isOn: $settings.isIslandEnabled
+            )
+            SettingsActionRow(
+                icon: "bell",
+                title: "通知中心",
+                subtitle: "管理通知类别与提醒策略",
+                actionTitle: "管理"
+            ) {
+                model.selectedSettingsPage = .notifications
+            }
+            SettingsActionRow(
+                icon: "checklist",
+                title: "待办同步",
+                subtitle: "管理任务、日期与提醒事项",
+                actionTitle: settings.showTodoModule ? "已启用" : "设置"
+            ) {
+                model.selectedSettingsPage = .todo
+            }
+            SettingsActionRow(
+                icon: "bolt",
+                title: "快捷指令",
+                subtitle: "管理灵动岛中的系统快捷指令",
+                actionTitle: settings.showShortcutsModule ? "已启用" : "设置",
+                showsDivider: false
+            ) {
+                model.selectedSettingsPage = .shortcuts
+            }
+        }
+    }
+
+    private var homeSystemPulse: some View {
+        SettingsSectionCard(
+            title: "系统脉搏",
+            subtitle: "当前配置状态"
+        ) {
+            DashboardPulseRow(
+                icon: "cloud.sun",
+                title: "天气模块",
+                value: settings.showWeatherModule ? "正常显示" : "已关闭",
+                isActive: settings.showWeatherModule
+            )
+            DashboardPulseRow(
+                icon: "rectangle.stack",
+                title: "主页模块",
+                value: "已启用 \(model.enabledWidgets.count) 项",
+                isActive: !model.enabledWidgets.isEmpty
+            )
+            DashboardPulseRow(
+                icon: "square.grid.2x2",
+                title: "快捷应用",
+                value: settings.showQuickAppsModule ? "已启用" : "已关闭",
+                isActive: settings.showQuickAppsModule
+            )
+            DashboardPulseRow(
+                icon: "bell.badge",
+                title: "通知服务",
+                value: "可用",
+                isActive: true,
+                showsDivider: false
+            )
+        }
+    }
+
+    private var enabledMusicSourceTitle: String {
+        switch (settings.allowAppleMusicAccess, settings.allowSpotifyAccess) {
+        case (true, true): "Apple Music + Spotify"
+        case (true, false): "Apple Music"
+        case (false, true): "Spotify"
+        case (false, false): "未启用"
+        }
+    }
+
+    private var enabledQuickActionCount: Int {
+        [settings.showQuickAppsModule, settings.showShortcutsModule]
+            .filter { $0 }
+            .count
     }
 
     private var musicPage: some View {
         SettingsPageScaffold {
             PageHeaderView(
-                title: "微光乐境",
+                title: "音乐",
                 subtitle: "管理播放信息、灵动岛歌词与桌面歌词的来源和显示方式。",
                 icon: "music.note"
             )
@@ -1133,53 +1302,6 @@ struct SettingsRootView: View {
         .background(color.opacity(0.82), in: Capsule())
     }
 
-    private var appearanceCard: some View {
-        SettingsCard(spacing: 12) {
-            SectionTitle(title: "外观主题", systemName: "paintpalette")
-            Picker("", selection: $model.appearanceMode) {
-                ForEach(SettingsAppearanceMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-        }
-    }
-
-    private var spacingCard: some View {
-        SettingsCard(spacing: 12) {
-            SectionTitle(title: "尺寸与间距", systemName: "arrow.up.left.and.arrow.down.right")
-            Slider(value: $model.spacingValue, in: 0...1)
-            HStack {
-                Text("紧凑")
-                Spacer()
-                Text("宽松")
-            }
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(SettingsColors.secondaryText)
-        }
-    }
-
-    private var hoverAnimationCard: some View {
-        SettingsCard(spacing: 12) {
-            HStack {
-                SectionTitle(title: "悬停动画", systemName: "sparkles")
-                Spacer()
-                Toggle("", isOn: $model.hoverAnimationEnabled)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-            }
-            Picker("", selection: $model.hoverAnimationStyle) {
-                ForEach(SettingsHoverAnimationStyle.allCases) { style in
-                    Text(style.title).tag(style)
-                }
-            }
-            .labelsHidden()
-            .disabled(!model.hoverAnimationEnabled)
-            .opacity(model.hoverAnimationEnabled ? 1 : 0.45)
-        }
-    }
-
     private var musicSupportedAppsSection: some View {
         SettingsSectionCard(
             title: "支持应用",
@@ -1285,73 +1407,6 @@ struct SettingsRootView: View {
         }
     }
 
-    private var statusConfigurationCard: some View {
-        SettingsCard(spacing: 16) {
-            HStack {
-                SectionTitle(title: "状态图标配置", systemName: nil)
-                Spacer()
-                if let notice = model.limitNotice {
-                    Text(notice)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.orange)
-                        .transition(.opacity)
-                }
-            }
-
-            LazyVGrid(
-                columns: [
-                    GridItem(.adaptive(minimum: 92, maximum: 132), spacing: 12, alignment: .top)
-                ],
-                spacing: 14
-            ) {
-                ForEach(SettingsStatusItem.allCases) { item in
-                    StatusOptionCell(
-                        item: item,
-                        isSelected: model.selectedStatusItems.contains(item),
-                        isDisabled: !model.selectedStatusItems.contains(item)
-                            && model.selectedStatusItems.count >= 8
-                    ) {
-                        withAnimation(.easeOut(duration: 0.16)) {
-                            model.toggleStatus(item)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var statusLayoutCard: some View {
-        SettingsCard(spacing: 14) {
-            HStack {
-                SectionTitle(title: "左右区域布局", systemName: "info.circle")
-                Spacer()
-                Button("重置") {
-                    withAnimation(.easeOut(duration: 0.16)) {
-                        model.resetStatusLayout()
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-                .font(.system(size: 13, weight: .semibold))
-            }
-
-            HStack(alignment: .top, spacing: 14) {
-                StatusColumnView(
-                    title: "左侧",
-                    items: $model.leftStatusItems,
-                    targetLeft: true,
-                    model: model
-                )
-                StatusColumnView(
-                    title: "右侧",
-                    items: $model.rightStatusItems,
-                    targetLeft: false,
-                    model: model
-                )
-            }
-        }
-    }
-
     private var widgetsCard: some View {
         SettingsCard(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
@@ -1411,10 +1466,102 @@ struct SettingsRootView: View {
 
 }
 
+private struct DashboardMetricCell: View {
+    let icon: String
+    let title: String
+    let value: String
+    let detail: String
+    let tone: SettingsStatusTone
+
+    var body: some View {
+        HStack(spacing: AppSpacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(tone.foreground)
+                .frame(width: 38, height: 38)
+                .background(tone.background, in: RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous))
+
+            VStack(alignment: .leading, spacing: AppSpacing.xxs) {
+                Text(title)
+                    .font(AppTypography.caption)
+                    .foregroundStyle(AppColor.textTertiary)
+                Text(value)
+                    .font(AppTypography.sectionTitle)
+                    .foregroundStyle(AppColor.textPrimary)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(AppTypography.caption)
+                    .foregroundStyle(AppColor.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, AppSpacing.md)
+        .frame(minHeight: 76)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(AppColor.divider)
+                .frame(width: 1, height: 42)
+        }
+    }
+}
+
+private struct DashboardPulseRow: View {
+    let icon: String
+    let title: String
+    let value: String
+    let isActive: Bool
+    var showsDivider = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: AppSpacing.md) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isActive ? AppColor.accent : AppColor.textTertiary)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        isActive ? AppColor.accentSoft : AppColor.controlFill,
+                        in: RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: AppSpacing.xxs) {
+                    Text(title)
+                        .font(AppTypography.rowTitle)
+                        .foregroundStyle(AppColor.textPrimary)
+                    Text(value)
+                        .font(AppTypography.supporting)
+                        .foregroundStyle(AppColor.textSecondary)
+                }
+
+                Spacer(minLength: 0)
+
+                Circle()
+                    .fill(isActive ? AppColor.positive : AppColor.textDisabled)
+                    .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, AppSpacing.rowHorizontal)
+            .frame(minHeight: 58)
+
+            if showsDivider {
+                Rectangle()
+                    .fill(AppColor.divider)
+                    .frame(height: 1)
+                    .padding(.leading, 56)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title)，\(value)")
+    }
+}
+
 private struct FeedbackMailSheet: View {
     let onClose: () -> Void
 
-    private let supportEmail = "ardenpro@icloud.com"
+    private let supportEmail = "lujunfeng.lucky@foxmail.com"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1504,9 +1651,9 @@ private struct FeedbackMailSheet: View {
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
         let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
-        let subject = "L-Nook 问题反馈"
+        let subject = "NookFlow 问题反馈"
         let body = """
-        您好，我想反馈 L-Nook 使用中的问题或建议：
+        您好，我想反馈 NookFlow 使用中的问题或建议：
 
         问题描述：
 
@@ -1518,7 +1665,7 @@ private struct FeedbackMailSheet: View {
         期望效果：
 
         设备与版本：
-        - L-Nook: \(appVersion) (\(build))
+        - NookFlow: \(appVersion) (\(build))
         - macOS: \(osVersion)
 
         谢谢！
@@ -1575,21 +1722,6 @@ private struct SectionTitle: View {
                 .font(AppTypography.sectionTitle)
                 .foregroundStyle(SettingsColors.primaryText)
         }
-    }
-}
-
-private struct PreviewStatus: View {
-    let item: SettingsStatusItem
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: item.icon)
-                .font(.system(size: 9, weight: .bold))
-            Text(item.sample)
-                .font(.system(size: 10, weight: .semibold))
-        }
-        .foregroundStyle(.white.opacity(0.86))
-        .lineLimit(1)
     }
 }
 
@@ -1873,167 +2005,6 @@ private struct ClockCapsuleDial: View {
     }
 }
 
-private struct SelectableRow<Leading: View>: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    @ViewBuilder let leading: Leading
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                leading
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 36)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.black.opacity(0.035))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(isSelected ? Color.accentColor.opacity(0.8) : Color.clear, lineWidth: 1)
-                    }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct StatusOptionCell: View {
-    let item: SettingsStatusItem
-    let isSelected: Bool
-    let isDisabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                HStack(spacing: 5) {
-                    Image(systemName: item.icon)
-                        .font(.system(size: 12, weight: .bold))
-                    Text(item.sample)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .frame(height: 34)
-                .background {
-                    Capsule()
-                        .fill(Color.black.opacity(isDisabled ? 0.46 : 0.86))
-                        .overlay {
-                            Capsule()
-                                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
-                        }
-                }
-
-                Text(item.title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(SettingsColors.secondaryText)
-            }
-            .opacity(isDisabled ? 0.42 : 1)
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-    }
-}
-
-private struct StatusColumnView: View {
-    let title: String
-    @Binding var items: [SettingsStatusItem]
-    let targetLeft: Bool
-    @ObservedObject var model: SettingsEditorModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text("最多 4 项")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(SettingsColors.secondaryText)
-            }
-
-            VStack(spacing: 6) {
-                ForEach(items) { item in
-                    StatusLayoutRow(item: item) {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            model.removeStatus(item)
-                        }
-                    }
-                }
-                .onMove { source, destination in
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        model.moveStatus(
-                            source,
-                            fromLeft: targetLeft,
-                            to: destination,
-                            targetLeft: targetLeft
-                        )
-                    }
-                }
-
-                if items.isEmpty {
-                    Text("拖入状态项")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(SettingsColors.secondaryText)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 34)
-                }
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.black.opacity(0.025))
-            }
-        }
-    }
-}
-
-private struct StatusLayoutRow: View {
-    let item: SettingsStatusItem
-    let onDelete: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(SettingsColors.secondaryText)
-            Image(systemName: item.icon)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 16)
-            Text(item.title)
-                .font(.system(size: 13, weight: .medium))
-            Spacer()
-            Button(action: onDelete) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(SettingsColors.secondaryText)
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 32)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(SettingsColors.divider, lineWidth: 1)
-                }
-        }
-    }
-}
-
 private struct WidgetOptionCard: View {
     let widget: SettingsWidget
     let isEnabled: Bool
@@ -2088,9 +2059,8 @@ private struct WidgetOptionCard: View {
                 Spacer()
 
                 Toggle("", isOn: Binding(get: { isEnabled }, set: { _ in onToggle() }))
-                    .toggleStyle(.switch)
+                    .toggleStyle(SettingsSwitchToggleStyle())
                     .labelsHidden()
-                    .scaleEffect(0.84)
             }
         }
         .padding(14)

@@ -111,6 +111,8 @@ enum TodoHighlightColor: String, Codable, CaseIterable, Sendable {
 }
 
 struct TodoCardSettings: Codable, Equatable, Sendable {
+    static let defaults = TodoCardSettings()
+
     var showDateSelector = true
     var showTime = true
     var showCategory = true
@@ -138,6 +140,21 @@ enum TodoCardStorageKeys {
     static let showEdgeGlow = "todo.card.showEdgeGlow"
     static let showReminderBadge = "todo.card.showReminderBadge"
     static let dueSoonMinutes = "todo.card.dueSoonMinutes"
+
+    static let all = [
+        sortMode,
+        showDateSelector,
+        showTime,
+        showCategory,
+        showCompleted,
+        maxVisibleItems,
+        defaultRange,
+        highlightColor,
+        useCompactMode,
+        showEdgeGlow,
+        showReminderBadge,
+        dueSoonMinutes,
+    ]
 }
 
 struct TodoTask: Identifiable, Equatable, Sendable {
@@ -544,7 +561,34 @@ final class TodoViewModel: ObservableObject {
     }
 
     func replaceTasks(_ newTasks: [TodoTask]) {
-        tasks = newTasks
+        let existingIDsByReminder = tasks.reduce(into: [String: TodoTask.ID]()) { result, task in
+            guard let reminderIdentifier = task.reminderIdentifier,
+                  !reminderIdentifier.isEmpty else { return }
+            result[reminderIdentifier] = task.id
+        }
+
+        tasks = newTasks.map { task in
+            guard let reminderIdentifier = task.reminderIdentifier,
+                  let existingID = existingIDsByReminder[reminderIdentifier] else {
+                return task
+            }
+
+            return TodoTask(
+                id: existingID,
+                reminderIdentifier: reminderIdentifier,
+                title: task.title,
+                notes: task.notes,
+                date: task.date,
+                dueTime: task.dueTime,
+                hasAlarm: task.hasAlarm,
+                location: task.location,
+                category: task.category,
+                priority: task.priority,
+                isCompleted: task.isCompleted,
+                createdAt: task.createdAt,
+                completedAt: task.completedAt
+            )
+        }
         selectedTaskIDs.removeAll()
         isMultiSelectMode = false
     }

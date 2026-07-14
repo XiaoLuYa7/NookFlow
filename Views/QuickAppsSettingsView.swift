@@ -49,9 +49,9 @@ struct QuickAppsSettingsView: View {
     }
 
     var body: some View {
-        SettingsPageScaffold(contentMaxWidth: 980) {
+        SettingsPageScaffold(contentMaxWidth: 1120) {
             PageHeaderView(
-                title: "快捷启动",
+                title: "应用管理",
                 subtitle: "把常用应用放进灵动岛，并按你的使用习惯调整顺序。",
                 icon: "square.grid.2x2"
             ) {

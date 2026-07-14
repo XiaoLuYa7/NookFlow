@@ -254,15 +254,15 @@ enum IslandShellLayout {
         case .calendar:
             return 1.2
         case .todo:
-            return 1.12
+            return 0.92
+        case .quickApps:
+            return IslandDesignTokens.quickAppsModuleWidthWeight
         case .shortcuts:
             return IslandDesignTokens.shortcutsModuleWidthWeight
         case .imageCard:
-            return 0.82
+            return 0.68
         case .deviceInfo:
-            return 1.02
-        default:
-            return 1
+            return IslandDesignTokens.deviceInfoModuleWidthWeight
         }
     }
 
@@ -279,11 +279,11 @@ enum IslandShellLayout {
         case .shortcuts:
             return 136
         case .imageCard:
-            return 118
+            return 104
         case .deviceInfo:
             return 168
         case .todo:
-            return 230
+            return 188
         }
     }
 

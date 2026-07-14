@@ -41,8 +41,8 @@ struct AdaptiveGridMetrics {
 }
 
 enum IslandDesignTokens {
-    static let appName = "L-Nook"
-    static let compactName = "L-Nook"
+    static let appName = "NookFlow"
+    static let compactName = "NookFlow"
 
     static let compactSize = CGSize(width: 96, height: 42)
     static let defaultCompactCapsuleSize = CGSize(width: 300, height: 24)
@@ -102,7 +102,9 @@ enum IslandDesignTokens {
     static let fourColumnsMaximumExpandedHeight: CGFloat = 240
     static let mediaModuleMinimumWidthWeight: CGFloat = 1.18
     static let mediaModuleMaximumWidthWeight: CGFloat = 1.30
-    static let shortcutsModuleWidthWeight: CGFloat = 0.96
+    static let quickAppsModuleWidthWeight: CGFloat = 0.86
+    static let shortcutsModuleWidthWeight: CGFloat = 0.82
+    static let deviceInfoModuleWidthWeight: CGFloat = 0.90
 
     static func mediaModuleWidthWeight(for islandHeight: CGFloat) -> CGFloat {
         let range = max(1, fourColumnsMaximumExpandedHeight - fourColumnsMinimumExpandedHeight)

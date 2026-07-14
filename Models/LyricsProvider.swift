@@ -81,8 +81,9 @@ final class LyricsProvider: ObservableObject {
             )
         }
 
-        // Sync lyrics to playback position
-        if !lyrics.isEmpty && snapshot.state == .playing {
+        // Sync lyrics to playback position. Paused playback still needs one
+        // position update, but must not keep a running timeline task.
+        if snapshot.state == .playing, !lyrics.isEmpty {
             let syncIsActive = syncTask != nil
             let expectedElapsed = syncAnchorDate.map {
                 syncAnchorElapsed + Date().timeIntervalSince($0)
@@ -99,7 +100,17 @@ final class LyricsProvider: ObservableObject {
             } else {
                 lastElapsed = snapshot.elapsed
             }
-        } else if snapshot.state != .playing {
+        } else if snapshot.state == .paused {
+            stopSync()
+            guard !lyrics.isEmpty else { return }
+
+            if lastElapsed < 0
+                || currentLineIndex == nil
+                || abs(snapshot.elapsed - lastElapsed) > 0.1 {
+                lastElapsed = snapshot.elapsed
+                updateCurrentLine(elapsed: snapshot.elapsed)
+            }
+        } else {
             stopSync()
         }
     }
@@ -109,7 +120,11 @@ final class LyricsProvider: ObservableObject {
         guard !lyrics.isEmpty else { return }
         lastElapsed = elapsed
         updateCurrentLine(elapsed: elapsed)
-        restartSync(from: elapsed)
+        if latestPlaybackState == .playing {
+            restartSync(from: elapsed)
+        } else {
+            stopSync()
+        }
     }
 
     func clear() {
@@ -241,7 +256,7 @@ final class LyricsProvider: ObservableObject {
     private func startSyncIfNeeded() {
         guard !lyrics.isEmpty, currentTrackKey != nil else { return }
         if syncTask == nil {
-            let elapsed = latestPlaybackState == .playing ? latestPlaybackElapsed : 0
+            let elapsed = latestPlaybackState == .idle ? 0 : latestPlaybackElapsed
             lastElapsed = elapsed
             updateCurrentLine(elapsed: elapsed)
             if latestPlaybackState == .playing {

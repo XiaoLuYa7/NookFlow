@@ -7,11 +7,10 @@ struct FilesGridView: View {
     @ObservedObject var provider: FileDataProvider
     @StateObject private var externalDragController = ExternalFileDragController()
     @StateObject private var autoScrollController = EdgeAutoScrollController()
+    @StateObject private var revealScheduler = GridRevealScheduler()
     @State private var previewFile: StagingFileItem?
     @State private var previewImage: NSImage?
     @State private var previewTask: Task<Void, Never>?
-    @State private var revealedFileIDs = Set<StagingFileItem.ID>()
-    @State private var revealGeneration = 0
     @State private var hasAnimatedInitialLoad = false
     @State private var selectedFileIDs = Set<StagingFileItem.ID>()
     @State private var isAirDropTargeted = false
@@ -627,7 +626,7 @@ struct FilesGridView: View {
     }
 
     private func fileCell(_ file: StagingFileItem) -> some View {
-        let isRevealed = revealedFileIDs.contains(file.id)
+        let isRevealed = revealScheduler.revealedIDs.contains(file.id)
         let isSelected = selectedFileIDs.contains(file.id)
         let fileIndex = visibleFiles.firstIndex(of: file)
         let isSource = isDraggingFile && dragSourceFile?.id == file.id
@@ -895,6 +894,7 @@ struct FilesGridView: View {
     private func cleanupTransientState() {
         directoryTransitionTask?.cancel()
         directoryTransitionTask = nil
+        revealScheduler.cancel()
         cancelDrag()
         closePreview()
         isSearchFocused = false
@@ -1083,40 +1083,14 @@ struct FilesGridView: View {
             hasAnimatedInitialLoad = true
         }
 
-        scheduleReveal(for: visibleFiles, staggered: shouldStagger)
-    }
-
-    private func scheduleReveal(for files: [StagingFileItem], staggered: Bool) {
-        let fileIDs = files.map(\.id)
-        let visibleIDSet = Set(fileIDs)
-        revealGeneration += 1
-        let generation = revealGeneration
-
-        withAnimation(Self.cellExitAnimation) {
-            revealedFileIDs.formIntersection(visibleIDSet)
-        }
-
-        guard staggered else {
-            withAnimation(Self.cellRevealAnimation) {
-                revealedFileIDs.formUnion(visibleIDSet)
-            }
-            return
-        }
-
-        for (index, id) in fileIDs.enumerated() where !revealedFileIDs.contains(id) {
-            let delay = min(Double(index) * Self.revealStagger, Self.maxRevealDelay)
-
-            Task { @MainActor in
-                if delay > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                }
-                guard revealGeneration == generation else { return }
-
-                withAnimation(Self.cellRevealAnimation) {
-                    _ = revealedFileIDs.insert(id)
-                }
-            }
-        }
+        revealScheduler.schedule(
+            ids: visibleFiles.map(\.id),
+            staggered: shouldStagger,
+            revealAnimation: Self.cellRevealAnimation,
+            exitAnimation: Self.cellExitAnimation,
+            staggerDelay: Self.revealStagger,
+            maximumDelay: Self.maxRevealDelay
+        )
     }
 
     // MARK: - Thumbnail

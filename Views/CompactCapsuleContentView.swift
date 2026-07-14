@@ -597,20 +597,26 @@ private struct SyncedCompactLyricText: View {
             let textWidth = LyricTextMeasurer.width(of: text)
             let distance = max(0, textWidth - viewWidth)
             let endRevealInset = endRevealInset(viewWidth: viewWidth, textWidth: textWidth)
+            let usesTimeline = needsContinuousTimeline(distance: distance)
 
-            TimelineView(.animation) { timeline in
-                let progress = scrollProgress(at: timeline.date)
-
-                progressCompactLyricText(progress: progress, textWidth: textWidth)
-                    .frame(width: textWidth, alignment: .leading)
-                    .offset(
-                        x: lyricOffset(
+            Group {
+                if usesTimeline {
+                    TimelineView(.animation) { timeline in
+                        lyricContent(
+                            progress: scrollProgress(at: timeline.date),
                             viewWidth: viewWidth,
                             textWidth: textWidth,
-                            endRevealInset: endRevealInset,
-                            progress: progress
+                            endRevealInset: endRevealInset
                         )
+                    }
+                } else {
+                    lyricContent(
+                        progress: scrollProgress(at: Date()),
+                        viewWidth: viewWidth,
+                        textWidth: textWidth,
+                        endRevealInset: endRevealInset
                     )
+                }
             }
             .frame(
                 width: viewWidth,
@@ -635,6 +641,39 @@ private struct SyncedCompactLyricText: View {
             }
             .clipped()
         }
+    }
+
+    private func needsContinuousTimeline(distance: CGFloat) -> Bool {
+        let progress = scrollProgress(at: Date())
+
+        return TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
+            LyricTimelineState(
+                isVisible: true,
+                isPlaying: isPlaying,
+                hasContent: !text.isEmpty && lineStartTimeMS != nil,
+                needsScrolling: distance > 0 && progress < 1,
+                needsProgressAnimation: progress < 1,
+                isTransitioning: false
+            )
+        )
+    }
+
+    private func lyricContent(
+        progress: Double,
+        viewWidth: CGFloat,
+        textWidth: CGFloat,
+        endRevealInset: CGFloat
+    ) -> some View {
+        progressCompactLyricText(progress: progress, textWidth: textWidth)
+            .frame(width: textWidth, alignment: .leading)
+            .offset(
+                x: lyricOffset(
+                    viewWidth: viewWidth,
+                    textWidth: textWidth,
+                    endRevealInset: endRevealInset,
+                    progress: progress
+                )
+            )
     }
 
     private func progressCompactLyricText(progress: Double, textWidth: CGFloat) -> some View {

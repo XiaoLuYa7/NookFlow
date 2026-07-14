@@ -150,7 +150,7 @@ final class PlaybackProvider: ObservableObject {
     private var accessConfiguration: PlaybackAccessConfiguration
     private var timer: Timer?
     private var ignoreExternalRefreshUntil = Date.distantPast
-    private let commandQueue = DispatchQueue(label: "com.personal.L-Nook.playback-command")
+    private let commandQueue = DispatchQueue(label: "com.personal.NookFlow.playback-command")
     private let liveSeekLock = NSLock()
     private var latestLiveSeekCommand: PlaybackCommand?
     private var isLiveSeekDraining = false
@@ -249,7 +249,9 @@ final class PlaybackProvider: ObservableObject {
                 DispatchQueue.main.async { [weak self] in
                     self?.ignoreExternalRefreshUntil = .distantPast
                     self?.applySnapshot(result.snapshot)
-                    self?.diagnosticText = result.diagnostic
+                    if self?.diagnosticText != result.diagnostic {
+                        self?.diagnosticText = result.diagnostic
+                    }
                 }
             }
 
@@ -291,7 +293,9 @@ final class PlaybackProvider: ObservableObject {
 
             DispatchQueue.main.async { [weak self] in
                 self?.applySnapshot(refreshedSnapshot)
-                self?.diagnosticText = refreshedResult.diagnostic
+                if self?.diagnosticText != refreshedResult.diagnostic {
+                    self?.diagnosticText = refreshedResult.diagnostic
+                }
             }
         }
     }
@@ -378,7 +382,9 @@ final class PlaybackProvider: ObservableObject {
                 }
 
                 self.applySnapshot(result.snapshot)
-                self.diagnosticText = result.diagnostic
+                if self.diagnosticText != result.diagnostic {
+                    self.diagnosticText = result.diagnostic
+                }
 
                 if self.needsRefreshAfterCurrent {
                     self.needsRefreshAfterCurrent = false
@@ -404,7 +410,9 @@ final class PlaybackProvider: ObservableObject {
 
     private func applySnapshot(_ snapshot: PlaybackSnapshot) {
         let enriched = snapshotWithCachedArtwork(snapshot)
-        self.snapshot = enriched
+        if self.snapshot != enriched {
+            self.snapshot = enriched
+        }
         loadFallbackArtworkIfNeeded(for: enriched)
     }
 

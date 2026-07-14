@@ -9,14 +9,14 @@ struct ExpandedIslandView: View {
     let contentRevealProgress: Double
     let secondaryContentRevealProgress: Double
     @ObservedObject var settings: IslandSettings
+    @ObservedObject var weatherProvider: WeatherProvider
+    @ObservedObject var deviceInfoProvider: DeviceInfoProvider
     let onOpenSettings: () -> Void
     let onOpenTodoSettings: () -> Void
     let onOpenFeedback: () -> Void
 
     @StateObject private var applicationsProvider = ApplicationsProvider()
     @StateObject private var fileProvider = FileDataProvider()
-    @StateObject private var weatherProvider = WeatherProvider()
-    @StateObject private var deviceInfoProvider = DeviceInfoProvider()
     @StateObject private var dragController = ModuleDragController()
     @StateObject private var calendarProvider = CalendarProvider()
     @StateObject private var reminderProvider = ReminderProvider()
@@ -36,16 +36,12 @@ struct ExpandedIslandView: View {
 
     @State private var playbackScrubProgress = 0.0
     @State private var containerFrame: CGRect = .zero
-    @State private var isSettingsMenuPresented = false
     @State private var imageCardImage: NSImage?
     @State private var imageCardImagePath = ""
     @State private var imageCardLoadTask: Task<Void, Never>?
 
     var body: some View {
         panelSurface
-            .overlay(alignment: .topTrailing) {
-                settingsActionMenu
-            }
             .overlay {
                 if viewModel.isFileDropChooserVisible {
                     FileDropChoiceOverlay(
@@ -62,13 +58,15 @@ struct ExpandedIslandView: View {
                 alignment: .top
             )
             .onAppear {
-                startContentProvidersIfNeeded()
+                refreshContentProviders()
                 loadImageCardIfNeeded()
             }
             .onChange(of: isContentReady) { _, ready in
                 if ready {
-                    startContentProvidersIfNeeded()
+                    refreshContentProviders()
                     loadImageCardIfNeeded()
+                } else {
+                    stopContentProviders()
                 }
             }
             .onChange(of: viewModel.presentationPhase) { _, phase in
@@ -77,11 +75,16 @@ struct ExpandedIslandView: View {
                 }
 
                 if phase == .expanded {
-                    startContentProvidersIfNeeded()
-                    syncTodoTasksIfNeeded(force: true)
+                    refreshContentProviders(forceTodoSync: true)
                 } else if phase == .collapsed {
                     stopContentProviders()
                 }
+            }
+            .onChange(of: settings.showCalendarModule) { _, _ in
+                refreshContentProviders()
+            }
+            .onChange(of: settings.showTodoModule) { _, enabled in
+                refreshContentProviders(forceTodoSync: enabled)
             }
             .onChange(of: settings.calendarStyle) { _, _ in
                 resetCalendarSelectionToToday()
@@ -110,15 +113,9 @@ struct ExpandedIslandView: View {
             .onReceive(viewModel.playbackProvider.$diagnosticText) { text in
                 playbackDiagnosticText = text
             }
-            .onChange(of: viewModel.presentationPhase) { _, phase in
-                if phase != .expanded {
-                    isSettingsMenuPresented = false
-                }
-            }
             .onDisappear {
                 closeTodoFloatingPanel()
                 stopContentProviders()
-                isSettingsMenuPresented = false
                 todoSyncTask?.cancel()
                 todoSyncTask = nil
                 imageCardLoadTask?.cancel()
@@ -149,13 +146,6 @@ struct ExpandedIslandView: View {
         )
         .animation(nil, value: viewModel.selectedTopTab)
         .contentShape(Rectangle())
-        .onTapGesture {
-            if isSettingsMenuPresented {
-                withAnimation(.easeOut(duration: 0.12)) {
-                    isSettingsMenuPresented = false
-                }
-            }
-        }
     }
 
     private var selectedPageContent: some View {
@@ -292,76 +282,44 @@ struct ExpandedIslandView: View {
     }
 
     private var settingsButton: some View {
-        HoverIconButton(systemName: "gearshape.fill", help: "Settings") {
-            withAnimation(.easeOut(duration: 0.14)) {
-                isSettingsMenuPresented.toggle()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var settingsActionMenu: some View {
-        if isSettingsMenuPresented {
-            VStack(alignment: .leading, spacing: 0) {
-                settingsActionButton("打开设置") {
-                    closeSettingsActionMenu()
-                    Task { @MainActor in
-                        await Task.yield()
-                        onOpenSettings()
-                    }
+        Menu {
+            Button {
+                Task { @MainActor in
+                    await Task.yield()
+                    onOpenSettings()
                 }
+            } label: {
+                Label("打开设置", systemImage: "gearshape")
+            }
 
-                settingsActionButton("问题反馈") {
-                    closeSettingsActionMenu()
-                    Task { @MainActor in
-                        await Task.yield()
-                        onOpenFeedback()
-                    }
+            Button {
+                Task { @MainActor in
+                    await Task.yield()
+                    onOpenFeedback()
                 }
-
-                settingsActionButton("退出 APP") {
-                    closeSettingsActionMenu()
-                    NSApp.terminate(nil)
-                }
+            } label: {
+                Label("问题反馈", systemImage: "bubble.left.and.exclamationmark")
             }
-            .padding(.vertical, 6)
-            .frame(width: 112, alignment: .center)
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.regularMaterial)
-                    .shadow(color: .black.opacity(0.22), radius: 10, y: 5)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.20), lineWidth: 0.8)
-            }
-            .padding(.top, IslandDesignTokens.expandedTopBarTopPadding + 32)
-            .padding(.trailing, 30)
-            .transition(.opacity.combined(with: .offset(y: -3)))
-            .zIndex(40)
-        }
-    }
 
-    private func settingsActionButton(
-        _ title: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .frame(maxWidth: .infinity, alignment: .center)
-                .frame(height: 30)
-                .padding(.horizontal, 10)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
+            Divider()
 
-    private func closeSettingsActionMenu() {
-        withAnimation(.easeOut(duration: 0.10)) {
-            isSettingsMenuPresented = false
+            Button(role: .destructive) {
+                NSApp.terminate(nil)
+            } label: {
+                Label("退出 NookFlow", systemImage: "power")
+            }
+        } label: {
+            Color.clear
+                .frame(width: 28, height: 28)
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .overlay {
+            SettingsMenuLabel()
+                .allowsHitTesting(false)
+        }
+        .help("设置")
     }
 
     private func closeTodoFloatingPanel() {
@@ -477,18 +435,29 @@ struct ExpandedIslandView: View {
         return min(max((contentRevealProgress - start) / activeDuration, 0), 1)
     }
 
-    private func startContentProvidersIfNeeded() {
-        guard isContentReady else { return }
-        weatherProvider.start()
-        deviceInfoProvider.start()
-        calendarProvider.start()
-        reminderProvider.start()
-        syncTodoTasksIfNeeded()
+    private func refreshContentProviders(forceTodoSync: Bool = false) {
+        guard isContentReady else {
+            stopContentProviders()
+            return
+        }
+
+        if settings.showCalendarModule {
+            calendarProvider.start()
+        } else {
+            calendarProvider.stop()
+        }
+
+        if settings.showTodoModule {
+            reminderProvider.start()
+            syncTodoTasksIfNeeded(force: forceTodoSync)
+        } else {
+            reminderProvider.stop()
+            todoSyncTask?.cancel()
+            todoSyncTask = nil
+        }
     }
 
     private func stopContentProviders() {
-        weatherProvider.stop()
-        deviceInfoProvider.stop()
         calendarProvider.stop()
         reminderProvider.stop()
         todoSyncTask?.cancel()
@@ -697,18 +666,6 @@ struct ExpandedIslandView: View {
         max(104, effectiveIslandHeight - 38)
     }
 
-    private var isTallModuleCard: Bool {
-        moduleCardHeight >= 150
-    }
-
-    private var isVeryTallModuleCard: Bool {
-        moduleCardHeight >= 210
-    }
-
-    private var moduleFooterFont: Font {
-        .system(size: 9, weight: .semibold, design: .rounded)
-    }
-
     private var emptyModulesView: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No modules enabled")
@@ -792,40 +749,12 @@ struct ExpandedIslandView: View {
         .scaleEffect(0.985 + CGFloat(backgroundProgress) * 0.015, anchor: .center)
         .offset(y: CGFloat(1 - backgroundProgress) * 5)
         .overlay {
-            if module == .weather {
-                weatherCardBorder(shape)
-            } else if module == .todo {
-                todoScheduleCardBorder(shape)
-            } else {
-                shape
-                    .stroke(IslandDesignTokens.moduleBorder, lineWidth: 1)
-            }
+            unifiedModuleCardBorder(shape)
         }
         .moduleCardClip(shape, isEnabled: true)
     }
 
-    private func weatherCardBorder(_ shape: RoundedRectangle) -> some View {
-        shape
-            .stroke(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.34),
-                        Color.white.opacity(0.10),
-                        Color.white.opacity(0.18)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 0.85
-            )
-            .overlay {
-                shape
-                    .stroke(Color.black.opacity(0.65), lineWidth: 2)
-                    .blendMode(.overlay)
-            }
-    }
-
-    private func todoScheduleCardBorder(_ shape: RoundedRectangle) -> some View {
+    private func unifiedModuleCardBorder(_ shape: RoundedRectangle) -> some View {
         shape
             .stroke(
                 LinearGradient(
@@ -847,7 +776,7 @@ struct ExpandedIslandView: View {
     }
 
     private func shouldShowModuleHeader(for module: IslandPanelModule) -> Bool {
-        if module == .weather || module == .todo {
+        if module == .weather || module == .todo || module == .shortcuts {
             return false
         }
 
@@ -1050,114 +979,55 @@ struct ExpandedIslandView: View {
     }
 
     @ViewBuilder
-    private func moduleCardBackground(_ module: IslandPanelModule) -> some View {
+    private func moduleCardBackground(_: IslandPanelModule) -> some View {
         let cornerRadius: CGFloat = 16
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
-        if module == .imageCard || module == .deviceInfo {
-            Color.clear
-        } else if module == .weather {
-            shape
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.055, green: 0.057, blue: 0.064).opacity(0.96),
-                            Color.black.opacity(0.94),
-                            Color(red: 0.020, green: 0.023, blue: 0.029).opacity(0.98)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+        unifiedModuleCardBackground(shape: shape)
+    }
+
+    private func unifiedModuleCardBackground(shape: RoundedRectangle) -> some View {
+        shape
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.035, green: 0.036, blue: 0.040).opacity(0.96),
+                        Color.black.opacity(0.92),
+                        Color(red: 0.015, green: 0.016, blue: 0.019).opacity(0.98)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
-                .overlay(alignment: .topLeading) {
-                    shape
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color.white.opacity(0.10),
-                                    Color.white.opacity(0.025),
-                                    Color.clear
-                                ],
-                                center: .topLeading,
-                                startRadius: 0,
-                                endRadius: 170
-                            )
+            )
+            .overlay(alignment: .topLeading) {
+                shape
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color.white.opacity(0.10),
+                                Color.white.opacity(0.025),
+                                Color.clear
+                            ],
+                            center: .topLeading,
+                            startRadius: 0,
+                            endRadius: 190
                         )
-                }
-                .overlay(alignment: .bottomLeading) {
-                    shape
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color(red: 0.36, green: 0.66, blue: 1.0).opacity(0.11),
-                                    Color.clear
-                                ],
-                                center: .bottomLeading,
-                                startRadius: 0,
-                                endRadius: 130
-                            )
-                        )
-                }
-                .overlay(alignment: .trailing) {
-                    shape
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color(red: 1.0, green: 0.55, blue: 0.12).opacity(0.08),
-                                    Color.clear
-                                ],
-                                center: .trailing,
-                                startRadius: 0,
-                                endRadius: 120
-                            )
-                        )
-                }
-        } else if module == .todo {
-            shape
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.035, green: 0.036, blue: 0.040).opacity(0.96),
-                            Color.black.opacity(0.92),
-                            Color(red: 0.015, green: 0.016, blue: 0.019).opacity(0.98)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
                     )
-                )
-                .overlay(alignment: .topLeading) {
-                    shape
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color.white.opacity(0.10),
-                                    Color.white.opacity(0.025),
-                                    Color.clear
-                                ],
-                                center: .topLeading,
-                                startRadius: 0,
-                                endRadius: 190
-                            )
+            }
+            .overlay {
+                shape
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color.blue.opacity(0.10),
+                                Color.clear
+                            ],
+                            center: .bottomTrailing,
+                            startRadius: 0,
+                            endRadius: 150
                         )
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    shape
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color.blue.opacity(0.10),
-                                    Color.clear
-                                ],
-                                center: .bottomTrailing,
-                                startRadius: 0,
-                                endRadius: 150
-                            )
-                        )
-                }
-        } else {
-            shape
-                .fill(Color.black.opacity(0.72))
-        }
+                    )
+            }
     }
 
     private func moduleCardSpacing(for module: IslandPanelModule) -> CGFloat {
@@ -1308,28 +1178,32 @@ struct ExpandedIslandView: View {
         }
     }
 
-    private func restoreTodoFromCard(_ item: TodoSchedulePreviewItem) {
-        guard let identifier = item.reminderIdentifier else { return }
-
-        Task { @MainActor in
-            guard await reminderProvider.restoreTodoReminder(identifier: identifier) else { return }
-            let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
-            withAnimation(.easeOut(duration: 0.18)) {
-                viewModel.setTodoTasks(tasks)
-            }
+    private func restoreTodoFromCard(_ item: TodoSchedulePreviewItem) async -> Bool {
+        guard let identifier = item.reminderIdentifier,
+              await reminderProvider.restoreTodoReminder(identifier: identifier)
+        else {
+            return false
         }
+
+        let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
+        withAnimation(.easeOut(duration: 0.18)) {
+            viewModel.setTodoTasks(tasks)
+        }
+        return true
     }
 
-    private func deleteTodoFromCard(_ item: TodoSchedulePreviewItem) {
-        guard let identifier = item.reminderIdentifier else { return }
-
-        Task { @MainActor in
-            guard await reminderProvider.deleteTodoReminder(identifier: identifier) else { return }
-            let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
-            withAnimation(.easeOut(duration: 0.18)) {
-                viewModel.setTodoTasks(tasks)
-            }
+    private func deleteTodoFromCard(_ item: TodoSchedulePreviewItem) async -> Bool {
+        guard let identifier = item.reminderIdentifier,
+              await reminderProvider.deleteTodoReminder(identifier: identifier)
+        else {
+            return false
         }
+
+        let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
+        withAnimation(.easeOut(duration: 0.18)) {
+            viewModel.setTodoTasks(tasks)
+        }
+        return true
     }
 
     private var quickAppsModuleContent: some View {
@@ -1347,576 +1221,6 @@ struct ExpandedIslandView: View {
         .help(weather.detail)
     }
 
-    private func compactWeatherModuleContent(_ weather: WeatherSnapshot) -> some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            let isCompact = size.width < 176 || size.height < 122
-            let temperatureSize = min(
-                isCompact ? 43 : 49,
-                max(36, size.height * 0.43)
-            )
-            let symbolSize = min(
-                size.width * (isCompact ? 0.44 : 0.50),
-                size.height * (isCompact ? 0.54 : 0.62)
-            )
-            let symbolCenterX = size.width - symbolSize * 0.46
-            let symbolCenterY = size.height * (isCompact ? 0.38 : 0.40)
-            let textColumnWidth = max(82, size.width * 0.58)
-            let conditionWidth = min(54, max(34, size.width * 0.17))
-            let conditionCenterX = min(
-                symbolCenterX - symbolSize * 0.62,
-                size.width * (isCompact ? 0.52 : 0.50)
-            )
-            let conditionCenterY = symbolCenterY + symbolSize * 0.03
-
-            ZStack(alignment: .topLeading) {
-                weatherPremiumSymbol(weather, size: symbolSize)
-                    .frame(width: symbolSize, height: symbolSize)
-                    .position(x: symbolCenterX, y: symbolCenterY)
-
-                weatherConditionLabel(weather.condition, isCompact: isCompact)
-                    .frame(width: conditionWidth, alignment: .center)
-                    .position(x: conditionCenterX, y: conditionCenterY)
-
-                VStack(alignment: .leading, spacing: 0) {
-                    weatherPremiumLocation(weather)
-                        .frame(width: textColumnWidth, alignment: .leading)
-
-                    Spacer(minLength: isCompact ? 6 : 8)
-
-                    Text(weather.temperatureText)
-                        .font(.system(size: temperatureSize, weight: .thin, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.98))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.76)
-                        .shadow(color: .white.opacity(0.10), radius: 8)
-                        .frame(width: size.width * 0.46, alignment: .leading)
-
-                    Spacer(minLength: isCompact ? 7 : 9)
-
-                    weatherPremiumMetrics(weather, isCompact: isCompact, availableWidth: size.width)
-                }
-                .frame(width: size.width, height: size.height, alignment: .topLeading)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func weatherPremiumLocation(_ weather: WeatherSnapshot) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: "location.fill")
-                .font(.system(size: 10.5, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.white.opacity(0.62))
-
-            Text(weather.locationName)
-                .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.72))
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-        }
-    }
-
-    private func weatherConditionLabel(_ condition: String, isCompact: Bool) -> some View {
-        Text(condition)
-            .font(.system(size: isCompact ? 12 : 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.white.opacity(0.62))
-            .lineLimit(1)
-            .minimumScaleFactor(0.72)
-            .allowsTightening(true)
-    }
-
-    private func weatherPremiumSymbol(_ weather: WeatherSnapshot, size: CGFloat) -> some View {
-        ZStack {
-            Circle()
-                .fill(weatherGlowColor(for: weather).opacity(weather.isLive ? 0.24 : 0.10))
-                .frame(width: size * 0.82, height: size * 0.82)
-                .blur(radius: size * 0.22)
-
-            Image(systemName: weather.symbolName)
-                .font(.system(size: size * 0.78, weight: .semibold))
-                .symbolRenderingMode(weather.isLive ? .multicolor : .hierarchical)
-                .foregroundStyle(Color.white.opacity(weather.isLive ? 1 : 0.58))
-                .shadow(
-                    color: weatherGlowColor(for: weather).opacity(weather.isLive ? 0.30 : 0.08),
-                    radius: size * 0.18,
-                    y: size * 0.04
-                )
-                .contentTransition(.symbolEffect(.replace))
-                .animation(.easeOut(duration: 0.18), value: weather.symbolName)
-        }
-        .drawingGroup()
-    }
-
-    private func weatherPremiumMetrics(
-        _ weather: WeatherSnapshot,
-        isCompact: Bool,
-        availableWidth: CGFloat
-    ) -> some View {
-        let spacing: CGFloat = isCompact ? 6 : 10
-        let itemWidth = max(1, (availableWidth - spacing) / 2)
-
-        return HStack(spacing: spacing) {
-            weatherPremiumMetric(
-                systemName: "thermometer.medium",
-                label: "体感",
-                value: apparentTemperatureValue(for: weather),
-                isCompact: isCompact
-            )
-            .frame(width: itemWidth, alignment: .leading)
-
-            weatherPremiumMetric(
-                systemName: "drop",
-                label: "湿度",
-                value: humidityValue(for: weather),
-                isCompact: isCompact
-            )
-            .frame(width: itemWidth, alignment: .leading)
-        }
-        .frame(width: availableWidth, alignment: .leading)
-    }
-
-    private func weatherPremiumMetric(
-        systemName: String,
-        label: String,
-        value: String,
-        isCompact: Bool
-    ) -> some View {
-        HStack(spacing: isCompact ? 4 : 6) {
-            Image(systemName: systemName)
-                .font(.system(size: isCompact ? 9.8 : 11, weight: .medium))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.white.opacity(0.84))
-                .frame(width: isCompact ? 22 : 24, height: isCompact ? 22 : 24)
-                .background {
-                    Circle()
-                        .fill(Color.white.opacity(0.075))
-                        .overlay {
-                            Circle()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 0.8)
-                        }
-                }
-
-            weatherPremiumMetricText(label: label, value: value, isCompact: isCompact)
-            .lineLimit(1)
-            .minimumScaleFactor(isCompact ? 0.58 : 0.64)
-            .allowsTightening(true)
-            .layoutPriority(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func weatherPremiumMetricText(
-        label: String,
-        value: String,
-        isCompact: Bool
-    ) -> Text {
-        var labelPart = AttributedString(label + " ")
-        labelPart.font = .system(size: isCompact ? 8.7 : 9.5, weight: .medium, design: .rounded)
-        labelPart.foregroundColor = Color.white.opacity(0.54)
-
-        var valuePart = AttributedString(value)
-        valuePart.font = .system(size: isCompact ? 11.8 : 13.2, weight: .medium, design: .rounded)
-        valuePart.foregroundColor = Color.white.opacity(0.82)
-
-        labelPart.append(valuePart)
-        return Text(labelPart).monospacedDigit()
-    }
-
-    private func weatherGlowColor(for weather: WeatherSnapshot) -> Color {
-        let symbol = weather.symbolName
-        if symbol.contains("sun") {
-            return Color(red: 1.0, green: 0.68, blue: 0.20)
-        }
-        if symbol.contains("rain") || symbol.contains("drizzle") || symbol.contains("sleet") {
-            return Color(red: 0.38, green: 0.62, blue: 1.0)
-        }
-        if symbol.contains("snow") {
-            return Color(red: 0.72, green: 0.90, blue: 1.0)
-        }
-        if symbol.contains("bolt") {
-            return Color(red: 0.98, green: 0.72, blue: 0.25)
-        }
-        return Color.white
-    }
-
-    private func weatherCompactHeader(_ weather: WeatherSnapshot) -> some View {
-        Text(weather.locationName)
-            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.white.opacity(0.90))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .padding(.trailing, 28)
-    }
-
-    @ViewBuilder
-    private func weatherCompactStatusIcon(_ weather: WeatherSnapshot) -> some View {
-        Image(systemName: weather.symbolName)
-            .font(.system(size: 15, weight: .semibold))
-            .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(weatherAccentColor.opacity(weather.isLive ? 1 : 0.62))
-            .contentTransition(.symbolEffect(.replace))
-            .animation(.easeOut(duration: 0.18), value: weather.symbolName)
-    }
-
-    private func weatherCompactCurrent(_ weather: WeatherSnapshot) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(weather.temperatureText)
-                .font(.system(size: 22, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.98))
-                .lineLimit(1)
-                .minimumScaleFactor(0.76)
-
-            Text(weather.condition)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.70))
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func weatherCompactForecasts(_ weather: WeatherSnapshot) -> some View {
-        HStack(alignment: .top, spacing: 2) {
-            ForEach(compactWeatherForecasts(for: weather)) { forecast in
-                weatherMiniForecastColumn(forecast)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    private func weatherCompactMetrics(_ weather: WeatherSnapshot) -> some View {
-        HStack(spacing: 0) {
-            weatherMetricItem(
-                systemName: "thermometer.medium",
-                text: apparentTemperatureText(for: weather)
-            )
-
-            Spacer(minLength: 8)
-
-            weatherMetricItem(
-                systemName: "drop",
-                text: humidityText(for: weather)
-            )
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-    }
-
-    private func weatherReferenceLayout(_ weather: WeatherSnapshot, designSize: CGSize) -> some View {
-        ZStack(alignment: .topLeading) {
-            Rectangle()
-                .fill(Color.clear)
-
-            Rectangle()
-                .fill(Color.white.opacity(0.10))
-                .frame(width: designSize.width - 24, height: 1)
-                .position(x: designSize.width / 2, y: 66)
-
-            Rectangle()
-                .fill(Color.white.opacity(0.10))
-                .frame(width: designSize.width - 24, height: 1)
-                .position(x: designSize.width / 2, y: 136)
-
-            Rectangle()
-                .fill(Color.white.opacity(0.09))
-                .frame(width: 1, height: 49)
-                .position(x: designSize.width / 3, y: 103)
-
-            Rectangle()
-                .fill(Color.white.opacity(0.09))
-                .frame(width: 1, height: 49)
-                .position(x: designSize.width * 2 / 3, y: 103)
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top) {
-                    Text(weather.locationName)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .lineLimit(1)
-
-                    Spacer(minLength: 0)
-
-                    Image(systemName: weather.symbolName)
-                        .font(.system(size: 19, weight: .semibold))
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(
-                            weatherAccentColor.opacity(weather.isLive ? 1 : 0.62)
-                        )
-                        .contentTransition(.symbolEffect(.replace))
-                        .animation(.easeOut(duration: 0.18), value: weather.symbolName)
-                }
-                .frame(width: designSize.width - 30)
-
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text(weather.temperatureText)
-                        .font(.system(size: 48, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.98))
-                        .lineLimit(1)
-
-                    Text(weather.condition)
-                        .font(.system(size: 22, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.70))
-                        .lineLimit(1)
-                }
-            }
-            .frame(width: designSize.width - 30, height: 62, alignment: .topLeading)
-            .position(x: designSize.width / 2, y: 35)
-
-            HStack(alignment: .center, spacing: 0) {
-                ForEach(compactWeatherForecasts(for: weather)) { forecast in
-                    weatherReferenceForecastColumn(forecast)
-                        .frame(width: designSize.width / 3)
-                }
-            }
-            .frame(width: designSize.width, height: 62)
-            .position(x: designSize.width / 2, y: 101)
-
-            HStack(spacing: 22) {
-                weatherReferenceMetricItem(
-                    systemName: "thermometer.medium",
-                    text: apparentTemperatureText(for: weather)
-                )
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.12))
-                    .frame(width: 1, height: 14)
-
-                weatherReferenceMetricItem(
-                    systemName: "drop",
-                    text: humidityText(for: weather)
-                )
-            }
-            .frame(width: designSize.width - 20, height: 22)
-            .position(x: designSize.width / 2, y: 154)
-        }
-        .clipped()
-    }
-
-    private func compactWeatherForecasts(for weather: WeatherSnapshot) -> [WeatherDailySummary] {
-        if !weather.dailyForecasts.isEmpty {
-            return Array(weather.dailyForecasts.prefix(3))
-        }
-
-        let fallbackRange: String
-        if let temperature = weather.temperature {
-            let rounded = Int(temperature.rounded())
-            fallbackRange = "\(rounded - 2)/\(rounded + 2)°"
-        } else {
-            fallbackRange = "--/--°"
-        }
-
-        return [
-            WeatherDailySummary(id: "today", title: "今天", symbolName: weather.symbolName, temperatureRangeText: fallbackRange),
-            WeatherDailySummary(id: "tomorrow", title: "明天", symbolName: weather.symbolName, temperatureRangeText: fallbackRange),
-            WeatherDailySummary(id: "weekend", title: "周六", symbolName: weather.symbolName, temperatureRangeText: fallbackRange)
-        ]
-    }
-
-    private func compactWeatherForecastColumn(_ forecast: WeatherDailySummary) -> some View {
-        VStack(alignment: .center, spacing: 3) {
-            Text(forecast.title)
-                .font(.system(size: weatherForecastTitleFontSize, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.80))
-                .lineLimit(1)
-
-            Image(systemName: forecast.symbolName)
-                .font(.system(size: weatherForecastIconSize, weight: .semibold))
-                .symbolRenderingMode(.multicolor)
-                .frame(height: weatherForecastIconSize + 1, alignment: .center)
-
-            weatherForecastTemperatureText(forecast.temperatureRangeText)
-        }
-        .frame(height: weatherForecastColumnHeight)
-    }
-
-    private func weatherMiniForecastColumn(_ forecast: WeatherDailySummary) -> some View {
-        VStack(alignment: .center, spacing: 1.5) {
-            Text(forecast.title)
-                .font(.system(size: 9.7, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.75))
-                .lineLimit(1)
-
-            Image(systemName: forecast.symbolName)
-                .font(.system(size: 17.5, weight: .semibold))
-                .symbolRenderingMode(.multicolor)
-                .frame(height: 18, alignment: .center)
-
-            weatherMiniForecastTemperatureText(forecast.temperatureRangeText)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    private func weatherMiniForecastTemperatureText(_ range: String) -> some View {
-        let parts = weatherTemperatureRangeParts(range)
-
-        return (Text(parts.low.replacingOccurrences(of: "°", with: ""))
-            .foregroundColor(Color.white.opacity(0.86))
-            + Text(" / ").foregroundColor(Color.white.opacity(0.42))
-            + Text(parts.high).foregroundColor(weatherAccentColor))
-        .font(.system(size: 10.6, weight: .semibold, design: .rounded))
-        .lineLimit(1)
-        .minimumScaleFactor(0.68)
-        .allowsTightening(true)
-    }
-
-    private func weatherReferenceForecastColumn(_ forecast: WeatherDailySummary) -> some View {
-        VStack(alignment: .center, spacing: 5) {
-            Text(forecast.title)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.78))
-                .lineLimit(1)
-
-            Image(systemName: forecast.symbolName)
-                .font(.system(size: 22, weight: .semibold))
-                .symbolRenderingMode(.multicolor)
-                .frame(height: 23)
-
-            weatherReferenceForecastTemperatureText(forecast.temperatureRangeText)
-        }
-    }
-
-    private func weatherReferenceForecastTemperatureText(_ range: String) -> some View {
-        let parts = weatherTemperatureRangeParts(range)
-
-        return HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(parts.low)
-                .foregroundStyle(Color.white.opacity(0.86))
-
-            Text("/")
-                .foregroundStyle(Color.white.opacity(0.45))
-
-            Text(parts.high)
-                .foregroundStyle(weatherAccentColor)
-        }
-        .font(.system(size: 13, weight: .semibold, design: .rounded))
-        .lineLimit(1)
-    }
-
-    private func weatherReferenceMetricItem(systemName: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemName)
-                .font(.system(size: 15, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(weatherAccentColor)
-
-            Text(text)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.62))
-                .lineLimit(1)
-        }
-    }
-
-    private var weatherAccentColor: Color {
-        Color(red: 1.0, green: 0.45, blue: 0.41)
-    }
-
-    private var weatherLocationFontSize: CGFloat {
-        moduleCardHeight < 112 ? 10 : 10.5
-    }
-
-    private var weatherTemperatureFontSize: CGFloat {
-        moduleCardHeight < 112 ? 25 : 27
-    }
-
-    private var weatherConditionFontSize: CGFloat {
-        moduleCardHeight < 112 ? 11 : 12
-    }
-
-    private var weatherHeaderIconSize: CGFloat {
-        moduleCardHeight < 112 ? 15 : 16
-    }
-
-    private var weatherForecastTitleFontSize: CGFloat {
-        moduleCardHeight < 112 ? 8.5 : 9
-    }
-
-    private var weatherForecastIconSize: CGFloat {
-        moduleCardHeight < 112 ? 14 : 16
-    }
-
-    private var weatherForecastTemperatureFontSize: CGFloat {
-        moduleCardHeight < 112 ? 8.5 : 9
-    }
-
-    private var weatherForecastColumnHeight: CGFloat {
-        moduleCardHeight < 112 ? 35 : 39
-    }
-
-    private var weatherForecastSpacing: CGFloat {
-        moduleCardHeight < 112 ? 5 : 7
-    }
-
-    private var weatherCardSpacing: CGFloat {
-        moduleCardHeight < 112 ? 2 : 3
-    }
-
-    private var weatherMetricRowHeight: CGFloat {
-        moduleCardHeight < 112 ? 12 : 13
-    }
-
-    private var weatherMetricDivider: some View {
-        Rectangle()
-            .fill(Color.white.opacity(0.13))
-            .frame(width: 1, height: 10)
-    }
-
-    private var weatherDivider: some View {
-        Rectangle()
-            .fill(Color.white.opacity(0.095))
-            .frame(height: 1)
-    }
-
-    private func weatherMetricItem(systemName: String, text: String) -> some View {
-        HStack(spacing: 4.5) {
-            Image(systemName: systemName)
-                .font(.system(size: 10.2, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(weatherAccentColor)
-
-            Text(text)
-                .font(.system(size: 9.8, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.64))
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-        }
-    }
-
-    private func weatherForecastTemperatureText(_ range: String) -> some View {
-        let parts = weatherTemperatureRangeParts(range)
-
-        return HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text(parts.low)
-                .foregroundStyle(Color.white.opacity(0.88))
-
-            Text("/")
-                .foregroundStyle(Color.white.opacity(0.45))
-
-            Text(parts.high)
-                .foregroundStyle(weatherAccentColor)
-        }
-        .font(.system(size: weatherForecastTemperatureFontSize, weight: .semibold, design: .rounded))
-        .lineLimit(1)
-        .minimumScaleFactor(0.78)
-    }
-
-    private func weatherTemperatureRangeParts(_ range: String) -> (low: String, high: String) {
-        let normalized = range.replacingOccurrences(of: "°", with: "")
-        let parts = normalized.split(separator: "/", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else {
-            return (range, "--°")
-        }
-
-        return ("\(parts[0])°", "\(parts[1])°")
-    }
-
-    private func apparentTemperatureText(for weather: WeatherSnapshot) -> String {
-        guard let apparentTemperature = weather.apparentTemperature else {
-            return "体感 --°"
-        }
-
-        return "体感 \(Int(apparentTemperature.rounded()))°"
-    }
-
     private func apparentTemperatureValue(for weather: WeatherSnapshot) -> String {
         guard let apparentTemperature = weather.apparentTemperature else {
             return "--°"
@@ -1925,101 +1229,12 @@ struct ExpandedIslandView: View {
         return "\(Int(apparentTemperature.rounded()))°"
     }
 
-    private func humidityText(for weather: WeatherSnapshot) -> String {
-        guard let humidity = weather.humidity else {
-            return "湿度 --%"
-        }
-
-        return "湿度 \(humidity)%"
-    }
-
     private func humidityValue(for weather: WeatherSnapshot) -> String {
         guard let humidity = weather.humidity else {
             return "--%"
         }
 
         return "\(humidity)%"
-    }
-
-    private func wideWeatherModuleContent(_ weather: WeatherSnapshot) -> some View {
-        HStack(alignment: .bottom, spacing: 14) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(weather.locationName)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-
-                Spacer(minLength: 0)
-
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(weather.temperatureText)
-                        .font(.system(size: 42, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.97))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.68)
-
-                    Text(weather.condition)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.90))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                }
-
-                HStack(spacing: 7) {
-                    Text(primaryForecastRange(for: weather))
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.95))
-                        .lineLimit(1)
-
-                    Text(weather.isLive ? "空气优" : "更新中")
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .padding(.horizontal, 6)
-                        .frame(height: 18)
-                        .background {
-                            Capsule()
-                                .fill(Color.black.opacity(0.18))
-                        }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-
-            Spacer(minLength: 0)
-
-            HStack(alignment: .bottom, spacing: 9) {
-                ForEach(compactWeatherForecasts(for: weather)) { forecast in
-                    wideWeatherForecastColumn(forecast)
-                }
-            }
-            .frame(maxHeight: .infinity, alignment: .bottom)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-    }
-
-    private func primaryForecastRange(for weather: WeatherSnapshot) -> String {
-        compactWeatherForecasts(for: weather).first?.temperatureRangeText ?? "--/--°"
-    }
-
-    private func wideWeatherForecastColumn(_ forecast: WeatherDailySummary) -> some View {
-        VStack(spacing: 2) {
-            Text(forecast.title)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.90))
-                .lineLimit(1)
-
-            Image(systemName: forecast.symbolName)
-                .font(.system(size: 20, weight: .semibold))
-                .symbolRenderingMode(.multicolor)
-                .frame(height: 20)
-
-            Text(forecast.temperatureRangeText)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.94))
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-        }
-        .frame(maxWidth: .infinity)
     }
 
     private var calendarModuleContent: some View {
@@ -2462,18 +1677,6 @@ struct ExpandedIslandView: View {
         Array(repeating: GridItem(.flexible(), spacing: 0, alignment: .center), count: 7)
     }
 
-    private var compactWeatherForecastFontSize: CGFloat {
-        8
-    }
-
-    private var compactWeatherForecastFont: Font {
-        .system(size: compactWeatherForecastFontSize, weight: .bold, design: .rounded)
-    }
-
-    private var compactWeatherForecastLeadingOffset: CGFloat {
-        0
-    }
-
     private func calendarMonthStyleDayCell(
         _ day: CalendarMonthDay,
         selectedDate: Date,
@@ -2546,77 +1749,6 @@ struct ExpandedIslandView: View {
         }
         .buttonStyle(.plain)
         .disabled(day.date == nil)
-    }
-
-    private func calendarScheduleFooter(_ calendar: CalendarSnapshot, isCompact: Bool) -> some View {
-        let displayEvents = Array(calendar.events.prefix(2))
-        let reservedHeight: CGFloat? = isCompact ? 23 : nil
-
-        return VStack(alignment: .leading, spacing: isCompact ? 1 : 3) {
-            if displayEvents.isEmpty {
-                calendarEmptyScheduleRow(calendar, isCompact: isCompact)
-            } else {
-                ForEach(displayEvents) { event in
-                    calendarFooterEventRow(event, isCompact: isCompact)
-                }
-            }
-        }
-        .padding(.top, isCompact ? 2 : 1)
-        .frame(height: reservedHeight, alignment: .bottom)
-    }
-
-    private func calendarHorizontalSchedule(_ calendar: CalendarSnapshot) -> some View {
-        let displayEvents = Array(calendar.events.prefix(3))
-
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("今日日程")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(IslandDesignTokens.secondaryText)
-
-            if displayEvents.isEmpty {
-                calendarEmptyScheduleRow(calendar, isCompact: false)
-            } else {
-                ForEach(displayEvents) { event in
-                    calendarFooterEventRow(event, isCompact: false)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func calendarFooterEventRow(_ event: CalendarEventSummary, isCompact: Bool) -> some View {
-        HStack(spacing: isCompact ? 6 : 5) {
-            Circle()
-                .fill(calendarAccentColor(event.calendarColorHex))
-                .frame(width: isCompact ? 4 : 4, height: isCompact ? 4 : 4)
-
-            Text("\(event.timeText)  \(event.title)")
-                .font(moduleFooterFont)
-                .foregroundStyle(IslandDesignTokens.primaryText)
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, minHeight: isCompact ? 11 : 13, alignment: .leading)
-    }
-
-    private func calendarEmptyScheduleRow(_ calendar: CalendarSnapshot, isCompact: Bool) -> some View {
-        let emptyText = calendar.isAuthorized ? "今日没有日程" : calendar.statusText
-
-        return HStack(spacing: isCompact ? 6 : 5) {
-            Circle()
-                .fill(Color.white.opacity(0.34))
-                .frame(width: isCompact ? 4 : 4, height: isCompact ? 4 : 4)
-
-            Text(emptyText)
-                .font(moduleFooterFont)
-                .foregroundStyle(IslandDesignTokens.secondaryText)
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, minHeight: isCompact ? 11 : 13, alignment: .leading)
     }
 
     private func calendarMonthDays(for date: Date) -> [CalendarMonthDay] {
@@ -2723,61 +1855,6 @@ struct ExpandedIslandView: View {
         return names[day - 1]
     }
 
-    private func calendarDefaultContent(_ calendar: CalendarSnapshot) -> some View {
-        return HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(calendar.dayTitle)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(IslandDesignTokens.secondaryText)
-
-                Text(calendar.dateTitle)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(IslandDesignTokens.primaryText)
-            }
-            .frame(minWidth: 58, alignment: .leading)
-
-            Spacer(minLength: 0)
-
-            VStack(alignment: .leading, spacing: 4) {
-                if calendar.events.isEmpty {
-                    Text(calendar.statusText)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(IslandDesignTokens.secondaryText)
-                        .lineLimit(1)
-                } else {
-                    ForEach(calendar.events.prefix(2)) { event in
-                        calendarEventRow(event, isDense: false)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .help(calendar.statusText)
-    }
-
-    private func calendarEventRow(_ event: CalendarEventSummary, isDense: Bool) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(calendarAccentColor(event.calendarColorHex))
-                .frame(width: isDense ? 4 : 5, height: isDense ? 4 : 5)
-
-            Text(event.timeText)
-                .font(.system(size: isDense ? 9 : 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(IslandDesignTokens.secondaryText)
-                .frame(width: isDense ? 34 : 30, alignment: .leading)
-
-            Text(event.title)
-                .font(.system(size: isDense ? 10 : 11, weight: .medium, design: .rounded))
-                .foregroundStyle(IslandDesignTokens.primaryText)
-                .lineLimit(1)
-
-            if isDense {
-                Spacer(minLength: 0)
-            }
-        }
-        .frame(maxWidth: isDense ? .infinity : nil, minHeight: isDense ? 14 : nil, alignment: .leading)
-    }
-
     private var todoModuleContent: some View {
         TodoScheduleCardView(
             tasks: viewModel.todoTasks,
@@ -2791,36 +1868,6 @@ struct ExpandedIslandView: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .help("日程待办")
-    }
-
-    private var todoDisplayLimit: Int {
-        if isVeryTallModuleCard {
-            return 5
-        }
-
-        return isTallModuleCard ? 4 : 2
-    }
-
-    private func todoLine(_ reminder: ReminderItemSummary) -> some View {
-        HStack(spacing: 6) {
-            TodoCompletionButton {
-                reminderProvider.completeReminder(reminder)
-            }
-            .padding(.leading, 2)
-
-            Text(reminder.title)
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(IslandDesignTokens.primaryText)
-                .lineLimit(1)
-
-            Spacer(minLength: 4)
-
-            Text(reminder.dueText)
-                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(reminder.isOverdue ? Color.white.opacity(0.88) : IslandDesignTokens.secondaryText)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, minHeight: 14, alignment: .leading)
     }
 
     private var mediaModuleContent: some View {
@@ -2895,63 +1942,6 @@ struct ExpandedIslandView: View {
         return playback.state == .paused ? "播放已暂停" : "正在同步歌词..."
     }
 
-    private func mediaInfoControlsRow(_ playback: PlaybackSnapshot) -> some View {
-        HStack(alignment: .center, spacing: 7) {
-            PlaybackArtworkTile(source: playback.artworkSource, isLive: playback.isLive, size: mediaArtworkSize)
-
-            Text(playback.appName)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(IslandDesignTokens.secondaryText)
-                .lineLimit(1)
-
-            Spacer(minLength: 6)
-
-            playbackControlCluster(playback)
-                .fixedSize()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func mediaProgressRow(playback: PlaybackSnapshot, displayedProgress: Double) -> some View {
-        HStack(spacing: 7) {
-            Text(playback.elapsedText(for: displayedProgress))
-                .frame(width: 34, alignment: .leading)
-
-            playbackProgressScrubber(playback)
-                .frame(maxWidth: .infinity)
-
-            Text(playback.durationText)
-                .frame(width: 34, alignment: .trailing)
-        }
-        .font(.system(size: 9, weight: .semibold, design: .rounded))
-        .foregroundStyle(IslandDesignTokens.secondaryText)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func mediaTrackTitleRow(_ playback: PlaybackSnapshot) -> some View {
-        Text(playback.title)
-            .font(moduleFooterFont)
-            .foregroundStyle(IslandDesignTokens.primaryText)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var mediaArtworkSize: CGFloat {
-        if isTallModuleCard {
-            return 44
-        }
-
-        return moduleCardHeight < 86 ? 26 : 34
-    }
-
-    private var mediaRowSpacing: CGFloat {
-        if isTallModuleCard {
-            return 8
-        }
-
-        return moduleCardHeight < 86 ? 3 : 5
-    }
-
     private var mediaScrubReleaseDelay: Double {
         0.42
     }
@@ -2982,95 +1972,6 @@ struct ExpandedIslandView: View {
 
     private func displayedPlaybackProgress(_ playback: PlaybackSnapshot) -> Double {
         isScrubbingPlayback ? playbackScrubProgress : playback.progress
-    }
-
-    private func playbackProgressScrubber(_ playback: PlaybackSnapshot) -> some View {
-        PlaybackProgressScrubber(
-            progress: displayedPlaybackProgress(playback),
-            isEnabled: playback.canSeek,
-            onScrubStarted: {
-                beginPlaybackScrub(ifNeeded: playback)
-            },
-            onScrubChanged: { progress in
-                playbackScrubProgress = progress
-            },
-            onScrubEnded: { progress in
-                finishPlaybackScrub(at: progress)
-            }
-        )
-    }
-
-    private func playbackToggleButton(_ playback: PlaybackSnapshot) -> some View {
-        Button(action: {
-            viewModel.playbackProvider.togglePlayback()
-        }) {
-            Image(systemName: playback.state.controlSymbolName)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(IslandDesignTokens.primaryText)
-                .frame(width: 20, height: 20)
-                .background {
-                    Circle()
-                        .fill(Color.white.opacity(playback.isLive ? 0.10 : 0.055))
-                }
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help(playback.state == .playing ? "暂停播放" : "播放")
-    }
-
-    private func playbackControlCluster(_ playback: PlaybackSnapshot) -> some View {
-        HStack(spacing: 4) {
-            playbackTransportButton("backward.fill", help: "上一首", isEnabled: playback.isLive) {
-                viewModel.playbackProvider.previousTrack()
-            }
-
-            playbackToggleButton(playback)
-
-            playbackTransportButton("forward.fill", help: "下一首", isEnabled: playback.isLive) {
-                viewModel.playbackProvider.nextTrack()
-            }
-        }
-    }
-
-    private func playbackTransportButton(
-        _ systemName: String,
-        help: String,
-        isEnabled: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(IslandDesignTokens.primaryText)
-                .frame(width: 18, height: 18)
-                .background {
-                    Circle()
-                        .fill(Color.white.opacity(isEnabled ? 0.075 : 0.035))
-                }
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.45)
-        .help(help)
-    }
-
-    private func iconButton(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {
-        HoverIconButton(systemName: systemName, help: help, action: action)
-    }
-
-    private func imageButton(
-        _ imageName: String,
-        fallbackSystemName: String,
-        help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        HoverImageButton(
-            imageName: imageName,
-            fallbackSystemName: fallbackSystemName,
-            help: help,
-            action: action
-        )
     }
 
     private func calendarAccentColor(_ hex: String?) -> Color {
@@ -3152,13 +2053,20 @@ private struct WeatherCardView: View {
 
                     Spacer(minLength: 0)
 
-                    WeatherMainIconView(
-                        symbolName: weather.symbolName,
-                        condition: weather.condition
-                    )
+                    if weather.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(Color.white.opacity(0.62))
+                            .frame(width: iconSize, height: iconSize)
+                    } else {
+                        WeatherMainIconView(
+                            symbolName: weather.symbolName,
+                            condition: weather.condition
+                        )
                         .frame(width: iconSize, height: iconSize)
                         .offset(x: isCompact ? 4 : 5, y: isCompact ? -1 : -2)
                         .allowsHitTesting(false)
+                    }
                 }
                 .frame(width: size.width, height: middleHeight, alignment: .center)
                 .offset(y: -mainContentLift)
@@ -3256,14 +2164,30 @@ private struct WeatherMainIconView: View {
         WeatherCardIconKind(symbolName: symbolName, condition: condition)
     }
 
+    private var timelineKind: WeatherTimelineKind {
+        switch kind {
+        case .cloudy, .unavailable:
+            return .staticIcon
+        case .clear, .partlyCloudy, .fog, .drizzle, .rain, .heavyRain, .sleet, .snow, .thunderstorm:
+            return .animatedIcon
+        }
+    }
+
+    private var needsContinuousTimeline: Bool {
+        TimelineRefreshPolicy.shouldUseContinuousWeatherTimeline(
+            kind: timelineKind,
+            reduceMotion: reduceMotion
+        )
+    }
+
     var body: some View {
         Group {
-            if reduceMotion {
-                iconFrame(phase: 0)
-            } else {
+            if needsContinuousTimeline {
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                     iconFrame(phase: context.date.timeIntervalSinceReferenceDate)
                 }
+            } else {
+                iconFrame(phase: 0)
             }
         }
         .animation(.easeOut(duration: 0.18), value: kind)
@@ -3930,25 +2854,14 @@ private struct TodoScheduleCardView: View {
     @State private var currentCardWidth: CGFloat = 0
     @State private var moreButtonScreenFrame: CGRect?
 
-    @AppStorage(TodoCardStorageKeys.sortMode) private var sortModeRaw = TodoSortMode.timeAsc.rawValue
-    @AppStorage(TodoCardStorageKeys.showDateSelector) private var showDateSelector = true
-    @AppStorage(TodoCardStorageKeys.showTime) private var showTime = true
-    @AppStorage(TodoCardStorageKeys.showCategory) private var showCategory = true
-    @AppStorage(TodoCardStorageKeys.showCompleted) private var showCompleted = false
-    @AppStorage(TodoCardStorageKeys.maxVisibleItems) private var maxVisibleItems = 2
-    @AppStorage(TodoCardStorageKeys.defaultRange) private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
-    @AppStorage(TodoCardStorageKeys.highlightColor) private var highlightColorRaw = TodoHighlightColor.blue.rawValue
-    @AppStorage(TodoCardStorageKeys.useCompactMode) private var useCompactMode = false
-    @AppStorage(TodoCardStorageKeys.showEdgeGlow) private var showEdgeGlow = true
-    @AppStorage(TodoCardStorageKeys.showReminderBadge) private var showReminderBadge = true
-    @AppStorage(TodoCardStorageKeys.dueSoonMinutes) private var dueSoonMinutes = 15
+    private var todoSettings = TodoCardSettingsStorage()
 
     private let calendar: Calendar
     private let tasks: [TodoTask]
     private let onCreate: (TodoCardCreateDraft) -> Void
     private let onComplete: (TodoSchedulePreviewItem) -> Void
-    private let onRestore: (TodoSchedulePreviewItem) -> Void
-    private let onDelete: (TodoSchedulePreviewItem) -> Void
+    private let onRestore: (TodoSchedulePreviewItem) async -> Bool
+    private let onDelete: (TodoSchedulePreviewItem) async -> Bool
     private let onExternalInteractiveFrameChange: (CGRect?) -> Void
     private let allowsFloatingContent: Bool
     private let onOpenSettings: () -> Void
@@ -3958,8 +2871,8 @@ private struct TodoScheduleCardView: View {
         calendar: Calendar = .current,
         onCreate: @escaping (TodoCardCreateDraft) -> Void,
         onComplete: @escaping (TodoSchedulePreviewItem) -> Void,
-        onRestore: @escaping (TodoSchedulePreviewItem) -> Void,
-        onDelete: @escaping (TodoSchedulePreviewItem) -> Void,
+        onRestore: @escaping (TodoSchedulePreviewItem) async -> Bool,
+        onDelete: @escaping (TodoSchedulePreviewItem) async -> Bool,
         onExternalInteractiveFrameChange: @escaping (CGRect?) -> Void,
         allowsFloatingContent: Bool,
         onOpenSettings: @escaping () -> Void
@@ -3983,11 +2896,11 @@ private struct TodoScheduleCardView: View {
     var body: some View {
         GeometryReader { proxy in
             let size = proxy.size
-            let isCompact = useCompactMode || size.height < 105
+            let isCompact = todoSettings.useCompactMode || size.height < 105
             let isNarrow = size.width < 248
             let dateOptions = dateOptions()
             let items = selectedTodos()
-            let maxItems = max(1, min(maxVisibleItems, isCompact ? 2 : 4))
+            let maxItems = max(1, min(todoSettings.maxVisibleItems, isCompact ? 2 : 4))
             let accent = accentColor
 
             ZStack(alignment: .topTrailing) {
@@ -4001,7 +2914,7 @@ private struct TodoScheduleCardView: View {
                             .frame(width: isCompact ? 32 : (isNarrow ? 36 : 40), alignment: .leading)
                             .shadow(color: .white.opacity(0.06), radius: 6, y: 1)
 
-                        if showDateSelector {
+                        if todoSettings.showDateSelector {
                             TodoDateSelectorView(
                                 dates: dateOptions,
                                 selectedDate: effectiveSelectedDate,
@@ -4020,19 +2933,17 @@ private struct TodoScheduleCardView: View {
                         items: items,
                         isCompact: isCompact,
                         maxVisibleItems: maxItems,
-                        showTime: showTime,
-                        showCategory: showCategory,
+                        showTime: todoSettings.showTime,
+                        showCategory: todoSettings.showCategory,
                         accentColor: accent,
                         todayFooterText: showTodayOnly ? "今日还有 \(items.count) 项" : nil,
                         onComplete: onComplete
                     )
-                    .id(dayIdentifier(for: effectiveSelectedDate) + "-\(showTodayOnly)-\(sortMode.rawValue)-\(showCompleted)")
-                    .transition(.opacity.combined(with: .offset(y: 4)))
                 }
                 .frame(width: size.width, height: size.height, alignment: .topLeading)
                 .animation(.easeOut(duration: 0.18), value: dayIdentifier(for: effectiveSelectedDate))
                 .animation(.easeOut(duration: 0.18), value: showTodayOnly)
-                .animation(.easeOut(duration: 0.18), value: sortModeRaw)
+                .animation(.easeOut(duration: 0.18), value: todoSettings.sortModeRaw)
 
             }
             .onAppear {
@@ -4059,32 +2970,19 @@ private struct TodoScheduleCardView: View {
     }
 
     private var settings: TodoCardSettings {
-        TodoCardSettings(
-            showDateSelector: showDateSelector,
-            showTime: showTime,
-            showCategory: showCategory,
-            showCompleted: showCompleted,
-            maxVisibleItems: maxVisibleItems,
-            defaultRange: defaultRange,
-            sortMode: sortMode,
-            highlightColor: highlightColor,
-            useCompactMode: useCompactMode,
-            showEdgeGlow: showEdgeGlow,
-            showReminderBadge: showReminderBadge,
-            dueSoonMinutes: dueSoonMinutes
-        )
+        todoSettings.snapshot
     }
 
     private var sortMode: TodoSortMode {
-        TodoSortMode(rawValue: sortModeRaw) ?? .timeAsc
+        todoSettings.sortMode
     }
 
     private var defaultRange: TodoDefaultRange {
-        TodoDefaultRange(rawValue: defaultRangeRaw) ?? .selectedDate
+        todoSettings.defaultRange
     }
 
     private var highlightColor: TodoHighlightColor {
-        TodoHighlightColor(rawValue: highlightColorRaw) ?? .blue
+        todoSettings.highlightColor
     }
 
     private var effectiveSelectedDate: Date {
@@ -4137,7 +3035,7 @@ private struct TodoScheduleCardView: View {
                                 Circle()
                                     .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
                             }
-                            .shadow(color: accentColor.opacity(showEdgeGlow ? 0.24 : 0), radius: 8, y: 1)
+                            .shadow(color: accentColor.opacity(todoSettings.showEdgeGlow ? 0.24 : 0), radius: 8, y: 1)
                     }
                 }
                 .contentShape(Circle())
@@ -4362,6 +3260,7 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
     private var anchor: NSPoint = .zero
     private var onExternalFrameChange: ((CGRect?) -> Void)?
     private var requestedFrame: NSRect?
+    private var outsideClickMonitor: Any?
 
     var isPresented: Bool {
         panel != nil
@@ -4376,8 +3275,8 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
         cardSize: CGSize,
         onCreate: @escaping (TodoCardCreateDraft) -> Void,
         onComplete: @escaping (TodoSchedulePreviewItem) -> Void,
-        onRestore: @escaping (TodoSchedulePreviewItem) -> Void,
-        onDelete: @escaping (TodoSchedulePreviewItem) -> Void,
+        onRestore: @escaping (TodoSchedulePreviewItem) async -> Bool,
+        onDelete: @escaping (TodoSchedulePreviewItem) async -> Bool,
         onTodayOnlyChanged: @escaping (Bool) -> Void,
         onExternalFrameChange: @escaping (CGRect?) -> Void,
         onOpenSettings: @escaping () -> Void
@@ -4426,15 +3325,18 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
 
         resize(to: initialSize, animated: false)
         activePanel.orderFrontRegardless()
+        installOutsideClickMonitor(for: activePanel)
     }
 
     func close() {
         guard let closingPanel = panel else {
+            removeOutsideClickMonitor()
             requestedFrame = nil
             onExternalFrameChange = nil
             return
         }
 
+        removeOutsideClickMonitor()
         let frameChange = onExternalFrameChange
         panel = nil
         requestedFrame = nil
@@ -4464,6 +3366,7 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
         guard let currentPanel = panel,
               closingPanel === currentPanel else { return }
 
+        removeOutsideClickMonitor()
         let frameChange = onExternalFrameChange
         closingPanel.delegate = nil
         panel = nil
@@ -4474,6 +3377,38 @@ private final class TodoFloatingPanelPresenter: NSObject, NSWindowDelegate {
         DispatchQueue.main.async {
             closingPanel.contentView = nil
         }
+    }
+
+    private func installOutsideClickMonitor(for presentedPanel: TodoFloatingPanel) {
+        removeOutsideClickMonitor()
+        outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self, weak presentedPanel] event in
+            guard let self,
+                  let presentedPanel,
+                  self.panel === presentedPanel,
+                  event.window !== presentedPanel
+            else {
+                return event
+            }
+
+            // Let the underlying island control receive this click before the
+            // floating panel tears down its hosting view.
+            DispatchQueue.main.async { [weak self, weak presentedPanel] in
+                guard let self,
+                      let presentedPanel,
+                      self.panel === presentedPanel
+                else { return }
+                self.close()
+            }
+            return event
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        guard let outsideClickMonitor else { return }
+        NSEvent.removeMonitor(outsideClickMonitor)
+        self.outsideClickMonitor = nil
     }
 
     private func makePanel(size: CGSize) -> TodoFloatingPanel {
@@ -4551,8 +3486,8 @@ private struct TodoFloatingPanelRootView: View {
     let cardSize: CGSize
     let onCreate: (TodoCardCreateDraft) -> Void
     let onComplete: (TodoSchedulePreviewItem) -> Void
-    let onRestore: (TodoSchedulePreviewItem) -> Void
-    let onDelete: (TodoSchedulePreviewItem) -> Void
+    let onRestore: (TodoSchedulePreviewItem) async -> Bool
+    let onDelete: (TodoSchedulePreviewItem) async -> Bool
     let onTodayOnlyChanged: (Bool) -> Void
     let onClose: () -> Void
     let onOpenSettings: () -> Void
@@ -4562,18 +3497,7 @@ private struct TodoFloatingPanelRootView: View {
     @State private var activePanel: TodoCardPanel?
     @State private var createDraft: TodoCardCreateDraft
 
-    @AppStorage(TodoCardStorageKeys.sortMode) private var sortModeRaw = TodoSortMode.timeAsc.rawValue
-    @AppStorage(TodoCardStorageKeys.showDateSelector) private var showDateSelector = true
-    @AppStorage(TodoCardStorageKeys.showTime) private var showTime = true
-    @AppStorage(TodoCardStorageKeys.showCategory) private var showCategory = true
-    @AppStorage(TodoCardStorageKeys.showCompleted) private var showCompleted = false
-    @AppStorage(TodoCardStorageKeys.maxVisibleItems) private var maxVisibleItems = 2
-    @AppStorage(TodoCardStorageKeys.defaultRange) private var defaultRangeRaw = TodoDefaultRange.selectedDate.rawValue
-    @AppStorage(TodoCardStorageKeys.highlightColor) private var highlightColorRaw = TodoHighlightColor.blue.rawValue
-    @AppStorage(TodoCardStorageKeys.useCompactMode) private var useCompactMode = false
-    @AppStorage(TodoCardStorageKeys.showEdgeGlow) private var showEdgeGlow = true
-    @AppStorage(TodoCardStorageKeys.showReminderBadge) private var showReminderBadge = true
-    @AppStorage(TodoCardStorageKeys.dueSoonMinutes) private var dueSoonMinutes = 15
+    private var todoSettings = TodoCardSettingsStorage()
 
     init(
         tasks: [TodoTask],
@@ -4583,8 +3507,8 @@ private struct TodoFloatingPanelRootView: View {
         cardSize: CGSize,
         onCreate: @escaping (TodoCardCreateDraft) -> Void,
         onComplete: @escaping (TodoSchedulePreviewItem) -> Void,
-        onRestore: @escaping (TodoSchedulePreviewItem) -> Void,
-        onDelete: @escaping (TodoSchedulePreviewItem) -> Void,
+        onRestore: @escaping (TodoSchedulePreviewItem) async -> Bool,
+        onDelete: @escaping (TodoSchedulePreviewItem) async -> Bool,
         onTodayOnlyChanged: @escaping (Bool) -> Void,
         onClose: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
@@ -4664,11 +3588,11 @@ private struct TodoFloatingPanelRootView: View {
     }
 
     private var sortMode: TodoSortMode {
-        TodoSortMode(rawValue: sortModeRaw) ?? .timeAsc
+        todoSettings.sortMode
     }
 
     private var highlightColor: TodoHighlightColor {
-        TodoHighlightColor(rawValue: highlightColorRaw) ?? .blue
+        todoSettings.highlightColor
     }
 
     private var accentColor: Color {
@@ -4710,25 +3634,25 @@ private struct TodoFloatingPanelRootView: View {
                 selectedMode: sortMode,
                 accentColor: accentColor,
                 onSelect: { mode in
-                    sortModeRaw = mode.rawValue
+                    todoSettings.$sortModeRaw.wrappedValue = mode.rawValue
                     onClose()
                 },
                 onClose: onClose
             )
         case .settings:
             TodoCardSettingsView(
-                showDateSelector: $showDateSelector,
-                showTime: $showTime,
-                showCategory: $showCategory,
-                showCompleted: $showCompleted,
-                maxVisibleItems: $maxVisibleItems,
-                defaultRangeRaw: $defaultRangeRaw,
-                sortModeRaw: $sortModeRaw,
-                highlightColorRaw: $highlightColorRaw,
-                useCompactMode: $useCompactMode,
-                showEdgeGlow: $showEdgeGlow,
-                showReminderBadge: $showReminderBadge,
-                dueSoonMinutes: $dueSoonMinutes,
+                showDateSelector: todoSettings.$showDateSelector,
+                showTime: todoSettings.$showTime,
+                showCategory: todoSettings.$showCategory,
+                showCompleted: todoSettings.$showCompleted,
+                maxVisibleItems: todoSettings.$maxVisibleItems,
+                defaultRangeRaw: todoSettings.$defaultRangeRaw,
+                sortModeRaw: todoSettings.$sortModeRaw,
+                highlightColorRaw: todoSettings.$highlightColorRaw,
+                useCompactMode: todoSettings.$useCompactMode,
+                showEdgeGlow: todoSettings.$showEdgeGlow,
+                showReminderBadge: todoSettings.$showReminderBadge,
+                dueSoonMinutes: todoSettings.$dueSoonMinutes,
                 accentColor: accentColor,
                 onClose: onClose,
                 onOpenFullSettings: onOpenSettings
@@ -4775,7 +3699,7 @@ private struct TodoFloatingPanelRootView: View {
     }
 
     private func allTodos() -> [TodoSchedulePreviewItem] {
-        sortedTasks(tasks.filter { showCompleted || !$0.isCompleted })
+        sortedTasks(tasks.filter { todoSettings.showCompleted || !$0.isCompleted })
             .map { TodoSchedulePreviewItem(task: $0, calendar: calendar) }
     }
 
@@ -4846,7 +3770,7 @@ private struct TodoDateSelectorView: View {
     var body: some View {
         let spacing: CGFloat = isCompact ? 3 : (isNarrow ? 3 : 4)
         let metrics = HorizontalDateStripMetrics(
-            visibleItemCount: isNarrow ? 3 : 4,
+            visibleItemCount: 3,
             spacing: spacing
         )
 
@@ -4872,7 +3796,7 @@ private struct TodoDateSelectorView: View {
                 }
             }
         }
-        .frame(height: isCompact ? 28 : (isNarrow ? 30 : 32))
+        .frame(height: isCompact ? 34 : (isNarrow ? 36 : TodoScheduleCardMetrics.dateItemHeight))
         .frame(maxWidth: .infinity, alignment: .trailing)
         .contentShape(Rectangle())
     }
@@ -4881,32 +3805,31 @@ private struct TodoDateSelectorView: View {
         Button {
             onSelect(item.date)
         } label: {
-            HStack(spacing: isCompact ? 2 : 3) {
+            VStack(spacing: isCompact ? 3 : 3.5) {
                 Text(item.weekday)
-                    .font(.system(size: isCompact ? 8.4 : (isNarrow ? 9 : 9.6), weight: .semibold, design: .rounded))
+                    .font(.system(size: isCompact ? 7.6 : (isNarrow ? 7.8 : 8.4), weight: .semibold, design: .rounded))
                     .foregroundStyle(weekdayColor(isSelected: item.isSelected))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
+                    .minimumScaleFactor(0.82)
 
                 Text(item.day)
-                    .font(.system(size: isCompact ? 15.5 : (isNarrow ? 17 : 18), weight: .bold, design: .rounded))
+                    .font(.system(size: isCompact ? 18 : (isNarrow ? 19 : 21), weight: .bold, design: .rounded))
                     .foregroundStyle(dayColor(isSelected: item.isSelected))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.76)
+                    .minimumScaleFactor(0.72)
                     .shadow(
                         color: item.isSelected ? accentColor.opacity(0.24) : .clear,
                         radius: 5,
                         y: 1
                     )
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .overlay(alignment: .bottom) {
+
                 Capsule()
                     .fill(accentColor.opacity(item.isSelected ? 0.62 : 0))
                     .frame(width: isCompact ? 12 : 15, height: 2)
                     .blur(radius: item.isSelected ? 3 : 0)
                     .opacity(item.isSelected ? 1 : 0)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -5072,7 +3995,7 @@ private struct TodoCreateSheetView: View {
                     .frame(height: 56, alignment: .topLeading)
                     .background(TodoRoundedFieldBackground(isActive: false, accentColor: accentColor))
 
-                Toggle("保存时提醒", isOn: $draft.hasReminder)
+                Toggle("到期时提醒", isOn: $draft.hasReminder)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.white.opacity(0.78))
@@ -5750,16 +4673,23 @@ private struct TodoCompletedListView: View {
     let items: [TodoSchedulePreviewItem]
     let accentColor: Color
     let onClose: () -> Void
-    let onRestore: (TodoSchedulePreviewItem) -> Void
-    let onDelete: (TodoSchedulePreviewItem) -> Void
+    let onRestore: (TodoSchedulePreviewItem) async -> Bool
+    let onDelete: (TodoSchedulePreviewItem) async -> Bool
+
+    @State private var removedItemIDs: Set<UUID> = []
+    @State private var pendingItemIDs: Set<UUID> = []
+
+    private var visibleItems: [TodoSchedulePreviewItem] {
+        items.filter { !removedItemIDs.contains($0.id) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            panelHeader(title: "已完成事项", subtitle: "\(items.count) 项", onClose: onClose)
+            panelHeader(title: "已完成事项", subtitle: "\(visibleItems.count) 项", onClose: onClose)
 
             ScrollView {
                 LazyVStack(spacing: 8) {
-                    ForEach(items) { item in
+                    ForEach(visibleItems) { item in
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(item.title)
@@ -5773,12 +4703,18 @@ private struct TodoCompletedListView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
 
                             HStack(spacing: 8) {
-                                Button("恢复") { onRestore(item) }
+                                Button("恢复") {
+                                    perform(item, operation: onRestore)
+                                }
                                     .buttonStyle(TodoPanelCompactButtonStyle(role: .secondary, accentColor: accentColor))
                                     .frame(width: 52)
-                                Button("删除") { onDelete(item) }
+                                    .disabled(pendingItemIDs.contains(item.id))
+                                Button("删除") {
+                                    perform(item, operation: onDelete)
+                                }
                                     .buttonStyle(TodoPanelCompactButtonStyle(role: .danger, accentColor: accentColor))
                                     .frame(width: 52)
+                                    .disabled(pendingItemIDs.contains(item.id))
                             }
                             .frame(width: 112, alignment: .trailing)
                         }
@@ -5787,7 +4723,7 @@ private struct TodoCompletedListView: View {
                         .background(TodoListRowBackground())
                     }
 
-                    if items.isEmpty {
+                    if visibleItems.isEmpty {
                         TodoPanelEmptyState(title: "暂无已完成事项")
                     }
                 }
@@ -5795,6 +4731,29 @@ private struct TodoCompletedListView: View {
         }
         .padding(14)
         .todoGlassPanel(cornerRadius: 22, edgeGlow: true, castsShadow: false)
+    }
+
+    private func perform(
+        _ item: TodoSchedulePreviewItem,
+        operation: @escaping (TodoSchedulePreviewItem) async -> Bool
+    ) {
+        guard !pendingItemIDs.contains(item.id) else { return }
+
+        pendingItemIDs.insert(item.id)
+        withAnimation(.easeOut(duration: 0.16)) {
+            _ = removedItemIDs.insert(item.id)
+        }
+
+        Task { @MainActor in
+            let succeeded = await operation(item)
+            pendingItemIDs.remove(item.id)
+
+            if !succeeded {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    _ = removedItemIDs.remove(item.id)
+                }
+            }
+        }
     }
 }
 
@@ -5875,7 +4834,7 @@ private struct TodoCardSettingsView: View {
             panelHeader(title: "卡片设置", subtitle: "显示、筛选、排序与视觉", onClose: onClose)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
                     settingsSection("显示设置") {
                         TodoSettingsToggle(title: "显示日期选择器", isOn: $showDateSelector, accentColor: accentColor)
                         TodoSettingsToggle(title: "显示时间", isOn: $showTime, accentColor: accentColor)
@@ -5902,14 +4861,7 @@ private struct TodoCardSettingsView: View {
 
                     settingsSection("提醒设置") {
                         TodoSettingsToggle(title: "显示提醒标识", isOn: $showReminderBadge, accentColor: accentColor)
-                        Picker("即将到期", selection: $dueSoonMinutes) {
-                            Text("5 分钟").tag(5)
-                            Text("15 分钟").tag(15)
-                            Text("30 分钟").tag(30)
-                            Text("1 小时").tag(60)
-                        }
-                        .colorScheme(.dark)
-                        .tint(accentColor)
+                        TodoDueSoonPicker(selection: $dueSoonMinutes)
                     }
                 }
             }
@@ -5925,14 +4877,74 @@ private struct TodoCardSettingsView: View {
     }
 
     private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             Text(title)
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.36))
             content()
         }
-        .padding(10)
+        .padding(9)
         .background(TodoListRowBackground())
+    }
+}
+
+private struct TodoDueSoonPicker: View {
+    @Binding var selection: Int
+
+    private let values = [5, 15, 30, 60]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("即将到期")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.64))
+
+            Spacer()
+
+            Menu {
+                ForEach(values, id: \.self) { value in
+                    Button {
+                        selection = value
+                    } label: {
+                        HStack {
+                            Text(title(for: value))
+                            if value == selection {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(title(for: selection))
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.82))
+                        .lineLimit(1)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8.8, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                }
+                .padding(.horizontal, 10)
+                .frame(width: 132, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(Color.white.opacity(0.045), lineWidth: 0.7)
+                        }
+                }
+            }
+            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .focusable(false)
+            .handCursor()
+        }
+    }
+
+    private func title(for value: Int) -> String {
+        value == 60 ? "1 小时" : "\(value) 分钟"
     }
 }
 
@@ -6045,10 +5057,10 @@ private struct TodoAccentSwitchToggleStyle: ToggleStyle {
                     Circle()
                         .fill(Color.white.opacity(configuration.isOn ? 0.96 : 0.76))
                         .shadow(color: Color.black.opacity(0.22), radius: 2, y: 1)
-                        .frame(width: 18, height: 18)
+                        .frame(width: 14, height: 14)
                         .padding(3)
                 }
-                .frame(width: 44, height: 24)
+                .frame(width: 38, height: 20)
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -6135,7 +5147,7 @@ private struct TodoListPreviewView: View {
         VStack(alignment: .leading, spacing: isCompact ? 6 : TodoScheduleCardMetrics.rowSpacing) {
             if items.isEmpty {
                 Text("暂无已安排待办")
-                    .font(.system(size: isCompact ? 12.5 : 15, weight: .semibold, design: .rounded))
+                    .font(.system(size: isCompact ? 11 : 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.white.opacity(0.34))
                     .lineLimit(1)
                     .minimumScaleFactor(0.76)
@@ -6156,13 +5168,13 @@ private struct TodoListPreviewView: View {
                 let remainingCount = max(0, items.count - displayLimit)
                 if let todayFooterText {
                     Text(todayFooterText)
-                        .font(.system(size: isCompact ? 8.5 : 9.5, weight: .semibold, design: .rounded))
+                        .font(.system(size: isCompact ? 10 : 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(accentColor.opacity(0.78))
                         .lineLimit(1)
                         .padding(.top, isCompact ? 0 : 1)
                 } else if remainingCount > 0 {
                     Text("还有 \(remainingCount) 项")
-                        .font(.system(size: isCompact ? 8.5 : 9.5, weight: .semibold, design: .rounded))
+                        .font(.system(size: isCompact ? 10 : 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(accentColor.opacity(0.78))
                         .lineLimit(1)
                         .padding(.top, isCompact ? 0 : 1)
@@ -6182,7 +5194,7 @@ private struct TodoListPreviewRow: View {
     let onComplete: (TodoSchedulePreviewItem) -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: isCompact ? 6 : 8) {
+        HStack(alignment: .center, spacing: isCompact ? 5 : 7) {
             Button { onComplete(item) } label: {
                 ZStack {
                     Circle()
@@ -6193,18 +5205,18 @@ private struct TodoListPreviewRow: View {
                         }
                     if item.isCompleted {
                         Image(systemName: "checkmark")
-                            .font(.system(size: isCompact ? 5.8 : 6.4, weight: .bold))
+                            .font(.system(size: isCompact ? 4.3 : 5, weight: .bold))
                             .foregroundStyle(Color.white.opacity(0.70))
                     }
                 }
-                .frame(width: isCompact ? 12 : 14, height: isCompact ? 12 : 14)
+                .frame(width: isCompact ? 9 : 10, height: isCompact ? 9 : 10)
             }
             .buttonStyle(.plain)
             .handCursor()
             .disabled(item.isCompleted)
 
             Text(item.title)
-                .font(.system(size: isCompact ? 10.5 : 12.5, weight: .semibold, design: .rounded))
+                .font(.system(size: isCompact ? 10.5 : 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(item.isCompleted ? 0.42 : 0.86))
                 .lineLimit(1)
                 .strikethrough(item.isCompleted, color: Color.white.opacity(0.30))
@@ -6224,7 +5236,7 @@ private struct TodoListPreviewRow: View {
                         .foregroundStyle(accentColor.opacity(0.72))
                 }
             }
-            .font(.system(size: isCompact ? 8.5 : 10, weight: .medium, design: .rounded))
+            .font(.system(size: isCompact ? 9 : 10, weight: .medium, design: .rounded))
             .foregroundStyle(Color.white.opacity(item.isCompleted ? 0.25 : 0.50))
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
@@ -6960,34 +5972,6 @@ private struct TopTabButton: View {
     }
 }
 
-private struct TodoCompletionButton: View {
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(isHovering ? 0.70 : 0.38), lineWidth: 1.25)
-
-                Image(systemName: "checkmark")
-                    .font(.system(size: 6, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(isHovering ? 0.92 : 0))
-            }
-            .frame(width: 14, height: 14)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovering = hovering
-        }
-        .handCursor()
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .help("完成待办")
-    }
-}
-
 private struct MusicLyricsPlaybackCard: View {
     let playback: PlaybackSnapshot
     let diagnosticText: String
@@ -7590,44 +6574,6 @@ private struct MusicLyricTextWidthKey: PreferenceKey {
     }
 }
 
-private struct MusicTransportControls: View {
-    let playback: PlaybackSnapshot
-    let onPrevious: () -> Void
-    let onTogglePlayback: () -> Void
-    let onNext: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            MusicTransportIconButton(
-                systemName: "backward.fill",
-                help: "上一首",
-                isEnabled: playback.isLive,
-                size: 20,
-                iconSize: 8,
-                action: onPrevious
-            )
-
-            MusicTransportIconButton(
-                systemName: playback.state.controlSymbolName,
-                help: playback.state == .playing ? "暂停播放" : "播放",
-                isEnabled: true,
-                size: 23,
-                iconSize: 9,
-                action: onTogglePlayback
-            )
-
-            MusicTransportIconButton(
-                systemName: "forward.fill",
-                help: "下一首",
-                isEnabled: playback.isLive,
-                size: 20,
-                iconSize: 8,
-                action: onNext
-            )
-        }
-    }
-}
-
 private struct MusicPlaybackStateGlyph: View {
     let playback: PlaybackSnapshot
 
@@ -7869,178 +6815,6 @@ private enum MusicPlayerAppIcon {
     }
 }
 
-private struct MusicLyricWindowView: View {
-    let lyrics: [LyricLine]
-    let currentIndex: Int?
-    let statusText: String
-    let isLoading: Bool
-    let fontSize: CGFloat
-
-    private var displayEntries: [MusicLyricWindowEntry] {
-        lyrics.enumerated().compactMap { index, line in
-            let text = lyricText(for: line)
-            guard !text.isEmpty else { return nil }
-
-            return MusicLyricWindowEntry(
-                sourceIndex: index,
-                line: line,
-                text: text
-            )
-        }
-    }
-
-    private var resolvedCurrentIndex: Int? {
-        guard !displayEntries.isEmpty else { return nil }
-
-        guard let currentIndex else {
-            return 0
-        }
-
-        if let exact = displayEntries.firstIndex(where: { $0.sourceIndex == currentIndex }) {
-            return exact
-        }
-
-        if let next = displayEntries.firstIndex(where: { $0.sourceIndex > currentIndex }) {
-            return next
-        }
-
-        return displayEntries.indices.last
-    }
-
-    private var rows: [MusicLyricWindowRow] {
-        guard let currentIndex = resolvedCurrentIndex else { return [] }
-
-        return [-1, 0, 1].compactMap { relative in
-            let index = currentIndex + relative
-            guard displayEntries.indices.contains(index) else { return nil }
-            let entry = displayEntries[index]
-
-            return MusicLyricWindowRow(
-                id: "\(entry.sourceIndex)-\(entry.line.id)",
-                text: entry.text,
-                relative: relative
-            )
-        }
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                if isLoading {
-                    MusicLyricLoadingPlaceholder()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .transition(.opacity)
-                } else if rows.isEmpty {
-                    Text(statusText)
-                        .font(.system(size: max(10, fontSize - 0.5), weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.48))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .transition(.opacity)
-                } else {
-                    lyricRows(in: proxy.size)
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
-            .clipped()
-        }
-        .animation(.easeInOut(duration: 0.48), value: resolvedCurrentIndex)
-        .animation(.easeOut(duration: 0.22), value: isLoading)
-    }
-
-    private func lyricRows(in size: CGSize) -> some View {
-        let rowStep = max(fontSize + 5, size.height / 3.18)
-
-        return ZStack {
-            ForEach(rows) { row in
-                Text(row.text)
-                    .font(.system(
-                        size: row.relative == 0 ? fontSize : max(8.4, fontSize - 1.1),
-                        weight: row.relative == 0 ? .bold : .semibold,
-                        design: .rounded
-                    ))
-                    .foregroundStyle(color(for: row.relative).opacity(opacity(for: row.relative)))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: size.width, height: rowStep, alignment: .center)
-                    .scaleEffect(row.relative == 0 ? 1 : 0.94)
-                    .blur(radius: row.relative == 0 ? 0 : 0.35)
-                    .offset(y: CGFloat(row.relative) * rowStep)
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: 10)),
-                            removal: .opacity.combined(with: .offset(y: -10))
-                        )
-                    )
-            }
-        }
-        .frame(width: size.width, height: size.height, alignment: .center)
-    }
-
-    private func color(for relative: Int) -> Color {
-        Color.white
-    }
-
-    private func opacity(for relative: Int) -> Double {
-        switch relative {
-        case 0:
-            return 0.94
-        case -1:
-            return 0.38
-        default:
-            return 0.48
-        }
-    }
-
-    private func lyricText(for line: LyricLine) -> String {
-        let words = line.words.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !words.isEmpty {
-            return words
-        }
-
-        return line.translation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-}
-
-private struct MusicLyricWindowEntry {
-    let sourceIndex: Int
-    let line: LyricLine
-    let text: String
-}
-
-private struct MusicLyricWindowRow: Identifiable {
-    let id: String
-    let text: String
-    let relative: Int
-}
-
-private struct MusicLyricLoadingPlaceholder: View {
-    @State private var isBreathing = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3) { index in
-                Capsule()
-                    .fill(Color.white.opacity(0.42))
-                    .frame(width: index == 1 ? 18 : 12, height: 4)
-                    .scaleEffect(isBreathing ? 1.0 : 0.72, anchor: .center)
-                    .opacity(isBreathing ? 0.78 : 0.24)
-                    .animation(
-                        .easeInOut(duration: 0.82)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(index) * 0.14),
-                        value: isBreathing
-                    )
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
-        .onAppear {
-            isBreathing = true
-        }
-    }
-}
-
 private struct MusicProgressScrubber: View {
     let progress: Double
     let isEnabled: Bool
@@ -8139,70 +6913,6 @@ private struct MusicProgressScrubber: View {
 
     private func clamped(_ value: Double) -> Double {
         min(max(value, 0), 1)
-    }
-}
-
-private struct PlaybackArtworkTile: View {
-    let source: PlaybackArtworkSource?
-    let isLive: Bool
-    var size: CGFloat = 36
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(isLive ? 0.10 : 0.055))
-
-            artworkContent
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .frame(width: size, height: size)
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.6)
-        }
-    }
-
-    @ViewBuilder
-    private var artworkContent: some View {
-        switch source {
-        case .file(let url, let version):
-            AsyncPlaybackArtworkImage(
-                source: .file(url, version: version),
-                width: size,
-                height: size
-            ) {
-                placeholder
-            }
-        case .imageData(let data, let id):
-            AsyncPlaybackArtworkImage(
-                source: .imageData(data, id: id),
-                width: size,
-                height: size
-            ) {
-                placeholder
-            }
-        case .remote(let url):
-            AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.15))) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                default:
-                    placeholder
-                }
-            }
-        case nil:
-            placeholder
-        }
-    }
-
-    private var placeholder: some View {
-        Image(systemName: "music.note")
-            .font(.system(size: 15, weight: .semibold))
-            .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(Color.white.opacity(isLive ? 0.74 : 0.36))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -8363,129 +7073,26 @@ private final class PlaybackArtworkImageCache {
     }
 }
 
-private struct PlaybackProgressScrubber: View {
-    let progress: Double
-    let isEnabled: Bool
-    let onScrubStarted: () -> Void
-    let onScrubChanged: (Double) -> Void
-    let onScrubEnded: (Double) -> Void
-
-    @State private var localProgress: Double?
-    @State private var isDragging = false
-
-    private var displayProgress: Double {
-        clamped(localProgress ?? progress)
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            progressBody(width: proxy.size.width)
-        }
-        .frame(height: 14)
-        .opacity(isEnabled ? 1 : 0.58)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("播放进度")
-    }
-
-    private func progressBody(width: CGFloat) -> some View {
-        let safeWidth = max(width, 1)
-        let knobWidth: CGFloat = 22
-        let filledWidth = safeWidth * CGFloat(displayProgress)
-        let knobOffset = min(max(filledWidth - knobWidth / 2, 0), max(safeWidth - knobWidth, 0))
-
-        return ZStack(alignment: .leading) {
-            Capsule()
-                .fill(Color.white.opacity(0.10))
-                .frame(height: 4)
-
-            Capsule()
-                .fill(Color.white.opacity(isEnabled ? 0.78 : 0.26))
-                .frame(width: max(filledWidth, displayProgress > 0 ? 5 : 0), height: 4)
-
-            Capsule()
-                .fill(Color.white.opacity(isEnabled ? 0.96 : 0.48))
-                .frame(width: knobWidth, height: 10)
-                .shadow(color: Color.black.opacity(isEnabled ? 0.22 : 0), radius: 4, x: 0, y: 2)
-                .offset(x: knobOffset)
-        }
-        .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14, alignment: .center)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    guard isEnabled else { return }
-                    if !isDragging {
-                        isDragging = true
-                        onScrubStarted()
-                    }
-
-                    let newProgress = progressValue(for: value.location.x, width: safeWidth)
-                    localProgress = newProgress
-                    onScrubChanged(newProgress)
-                }
-                .onEnded { value in
-                    guard isEnabled else { return }
-                    let newProgress = progressValue(for: value.location.x, width: safeWidth)
-                    localProgress = newProgress
-                    isDragging = false
-                    onScrubEnded(newProgress)
-
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                        if !isDragging {
-                            localProgress = nil
-                        }
-                    }
-                }
-        )
-    }
-
-    private func progressValue(for locationX: CGFloat, width: CGFloat) -> Double {
-        clamped(Double(locationX / max(width, 1)))
-    }
-
-    private func clamped(_ value: Double) -> Double {
-        min(max(value, 0), 1)
-    }
-}
-
-private struct HoverImageButton: View {
-    let imageName: String
-    let fallbackSystemName: String
-    let help: String
-    let action: () -> Void
-
+private struct SettingsMenuLabel: View {
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
-            iconContent
-                .frame(width: 26, height: 26)
-                .brightness(isHovering ? 0.22 : 0)
-                .saturation(isHovering ? 1.08 : 0.96)
-                .opacity(isHovering ? 1 : 0.76)
-                .shadow(color: Color.white.opacity(isHovering ? 0.14 : 0), radius: isHovering ? 5 : 0)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        Image(systemName: "gearshape.fill")
+            .font(.system(size: 15, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(Color.white.opacity(isHovering ? 0.95 : 0.72))
+            .brightness(isHovering ? 0.18 : 0)
+            .shadow(
+                color: Color.white.opacity(isHovering ? 0.16 : 0),
+                radius: isHovering ? 5 : 0
+            )
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
         }
         .handCursor()
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .help(help)
-    }
-
-    @ViewBuilder
-    private var iconContent: some View {
-        if let image = BundleImageLoader.image(named: imageName) {
-            Image(nsImage: image)
-                .resizable()
-                .scaledToFit()
-        } else {
-            Image(systemName: fallbackSystemName)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(IslandDesignTokens.iconColor)
-        }
     }
 }
 

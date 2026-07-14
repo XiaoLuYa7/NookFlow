@@ -9,7 +9,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var editorModel: SettingsEditorModel?
     private let settings: IslandSettings
     private let defaultWindowSize = NSSize(width: 1020, height: 660)
-    private var previousActivationPolicy: NSApplication.ActivationPolicy?
+    private var presentationTask: Task<Void, Never>?
 
     init(settings: IslandSettings) {
         self.settings = settings
@@ -43,42 +43,65 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func presentWindowOnTop() {
         guard let window else { return }
 
+        presentationTask?.cancel()
+        if !window.isKeyWindow {
+            window.alphaValue = 0
+        }
+
         NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        activateApplication()
 
         if window.isMiniaturized {
             window.deminiaturize(nil)
         }
 
-        // Bring the settings window above the island and the current app once,
-        // then drop it back to normal so it does not pin itself above other apps.
-        window.level = .floating
+        // Keep a normal app-window level throughout activation. Changing levels
+        // after the window appears can reorder it behind the previously active app.
+        window.level = .normal
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         window.makeKey()
         NSApp.arrangeInFront(nil)
 
-        Task { @MainActor [weak self, weak window] in
-            await Task.yield()
-            guard let self, let window, self.window === window, window.isVisible else { return }
+        revealWindowWhenActive(window)
+    }
 
-            NSApp.activate(ignoringOtherApps: true)
-            window.orderFrontRegardless()
-            window.makeKeyAndOrderFront(nil)
+    private func activateApplication() {
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
-            try? await Task.sleep(nanoseconds: 420_000_000)
-            guard self.window === window, window.isVisible else { return }
-            window.level = .normal
+    private func revealWindowWhenActive(_ window: NSWindow) {
+        presentationTask = Task { @MainActor [weak self, weak window] in
+            guard let self, let window else { return }
+
+            // Activation policy changes can take more than one run-loop turn.
+            // Keep the panel transparent until AppKit applies active control colors.
+            for attempt in 0..<4 {
+                guard !Task.isCancelled, self.window === window, window.isVisible else { return }
+
+                self.activateApplication()
+                window.orderFrontRegardless()
+                window.makeKeyAndOrderFront(nil)
+                await Task.yield()
+
+                if NSApp.isActive, window.isKeyWindow {
+                    break
+                }
+
+                if attempt < 3 {
+                    try? await Task.sleep(nanoseconds: 45_000_000)
+                }
+            }
+
+            guard !Task.isCancelled, self.window === window, window.isVisible else { return }
+            window.alphaValue = 1
+            self.presentationTask = nil
         }
     }
 
     private func ensureAppCanActivateForSettings() {
-        guard previousActivationPolicy == nil else { return }
-
-        let policy = NSApp.activationPolicy()
-        previousActivationPolicy = policy
-
-        if policy != .regular {
+        if NSApp.activationPolicy() != .regular {
             NSApp.setActivationPolicy(.regular)
         }
     }
@@ -93,7 +116,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.title = "L-Nook Settings"
+        panel.title = "NookFlow 设置"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
@@ -143,15 +166,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        restoreActivationPolicyIfNeeded()
-    }
-
-    private func restoreActivationPolicyIfNeeded() {
-        guard let previousActivationPolicy else { return }
-        self.previousActivationPolicy = nil
-
-        if previousActivationPolicy != NSApp.activationPolicy() {
-            NSApp.setActivationPolicy(previousActivationPolicy)
-        }
+        presentationTask?.cancel()
+        presentationTask = nil
+        window?.alphaValue = 1
     }
 }

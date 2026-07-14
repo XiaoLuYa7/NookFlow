@@ -185,7 +185,7 @@ struct NotificationSettingsView: View {
     var body: some View {
         SettingsPageScaffold(contentMaxWidth: NotificationStyle.contentMaxWidth) {
             PageHeaderView(
-                title: "实时通知",
+                title: "通知中心",
                 subtitle: "分别管理天气、设备状态与日常关怀提醒。",
                 icon: "bell.fill"
             ) {
@@ -576,6 +576,7 @@ private struct NotificationStatusItem: Identifiable {
 }
 
 struct NotificationSectionView<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let title: String
     let footer: String
     let isEnabled: Bool
@@ -588,12 +589,11 @@ struct NotificationSectionView<Content: View>: View {
                     .font(AppTypography.sectionTitle)
                     .foregroundStyle(NotificationStyle.primaryText)
                 Spacer()
-                Text(isEnabled ? "已启用" : "已关闭")
-                    .font(AppTypography.caption)
-                    .foregroundStyle(isEnabled ? AppColor.positive : NotificationStyle.secondaryText)
-                Circle()
-                    .fill(isEnabled ? AppColor.positive : AppColor.textDisabled)
-                    .frame(width: 6, height: 6)
+                SettingsStatusBadge(
+                    title: isEnabled ? "已启用" : "已关闭",
+                    systemImage: isEnabled ? "checkmark.circle.fill" : "minus.circle",
+                    tone: isEnabled ? .positive : .neutral
+                )
             }
             .padding(.horizontal, AppSpacing.xs)
 
@@ -615,7 +615,7 @@ struct NotificationSectionView<Content: View>: View {
                 .foregroundStyle(NotificationStyle.sectionTitle)
                 .padding(.horizontal, AppSpacing.xs)
         }
-        .animation(AppMotion.standard, value: isEnabled)
+        .animation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion), value: isEnabled)
     }
 }
 
@@ -1026,7 +1026,7 @@ private enum NotificationStyle {
     static let sectionTitle = AppColor.textTertiary
     static let controlText = AppColor.textBody
     static let divider = AppColor.divider
-    static let cardRadius = AppRadius.row
+    static let cardRadius = AppRadius.largeCard
     static let sectionSpacing = AppSpacing.lg
-    static let contentMaxWidth: CGFloat = 980
+    static let contentMaxWidth: CGFloat = 1120
 }

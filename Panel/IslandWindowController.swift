@@ -460,8 +460,8 @@ final class IslandWindowController: NSObject {
 
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "当前设备暂不支持 L-Nook"
-        alert.informativeText = "L-Nook 需要带顶部摄像头刘海区域的 Mac。当前屏幕没有可识别的摄像头区域，因此不会显示灵动岛胶囊。"
+        alert.messageText = "当前设备暂不支持 NookFlow"
+        alert.informativeText = "NookFlow 需要带顶部摄像头刘海区域的 Mac。当前屏幕没有可识别的摄像头区域，因此不会显示灵动岛胶囊。"
         alert.addButton(withTitle: "知道了")
         alert.runModal()
     }

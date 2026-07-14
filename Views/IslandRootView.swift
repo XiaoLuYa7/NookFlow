@@ -47,12 +47,7 @@ struct IslandRootView: View {
         .onAppear {
             viewModel.setReduceMotionEnabled(accessibilityReduceMotion)
             viewModel.playbackProvider.updateAccessConfiguration(from: settings)
-            viewModel.playbackProvider.start()
-            weatherProvider.start()
-            deviceInfoProvider.start()
-            batteryProvider.start()
-            systemStatusProvider.start()
-            foregroundAppProvider.start()
+            refreshRuntimeProviders()
             updateCompactCapsuleMode()
             updateTutorialHintVisibility()
         }
@@ -62,6 +57,7 @@ struct IslandRootView: View {
         .onReceive(viewModel.playbackProvider.$snapshot) { snapshot in
             currentSnapshot = snapshot
             viewModel.lyricsProvider.update(for: snapshot, trackID: nil)
+            updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
             updateCompactCapsuleMode()
             configureCompactLyricLoadingTask()
         }
@@ -88,25 +84,31 @@ struct IslandRootView: View {
         }
         .onChange(of: settings.compactLeftSideIcon) { oldValue, newValue in
             handleSystemSideSelectionChange(oldValue: oldValue, newValue: newValue)
+            refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.compactRightSideIcon) { oldValue, newValue in
             handleSystemSideSelectionChange(oldValue: oldValue, newValue: newValue)
+            refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.showCustomCompactIcons) { _, _ in
+            refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.showMusicLyrics) { _, _ in
+            refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.showMusicTrackName) { _, _ in
+            refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.foregroundAppLinkEnabled) { _, enabled in
             if !enabled {
                 clearForegroundPrompt()
             }
+            refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.foregroundHoldDuration) { _, _ in
@@ -116,6 +118,7 @@ struct IslandRootView: View {
             updateTutorialHintVisibility()
         }
         .onChange(of: viewModel.presentationPhase) { _, _ in
+            refreshRuntimeProviders()
             updateTutorialHintVisibility()
         }
         .onReceive(foregroundAppProvider.$prompt) { prompt in
@@ -126,6 +129,15 @@ struct IslandRootView: View {
         }
         .onChange(of: settings.allowSpotifyAccess) { _, _ in
             viewModel.playbackProvider.updateAccessConfiguration(from: settings)
+        }
+        .onChange(of: settings.showWeatherModule) { _, _ in
+            refreshRuntimeProviders()
+        }
+        .onChange(of: settings.showDeviceInfoModule) { _, _ in
+            refreshRuntimeProviders()
+        }
+        .onChange(of: settings.showMediaModule) { _, _ in
+            refreshRuntimeProviders()
         }
         .onDisappear {
             viewModel.playbackProvider.stop()
@@ -301,6 +313,8 @@ struct IslandRootView: View {
                         contentRevealProgress: viewModel.contentRevealProgress,
                         secondaryContentRevealProgress: viewModel.secondaryContentRevealProgress,
                         settings: settings,
+                        weatherProvider: weatherProvider,
+                        deviceInfoProvider: deviceInfoProvider,
                         onOpenSettings: onOpenSettings,
                         onOpenTodoSettings: onOpenTodoSettings,
                         onOpenFeedback: onOpenFeedback
@@ -393,6 +407,75 @@ struct IslandRootView: View {
         )
     }
 
+    private func refreshRuntimeProviders() {
+        let compactIcons = settings.showCustomCompactIcons
+            ? [settings.compactLeftSideIcon, settings.compactRightSideIcon]
+            : []
+        let isExpanded = viewModel.presentationPhase != .collapsed
+
+        let needsWeather = settings.showWeatherModule && isExpanded
+            || compactIcons.contains(where: Self.usesWeatherData)
+        if needsWeather {
+            weatherProvider.start()
+        } else {
+            weatherProvider.stop()
+        }
+
+        let needsDeviceInfo = settings.showDeviceInfoModule && isExpanded
+            || compactIcons.contains(where: Self.usesDeviceInfo)
+        if needsDeviceInfo {
+            deviceInfoProvider.start()
+        } else {
+            deviceInfoProvider.stop()
+        }
+
+        if compactIcons.contains(.battery) {
+            batteryProvider.start()
+        } else {
+            batteryProvider.stop()
+        }
+
+        if compactIcons.contains(.mute) {
+            systemStatusProvider.start()
+        } else {
+            systemStatusProvider.stop()
+        }
+
+        if settings.foregroundAppLinkEnabled {
+            foregroundAppProvider.start()
+        } else {
+            foregroundAppProvider.stop()
+        }
+
+        let needsPlayback = settings.showMediaModule && isExpanded
+            || settings.showMusicLyrics
+            || settings.showMusicTrackName
+            || compactIcons.contains(.music)
+        if needsPlayback {
+            viewModel.playbackProvider.start()
+        } else {
+            viewModel.playbackProvider.stop()
+        }
+    }
+
+    private static func usesWeatherData(_ icon: SettingsHomeSideIcon) -> Bool {
+        switch icon {
+        case .weather, .wind, .temperatureRange, .humidity:
+            true
+        default:
+            false
+        }
+    }
+
+    private static func usesDeviceInfo(_ icon: SettingsHomeSideIcon) -> Bool {
+        switch icon {
+        case .network, .cpu, .memory, .disk:
+            true
+        default:
+            false
+        }
+    }
+
     private func handleSystemSideSelectionChange(
         oldValue: SettingsHomeSideIcon,
         newValue: SettingsHomeSideIcon
@@ -449,7 +532,7 @@ struct IslandRootView: View {
             Button {
                 NSApp.terminate(nil)
             } label: {
-                Label("退出 L-Nook", systemImage: "rectangle.portrait.and.arrow.right")
+                Label("退出 NookFlow", systemImage: "rectangle.portrait.and.arrow.right")
             }
         }
     }
@@ -545,7 +628,7 @@ struct IslandRootView: View {
         }
 
         guard !lyrics.isEmpty,
-              let index, lyrics.indices.contains(index) else {
+              let index = resolvedCompactLyricIndex(requestedIndex: index, lyrics: lyrics) else {
             updateCompactLyricStatusText()
             return
         }
@@ -574,6 +657,20 @@ struct IslandRootView: View {
             currentLyricStartTimeMS = line.startTimeMS
             nextLyricStartTimeMS = nextStart
             compactLyricKey += 1
+        }
+    }
+
+    private func resolvedCompactLyricIndex(
+        requestedIndex: Int?,
+        lyrics: [LyricLine]
+    ) -> Int? {
+        if let requestedIndex, lyrics.indices.contains(requestedIndex) {
+            return requestedIndex
+        }
+
+        let displayElapsedMS = max(0, currentSnapshot.elapsed + 0.5) * 1000
+        return lyrics.lastIndex { line in
+            line.startTimeMS <= displayElapsedMS
         }
     }
 

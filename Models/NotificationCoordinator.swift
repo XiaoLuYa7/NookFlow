@@ -11,13 +11,12 @@ final class NotificationCoordinator {
     private let weatherProvider = WeatherProvider()
     private let batteryProvider = BatteryProvider()
     private let deviceInfoProvider = DeviceInfoProvider()
-    private let networkMonitor = NWPathMonitor()
     private let networkQueue = DispatchQueue(label: "com.personal.DynamicNook.notification-network")
     private let defaults = UserDefaults.standard
 
     private var isStarted = false
     private var runtimeTask: Task<Void, Never>?
-    private var applyTask: Task<Void, Never>?
+    private var networkMonitor: NWPathMonitor?
     private var weatherCancellable: AnyCancellable?
     private var lastWeatherRefresh = Date.distantPast
     private var lastRuntimeCheck = Date()
@@ -35,38 +34,13 @@ final class NotificationCoordinator {
 
     private init() {}
 
-    deinit {
-        runtimeTask?.cancel()
-        applyTask?.cancel()
-        networkMonitor.cancel()
+    isolated deinit {
+        stopRuntimeResources()
     }
 
     func start() {
         guard !isStarted else { return }
         isStarted = true
-
-        weatherCancellable = weatherProvider.$snapshot
-            .dropFirst()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] snapshot in
-                Task { @MainActor [weak self] in
-                    await self?.evaluateWeather(snapshot)
-                }
-            }
-
-        networkMonitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in
-                await self?.handleNetworkStatus(path.status)
-            }
-        }
-        networkMonitor.start(queue: networkQueue)
-
-        runtimeTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                await self?.runRuntimeChecks()
-                try? await Task.sleep(for: .seconds(30))
-            }
-        }
 
         preferencesDidChange(requestAuthorization: false)
     }
@@ -74,18 +48,10 @@ final class NotificationCoordinator {
     func preferencesDidChange(requestAuthorization _: Bool) {
         if !isStarted {
             start()
+            return
         }
 
-        applyTask?.cancel()
-        applyTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(180))
-            guard let self, !Task.isCancelled else { return }
-            if NotificationSettingsViewModel.shared.weather.isEnabled {
-                weatherProvider.start(autoRefreshInterval: nil)
-            } else {
-                weatherProvider.stop()
-            }
-        }
+        refreshRuntimeState()
     }
 
     func sendPreviewNotification() async -> Bool {
@@ -99,18 +65,123 @@ final class NotificationCoordinator {
         return true
     }
 
-    private func runRuntimeChecks() async {
-        resetWaterProgressIfNeeded()
+    private func refreshRuntimeState() {
+        let settings = notificationSettingsSnapshot()
+        let requirements = NotificationRuntimePolicy.requirements(for: settings)
+
+        if requirements.needsPeriodicChecks {
+            startRuntimeTask()
+        } else {
+            stopRuntimeTask()
+        }
+
+        if requirements.needsNetworkMonitor {
+            startNetworkMonitor()
+        } else {
+            stopNetworkMonitor()
+        }
+
+        if requirements.needsWeatherSubscription {
+            startWeatherSubscription()
+        } else {
+            stopWeatherSubscription()
+        }
+
+        if !settings.device.needsPeriodicChecks {
+            resetDeviceRuntimeState()
+        }
+        if !settings.dailyCare.needsPeriodicChecks {
+            sittingActiveDuration = 0
+            lastScheduleKeys.removeAll()
+        }
+    }
+
+    private func startRuntimeTask() {
+        guard runtimeTask == nil else { return }
+        lastRuntimeCheck = Date()
+        runtimeTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let settings = self?.notificationSettingsSnapshot(),
+                      NotificationRuntimePolicy.requirements(for: settings).needsPeriodicChecks
+                else {
+                    return
+                }
+
+                await self?.runRuntimeChecks(settings)
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+
+    private func stopRuntimeTask() {
+        runtimeTask?.cancel()
+        runtimeTask = nil
+        lastRuntimeCheck = Date()
+    }
+
+    private func startNetworkMonitor() {
+        guard networkMonitor == nil else { return }
+
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor [weak self] in
+                await self?.handleNetworkStatus(path.status)
+            }
+        }
+        monitor.start(queue: networkQueue)
+        networkMonitor = monitor
+    }
+
+    private func stopNetworkMonitor() {
+        networkMonitor?.cancel()
+        networkMonitor = nil
+        lastNetworkStatus = nil
+    }
+
+    private func startWeatherSubscription() {
+        guard weatherCancellable == nil else { return }
+
+        weatherCancellable = weatherProvider.$snapshot
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] snapshot in
+                Task { @MainActor [weak self] in
+                    await self?.evaluateWeather(snapshot)
+                }
+            }
+        weatherProvider.start(autoRefreshInterval: nil)
+    }
+
+    private func stopWeatherSubscription() {
+        weatherCancellable?.cancel()
+        weatherCancellable = nil
+        weatherProvider.stop()
+        lastWeatherRefresh = .distantPast
+    }
+
+    private func stopRuntimeResources() {
+        runtimeTask?.cancel()
+        runtimeTask = nil
+        stopNetworkMonitor()
+        stopWeatherSubscription()
+    }
+
+    private func runRuntimeChecks(_ settings: NotificationSettingsSnapshot) async {
+        if settings.dailyCare.needsWaterProgressReset {
+            resetWaterProgressIfNeeded()
+        }
 
         let now = Date()
         let elapsed = min(max(now.timeIntervalSince(lastRuntimeCheck), 0), 60)
         lastRuntimeCheck = now
+
         let preferences = NotificationSettingsViewModel.shared
+        if settings.dailyCare.needsPeriodicChecks {
+            await evaluateDailySchedule(preferences.dailyCare, now: now)
+            await evaluateSittingReminder(preferences.dailyCare, now: now, elapsed: elapsed)
+        }
 
-        await evaluateDailySchedule(preferences.dailyCare, now: now)
-        await evaluateSittingReminder(preferences.dailyCare, now: now, elapsed: elapsed)
-
-        if preferences.device.isEnabled,
+        if settings.device.needsPeriodicChecks,
            now.timeIntervalSince(lastDeviceCheck) >= 60 {
             lastDeviceCheck = now
             batteryProvider.refresh()
@@ -120,20 +191,43 @@ final class NotificationCoordinator {
                 battery: batteryProvider.snapshot,
                 device: deviceInfoProvider.snapshot
             )
-        } else if !preferences.device.isEnabled {
-            highUsageSampleCount = 0
-            wasLowBattery = false
-            wasNearlyCharged = false
-            wasLowStorage = false
         }
 
-        if preferences.weather.isEnabled {
+        if settings.weather.isEnabled {
             let interval = TimeInterval(max(30, parseMinutes(preferences.weather.checkFrequency)) * 60)
             if now.timeIntervalSince(lastWeatherRefresh) >= interval {
                 lastWeatherRefresh = now
                 weatherProvider.refresh()
             }
         }
+    }
+
+    private func notificationSettingsSnapshot() -> NotificationSettingsSnapshot {
+        let preferences = NotificationSettingsViewModel.shared
+        return NotificationSettingsSnapshot(
+            weather: WeatherNotificationSnapshot(isEnabled: preferences.weather.isEnabled),
+            device: DeviceNotificationSnapshot(
+                isEnabled: preferences.device.isEnabled,
+                lowBatteryEnabled: preferences.device.lowBatteryEnabled,
+                fullChargeReminderEnabled: preferences.device.fullChargeReminderEnabled,
+                performanceAlertEnabled: preferences.device.performanceAlertEnabled,
+                storageAlertEnabled: preferences.device.storageAlertEnabled,
+                networkStatusAlertEnabled: preferences.device.networkStatusAlertEnabled
+            ),
+            dailyCare: DailyCareNotificationSnapshot(
+                isEnabled: preferences.dailyCare.isEnabled,
+                waterReminderEnabled: preferences.dailyCare.waterReminderEnabled,
+                sitReminderEnabled: preferences.dailyCare.sitReminderEnabled,
+                sleepReminderEnabled: preferences.dailyCare.sleepReminderEnabled
+            )
+        )
+    }
+
+    private func resetDeviceRuntimeState() {
+        highUsageSampleCount = 0
+        wasLowBattery = false
+        wasNearlyCharged = false
+        wasLowStorage = false
     }
 
     private func evaluateDailySchedule(

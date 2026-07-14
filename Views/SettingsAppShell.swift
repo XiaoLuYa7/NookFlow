@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+struct SettingsNavigationGroup: Identifiable {
+    let id: String
+    let pages: [SettingsPage]
+}
+
 struct AppShellView<Sidebar: View, Content: View>: View {
     @ViewBuilder let sidebar: Sidebar
     @ViewBuilder let content: Content
@@ -27,18 +32,17 @@ struct AppShellView<Sidebar: View, Content: View>: View {
 }
 
 struct SidebarView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var selection: SettingsPage
     @Binding var isCollapsed: Bool
+    @State private var areLabelsVisible = true
+    @State private var requestedCollapsed = false
+    @State private var collapseAnimationTask: Task<Void, Never>?
 
-    private let pages: [SettingsPage] = [
-        .home,
-        .todo,
-        .music,
-        .quickApps,
-        .shortcuts,
-        .notifications,
-        .general,
-        .about
+    private let navigationGroups: [SettingsNavigationGroup] = [
+        SettingsNavigationGroup(id: "core", pages: [.home, .todo, .music, .quickApps]),
+        SettingsNavigationGroup(id: "automation", pages: [.shortcuts, .notifications]),
+        SettingsNavigationGroup(id: "system", pages: [.general, .about])
     ]
 
     var body: some View {
@@ -46,44 +50,57 @@ struct SidebarView: View {
             brand
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: AppSpacing.xs) {
-                    ForEach(pages) { page in
-                        SidebarItemView(
-                            title: page.title,
-                            systemName: page.icon,
-                            isSelected: selection == page,
-                            isCollapsed: isCollapsed
-                        ) {
-                            withAnimation(AppMotion.standard) {
-                                selection = page
+                LazyVStack(alignment: .leading, spacing: AppSpacing.lg) {
+                    ForEach(navigationGroups) { group in
+                        VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                            ForEach(group.pages) { page in
+                                SidebarItemView(
+                                    title: page.title,
+                                    systemName: page.icon,
+                                    isSelected: selection == page,
+                                    isCollapsed: isCollapsed,
+                                    showsTitle: areLabelsVisible
+                                ) {
+                                    withAnimation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion)) {
+                                        selection = page
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                .padding(.horizontal, AppSpacing.sm)
-                .padding(.vertical, AppSpacing.sm)
+                .padding(.horizontal, AppSpacing.md)
+                .padding(.vertical, AppSpacing.md)
             }
             .scrollIndicators(.never)
 
             collapseButton
                 .padding(AppSpacing.sm)
         }
-        .frame(width: isCollapsed ? 56 : 160)
-        .background(AppColor.sidebarBackground)
-        .animation(AppMotion.page, value: isCollapsed)
+        .frame(width: isCollapsed ? 60 : 208)
+        .background {
+            AppColor.sidebarBackground
+                .overlay(Color.white.opacity(0.16))
+        }
+        .animation(AppMotion.resolved(AppMotion.page, reduceMotion: reduceMotion), value: isCollapsed)
+        .onAppear {
+            requestedCollapsed = isCollapsed
+            areLabelsVisible = !isCollapsed
+        }
+        .onDisappear {
+            collapseAnimationTask?.cancel()
+            collapseAnimationTask = nil
+        }
     }
 
     private var brand: some View {
         HStack(spacing: AppSpacing.md) {
-            Image(nsImage: AppBrandAsset.icon)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 34, height: 34)
+            AppBrandIconView(size: 38)
 
-            if !isCollapsed {
+            if areLabelsVisible {
                 VStack(alignment: .leading, spacing: AppSpacing.xxs) {
-                    Text("L-Nook")
-                        .font(.system(size: 17, weight: .bold))
+                    Text("NookFlow")
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(AppColor.textPrimary)
                     Text("偏好设置")
                         .font(AppTypography.caption)
@@ -92,10 +109,10 @@ struct SidebarView: View {
                 .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, AppSpacing.md)
-        .padding(.top, AppSpacing.xxl)
-        .padding(.bottom, AppSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
+        .padding(.horizontal, isCollapsed ? 0 : AppSpacing.xl)
+        .padding(.top, 30)
+        .padding(.bottom, AppSpacing.xl)
     }
 
     private var collapseButton: some View {
@@ -103,9 +120,45 @@ struct SidebarView: View {
             title: isCollapsed ? "展开边栏" : "收起边栏",
             systemName: "sidebar.left",
             isSelected: false,
-            isCollapsed: isCollapsed
+            isCollapsed: isCollapsed,
+            showsTitle: areLabelsVisible
         ) {
-            isCollapsed.toggle()
+            toggleSidebar()
+        }
+    }
+
+    private func toggleSidebar() {
+        collapseAnimationTask?.cancel()
+        requestedCollapsed.toggle()
+
+        if reduceMotion {
+            isCollapsed = requestedCollapsed
+            areLabelsVisible = !requestedCollapsed
+            return
+        }
+
+        if requestedCollapsed {
+            withAnimation(AppMotion.quick) {
+                areLabelsVisible = false
+            }
+            collapseAnimationTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(140))
+                guard !Task.isCancelled, requestedCollapsed else { return }
+                withAnimation(AppMotion.page) {
+                    isCollapsed = true
+                }
+            }
+        } else {
+            withAnimation(AppMotion.page) {
+                isCollapsed = false
+            }
+            collapseAnimationTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled, !requestedCollapsed else { return }
+                withAnimation(AppMotion.quick) {
+                    areLabelsVisible = true
+                }
+            }
         }
     }
 }
@@ -118,6 +171,7 @@ struct SidebarItemView: View {
     let systemName: String
     let isSelected: Bool
     let isCollapsed: Bool
+    let showsTitle: Bool
     let action: () -> Void
 
     var body: some View {
@@ -126,20 +180,22 @@ struct SidebarItemView: View {
                 Image(systemName: systemName)
                     .font(.system(size: AppIconStyle.sidebarSize, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
-                    .frame(width: 44, height: AppControlStyle.largeHeight, alignment: .center)
+                    .frame(width: 38, height: AppControlStyle.largeHeight, alignment: .center)
 
-                if !isCollapsed {
+                if showsTitle {
                     Text(title)
                         .font(AppTypography.rowTitle)
                         .lineLimit(1)
-                        .padding(.leading, AppSpacing.xs)
+                        .padding(.leading, AppSpacing.sm)
                         .transition(.opacity)
                 }
 
-                Spacer(minLength: 0)
+                if !isCollapsed {
+                    Spacer(minLength: 0)
+                }
             }
-            .foregroundStyle(isSelected ? AppColor.accent : AppColor.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(isSelected ? AppColor.accent : AppColor.textBody)
+            .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
             .frame(height: AppControlStyle.largeHeight)
             .background {
                 RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous)
@@ -147,14 +203,14 @@ struct SidebarItemView: View {
                     .overlay {
                         if isSelected {
                             RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous)
-                                .stroke(AppColor.accentBorder, lineWidth: 1)
+                                .stroke(AppColor.accentBorder.opacity(0.9), lineWidth: 1)
                         }
                     }
             }
             .overlay(alignment: .leading) {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(AppColor.accentGradient)
+                        .fill(AppColor.accent)
                         .frame(width: 3, height: 20)
                         .padding(.leading, 2)
                 }

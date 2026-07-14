@@ -280,13 +280,6 @@ final class IslandSettings: ObservableObject {
         }
     }
 
-    @Published var hideDock: Bool {
-        didSet {
-            save(hideDock, for: Keys.hideDock)
-            applyDockVisibility()
-        }
-    }
-
     @Published var showPinButton: Bool {
         didSet { save(showPinButton, for: Keys.showPinButton) }
     }
@@ -454,7 +447,6 @@ final class IslandSettings: ObservableObject {
         launchAtLoginError = nil
         defaults.set(systemLaunchAtLoginEnabled, forKey: Keys.launchAtLogin)
         hideMenuBar = defaults.object(forKey: Keys.hideMenuBar) as? Bool ?? false
-        hideDock = defaults.object(forKey: Keys.hideDock) as? Bool ?? true
         showPinButton = defaults.object(forKey: Keys.showPinButton) as? Bool ?? true
         hideInFullscreen = defaults.object(forKey: Keys.hideInFullscreen) as? Bool ?? true
         bounceLevel = IslandBounceLevel(
@@ -523,8 +515,8 @@ final class IslandSettings: ObservableObject {
 
         defaults.removeObject(forKey: Keys.islandWidth)
         defaults.removeObject(forKey: Keys.islandHeight)
+        defaults.removeObject(forKey: "settings.hideDock")
 
-        applyDockVisibility()
         applyPresentationOptions()
     }
 
@@ -588,7 +580,6 @@ final class IslandSettings: ObservableObject {
         static let language = "settings.language"
         static let launchAtLogin = "settings.launchAtLogin"
         static let hideMenuBar = "settings.hideMenuBar"
-        static let hideDock = "settings.hideDock"
         static let showPinButton = "settings.showPinButton"
         static let hideInFullscreen = "settings.hideInFullscreen"
         static let bounceLevel = "settings.bounceLevel"
@@ -651,7 +642,7 @@ final class IslandSettings: ObservableObject {
 
             synchronizeLaunchAtLoginStatus()
             if SMAppService.mainApp.status == .requiresApproval {
-                launchAtLoginError = "请在系统设置的登录项中允许 L-Nook。"
+                launchAtLoginError = "请在系统设置的登录项中允许 NookFlow。"
             }
         } catch {
             synchronizeLaunchAtLoginStatus()
@@ -667,10 +658,6 @@ final class IslandSettings: ObservableObject {
 
     private static var isLaunchAtLoginEnabled: Bool {
         SMAppService.mainApp.status == .enabled
-    }
-
-    private func applyDockVisibility() {
-        NSApp.setActivationPolicy(hideDock ? .accessory : .regular)
     }
 
     private func applyPresentationOptions() {
