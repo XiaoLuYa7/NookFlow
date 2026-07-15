@@ -31,6 +31,7 @@ final class IslandViewModel: ObservableObject {
     @Published private(set) var openingKeyframeStartState = IslandShellAnimationState.collapsed
     @Published private(set) var usesOpeningKeyframes = false
     @Published private(set) var shouldMountExpandedContent = false
+    @Published private(set) var isExpandedRuntimeActive = false
     @Published private(set) var tabTransitionCanvasSize: CGSize?
     @Published var isFileDropChooserVisible = false
     @Published var fileDropHoverTarget: IslandFileDropTarget?
@@ -48,6 +49,7 @@ final class IslandViewModel: ObservableObject {
     private var collapseWork: DispatchWorkItem?
     private var capsuleExpandTask: Task<Void, Never>?
     private var presentationTask: Task<Void, Never>?
+    private var runtimeActivationTask: Task<Void, Never>?
     private var presentationGeneration = 0
     private var tabCanvasTask: Task<Void, Never>?
     private var isCameraHoverActive = false
@@ -72,6 +74,7 @@ final class IslandViewModel: ObservableObject {
         collapseWork?.cancel()
         capsuleExpandTask?.cancel()
         presentationTask?.cancel()
+        runtimeActivationTask?.cancel()
         tabCanvasTask?.cancel()
         playbackProvider.stop()
     }
@@ -117,6 +120,7 @@ final class IslandViewModel: ObservableObject {
         else { return }
 
         cancelCollapse()
+        deactivateExpandedRuntime()
         setExpandedContentOverflowHeight(0)
         cancelPendingCapsuleExpand()
         hoverPhase = .collapsing
@@ -205,7 +209,7 @@ final class IslandViewModel: ObservableObject {
             isPinned.toggle()
         }
         if isPinned {
-            cancelPresentationTask()
+            let generation = cancelPresentationTask()
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
@@ -220,6 +224,7 @@ final class IslandViewModel: ObservableObject {
                 compactCapsuleScaleY = 1
                 hoverPhase = .expanded
             }
+            scheduleExpandedRuntimeActivation(generation: generation)
             cancelCollapse()
         } else {
             scheduleCollapse()
@@ -518,6 +523,7 @@ final class IslandViewModel: ObservableObject {
     ) {
         performTrackpadFeedback()
         let generation = cancelPresentationTask()
+        deactivateExpandedRuntime()
         capsuleExpandTask?.cancel()
         capsuleExpandTask = nil
         let keyframeStartState = startingFromHoverPreview
@@ -616,8 +622,7 @@ final class IslandViewModel: ObservableObject {
                       self.presentationPhase == .revealingContent
                 else { return }
 
-                self.openingMotionPhase = .expanded
-                self.presentationPhase = .expanded
+                self.finishExpandedPresentation(generation: generation)
                 return
             }
 
@@ -664,10 +669,7 @@ final class IslandViewModel: ObservableObject {
                   self.presentationPhase == .revealingContent
             else { return }
 
-            self.usesOpeningKeyframes = false
-            self.shellAnimationState = .expanded
-            self.openingMotionPhase = .expanded
-            self.presentationPhase = .expanded
+            self.finishExpandedPresentation(generation: generation)
         }
     }
 
@@ -708,10 +710,47 @@ final class IslandViewModel: ObservableObject {
                   self.isPresentationCurrent(generation),
                   self.presentationPhase == .revealingContent
             else { return }
-            self.usesOpeningKeyframes = false
-            self.shellAnimationState = .expanded
-            self.presentationPhase = .expanded
+            self.finishExpandedPresentation(generation: generation)
         }
+    }
+
+    private func finishExpandedPresentation(generation: Int) {
+        guard isPresentationCurrent(generation) else { return }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            usesOpeningKeyframes = false
+            shellAnimationState = .expanded
+            openingMotionPhase = .expanded
+            presentationPhase = .expanded
+        }
+        scheduleExpandedRuntimeActivation(generation: generation)
+    }
+
+    private func scheduleExpandedRuntimeActivation(generation: Int) {
+        runtimeActivationTask?.cancel()
+        runtimeActivationTask = nil
+        guard !isExpandedRuntimeActive else { return }
+
+        runtimeActivationTask = Task { @MainActor [weak self] in
+            await Self.sleep(seconds: IslandDesignTokens.expandedRuntimeActivationDelay)
+            guard let self,
+                  !Task.isCancelled,
+                  self.isPresentationCurrent(generation),
+                  self.presentationPhase == .expanded
+            else { return }
+
+            self.isExpandedRuntimeActive = true
+            self.runtimeActivationTask = nil
+        }
+    }
+
+    private func deactivateExpandedRuntime() {
+        runtimeActivationTask?.cancel()
+        runtimeActivationTask = nil
+        guard isExpandedRuntimeActive else { return }
+        isExpandedRuntimeActive = false
     }
 
     private func revealCompactContentNearCollapseEnd(

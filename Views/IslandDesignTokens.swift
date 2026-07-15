@@ -142,6 +142,8 @@ enum IslandDesignTokens {
     static let shellOpenPrimaryOvershootDuration: TimeInterval = 0.10
     static let shellOpenUndershootDuration: TimeInterval = 0.32
     static let shellOpenFinalSettleDuration: TimeInterval = 0.30
+    static let shellOpenFinalSettleMinimumDuration: TimeInterval = 0.18
+    static let shellOpenFinalSettleMaximumDuration: TimeInterval = 0.22
     static let shellOpenContentRevealLead: TimeInterval = 0.08
     static let shellOpenContentRevealDelay: TimeInterval = shellOpenToExpandedDuration
         + shellOpenPrimaryOvershootDuration
@@ -158,6 +160,7 @@ enum IslandDesignTokens {
     static let primaryContentRevealDuration: TimeInterval = shellOpenFinalSettleDuration
     static let secondaryContentRevealDuration: TimeInterval = 0.20
     static let secondaryContentRevealDelay: TimeInterval = 0.04
+    static let expandedRuntimeActivationDelay: TimeInterval = 0.05
     static let contentHideDuration: TimeInterval = 0.13
     static let compactContentRevealDuration: TimeInterval = 0.10
     static let reduceMotionOpenDuration: TimeInterval = 0.18
@@ -184,11 +187,17 @@ enum IslandDesignTokens {
             minimum: shellOpenMinimumDuration,
             maximum: shellOpenMaximumDuration
         )
+        let settle = mappedDuration(
+            setting,
+            minimum: shellOpenFinalSettleMinimumDuration,
+            maximum: shellOpenFinalSettleMaximumDuration
+        )
+        let preSettleDuration = max(0, total - settle)
         return ShellOpenTiming(
-            toExpanded: total * 0.44,
-            overshoot: total * 0.09,
-            undershoot: total * 0.18,
-            settle: total * 0.29
+            toExpanded: preSettleDuration * (0.44 / 0.71),
+            overshoot: preSettleDuration * (0.09 / 0.71),
+            undershoot: preSettleDuration * (0.18 / 0.71),
+            settle: settle
         )
     }
 

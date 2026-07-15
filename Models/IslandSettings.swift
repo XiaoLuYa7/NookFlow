@@ -84,9 +84,9 @@ enum IslandBounceLevel: String, CaseIterable, Identifiable {
 
     var undershootScale: CGFloat {
         switch self {
-        case .subtle: 0.998
-        case .standard: 0.991
-        case .lively: 0.984
+        case .subtle: 0.999
+        case .standard: 0.996
+        case .lively: 0.993
         }
     }
 }
@@ -97,22 +97,6 @@ enum IslandExpansionMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     var title: String { self == .click ? "点击展开" : "悬浮展开" }
-}
-
-enum TutorialHintPolicy: String, CaseIterable, Identifiable {
-    case once
-    case always
-    case off
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .once: "一次"
-        case .always: "持续"
-        case .off: "关闭"
-        }
-    }
 }
 
 enum ForegroundAppPromptDisplayMode: String, CaseIterable, Identifiable {
@@ -300,12 +284,6 @@ final class IslandSettings: ObservableObject {
         didSet { save(hoverExpansionDelay, for: Keys.hoverExpansionDelay) }
     }
 
-    @Published var tutorialHintPolicy: TutorialHintPolicy {
-        didSet { save(tutorialHintPolicy.rawValue, for: Keys.tutorialHintPolicy) }
-    }
-
-    @Published private(set) var hasShownTutorialHint: Bool
-
     @Published var foregroundAppLinkEnabled: Bool {
         didSet { save(foregroundAppLinkEnabled, for: Keys.foregroundAppLinkEnabled) }
     }
@@ -456,10 +434,6 @@ final class IslandSettings: ObservableObject {
             rawValue: defaults.string(forKey: Keys.expansionMode) ?? ""
         ) ?? .hover
         hoverExpansionDelay = defaults.object(forKey: Keys.hoverExpansionDelay) as? Double ?? 0.42
-        tutorialHintPolicy = TutorialHintPolicy(
-            rawValue: defaults.string(forKey: Keys.tutorialHintPolicy) ?? ""
-        ) ?? .once
-        hasShownTutorialHint = defaults.object(forKey: Keys.hasShownTutorialHint) as? Bool ?? false
         foregroundAppLinkEnabled = defaults.object(forKey: Keys.foregroundAppLinkEnabled) as? Bool ?? false
         foregroundAppPromptDisplayMode = ForegroundAppPromptDisplayMode(
             rawValue: defaults.string(forKey: Keys.foregroundAppPromptDisplayMode) ?? ""
@@ -498,8 +472,10 @@ final class IslandSettings: ObservableObject {
         showImageCardModule = defaults.object(forKey: Keys.showImageCardModule) as? Bool ?? true
         showDeviceInfoModule = defaults.object(forKey: Keys.showDeviceInfoModule) as? Bool ?? true
         imageCardPath = defaults.string(forKey: Keys.imageCardPath) ?? ""
-        openSpeed = defaults.object(forKey: Keys.openSpeed) as? Double ?? 0.50
-        closeSpeed = defaults.object(forKey: Keys.closeSpeed) as? Double ?? 0.50
+        let storedOpenSpeed = defaults.object(forKey: Keys.openSpeed) as? Double ?? 0.59
+        let storedCloseSpeed = defaults.object(forKey: Keys.closeSpeed) as? Double ?? 0.59
+        openSpeed = Self.migratedAnimationSpeed(storedOpenSpeed)
+        closeSpeed = Self.migratedAnimationSpeed(storedCloseSpeed)
         closeDelay = defaults.object(forKey: Keys.closeDelay) as? Double ?? 0
         islandWidth = Double(IslandDesignTokens.defaultExpandedSize.width)
         islandHeight = Double(IslandDesignTokens.defaultExpandedSize.height)
@@ -518,6 +494,10 @@ final class IslandSettings: ObservableObject {
         defaults.removeObject(forKey: "settings.hideDock")
 
         applyPresentationOptions()
+    }
+
+    private static func migratedAnimationSpeed(_ value: Double) -> Double {
+        abs(value - 0.36) < 0.0001 ? 0.50 : value
     }
 
     private static func supportedSideIcon(
@@ -553,14 +533,11 @@ final class IslandSettings: ObservableObject {
         showCustomCompactIcons = true
         islandWidth = Double(IslandDesignTokens.defaultExpandedSize.width)
         islandHeight = Double(IslandDesignTokens.defaultExpandedSize.height)
-        openSpeed = 0.50
-        closeSpeed = 0.50
+        openSpeed = 0.59
+        closeSpeed = 0.59
         bounceLevel = .standard
         expansionMode = .hover
         hoverExpansionDelay = 0.42
-        tutorialHintPolicy = .once
-        hasShownTutorialHint = false
-        save(hasShownTutorialHint, for: Keys.hasShownTutorialHint)
         showPinButton = true
         foregroundAppLinkEnabled = false
         foregroundAppPromptDisplayMode = .applicationName
@@ -585,8 +562,6 @@ final class IslandSettings: ObservableObject {
         static let bounceLevel = "settings.bounceLevel"
         static let expansionMode = "settings.expansionMode"
         static let hoverExpansionDelay = "settings.hoverExpansionDelay"
-        static let tutorialHintPolicy = "settings.tutorialHintPolicy"
-        static let hasShownTutorialHint = "settings.hasShownTutorialHint"
         static let foregroundAppLinkEnabled = "settings.foregroundAppLinkEnabled"
         static let foregroundAppPromptDisplayMode = "settings.foregroundAppPromptDisplayMode"
         static let foregroundHoldDuration = "settings.foregroundHoldDuration"
@@ -623,12 +598,6 @@ final class IslandSettings: ObservableObject {
 
     private func save(_ value: Any, for key: String) {
         defaults.set(value, forKey: key)
-    }
-
-    func markTutorialHintShown() {
-        guard !hasShownTutorialHint else { return }
-        hasShownTutorialHint = true
-        save(hasShownTutorialHint, for: Keys.hasShownTutorialHint)
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {

@@ -6,6 +6,7 @@ struct ExpandedIslandView: View {
 
     @ObservedObject var viewModel: IslandViewModel
     let isContentReady: Bool
+    let runtimeIsActive: Bool
     let contentRevealProgress: Double
     let secondaryContentRevealProgress: Double
     @ObservedObject var settings: IslandSettings
@@ -62,11 +63,21 @@ struct ExpandedIslandView: View {
                 loadImageCardIfNeeded()
             }
             .onChange(of: isContentReady) { _, ready in
-                if ready {
+                if ready, runtimeIsActive {
                     refreshContentProviders()
                     loadImageCardIfNeeded()
                 } else {
                     stopContentProviders()
+                    stopImageCardLoading()
+                }
+            }
+            .onChange(of: runtimeIsActive) { _, active in
+                if active, isContentReady {
+                    refreshContentProviders(forceTodoSync: true)
+                    loadImageCardIfNeeded()
+                } else {
+                    stopContentProviders()
+                    stopImageCardLoading()
                 }
             }
             .onChange(of: viewModel.presentationPhase) { _, phase in
@@ -74,10 +85,9 @@ struct ExpandedIslandView: View {
                     resetCalendarSelectionToToday()
                 }
 
-                if phase == .expanded {
-                    refreshContentProviders(forceTodoSync: true)
-                } else if phase == .collapsed {
+                if phase == .collapsed {
                     stopContentProviders()
+                    stopImageCardLoading()
                 }
             }
             .onChange(of: settings.showCalendarModule) { _, _ in
@@ -93,7 +103,9 @@ struct ExpandedIslandView: View {
                 loadImageCardIfNeeded()
             }
             .onChange(of: viewModel.fileDataRefreshToken) { _, _ in
-                fileProvider.load()
+                if runtimeIsActive {
+                    fileProvider.load()
+                }
             }
             .onReceive(viewModel.lyricsProvider.$lyrics) { lyrics in
                 lyricsData = lyrics
@@ -214,19 +226,9 @@ struct ExpandedIslandView: View {
         offset: CGFloat
     ) -> some View {
         let clampedProgress = min(max(progress, 0), 1)
-        let isClosing = viewModel.presentationPhase.isCollapsing
-        let visualScale = viewModel.reduceMotionEnabled || isClosing
-            ? 1
-            : 0.97 + 0.03 * clampedProgress
 
         return content
             .opacity(clampedProgress)
-            .scaleEffect(visualScale, anchor: .top)
-            .blur(
-                radius: viewModel.reduceMotionEnabled || isClosing
-                    ? 0
-                    : CGFloat(1 - clampedProgress) * 4
-            )
             .offset(
                 y: viewModel.reduceMotionEnabled
                     ? 0
@@ -436,7 +438,7 @@ struct ExpandedIslandView: View {
     }
 
     private func refreshContentProviders(forceTodoSync: Bool = false) {
-        guard isContentReady else {
+        guard isContentReady, runtimeIsActive else {
             stopContentProviders()
             return
         }
@@ -448,7 +450,6 @@ struct ExpandedIslandView: View {
         }
 
         if settings.showTodoModule {
-            reminderProvider.start()
             syncTodoTasksIfNeeded(force: forceTodoSync)
         } else {
             reminderProvider.stop()
@@ -462,6 +463,11 @@ struct ExpandedIslandView: View {
         reminderProvider.stop()
         todoSyncTask?.cancel()
         todoSyncTask = nil
+    }
+
+    private func stopImageCardLoading() {
+        imageCardLoadTask?.cancel()
+        imageCardLoadTask = nil
     }
 
     private func syncTodoTasksIfNeeded(force: Bool = false) {
@@ -702,7 +708,6 @@ struct ExpandedIslandView: View {
         ZStack(alignment: .topLeading) {
             moduleCardBackground(module)
                 .opacity(backgroundProgress)
-                .blur(radius: CGFloat(1 - backgroundProgress) * 2)
 
             VStack(alignment: .leading, spacing: moduleCardSpacing(for: module)) {
                 if shouldShowModuleHeader(for: module) {
@@ -737,7 +742,6 @@ struct ExpandedIslandView: View {
                 alignment: .topLeading
             )
             .opacity(contentProgress)
-            .blur(radius: CGFloat(1 - contentProgress) * 1.5)
             .offset(y: CGFloat(1 - contentProgress) * 2)
         }
         .frame(
@@ -746,7 +750,6 @@ struct ExpandedIslandView: View {
             maxHeight: moduleCardHeight,
             alignment: .topLeading
         )
-        .scaleEffect(0.985 + CGFloat(backgroundProgress) * 0.015, anchor: .center)
         .offset(y: CGFloat(1 - backgroundProgress) * 5)
         .overlay {
             unifiedModuleCardBorder(shape)
@@ -846,7 +849,7 @@ struct ExpandedIslandView: View {
     }
 
     private func loadImageCardIfNeeded() {
-        guard isContentReady else { return }
+        guard isContentReady, runtimeIsActive else { return }
 
         let path = settings.imageCardPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else {
