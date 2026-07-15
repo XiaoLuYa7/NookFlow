@@ -29,8 +29,6 @@ struct IslandRootView: View {
     @State private var compactLyricLoadingTask: Task<Void, Never>?
     @State private var foregroundPrompt: ForegroundAppPrompt?
     @State private var foregroundPromptTask: Task<Void, Never>?
-    @State private var isTutorialHintVisible = false
-
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .top) {
@@ -49,7 +47,6 @@ struct IslandRootView: View {
             viewModel.playbackProvider.updateAccessConfiguration(from: settings)
             refreshRuntimeProviders()
             updateCompactCapsuleMode()
-            updateTutorialHintVisibility()
         }
         .onChange(of: accessibilityReduceMotion) { _, enabled in
             viewModel.setReduceMotionEnabled(enabled)
@@ -114,12 +111,11 @@ struct IslandRootView: View {
         .onChange(of: settings.foregroundHoldDuration) { _, _ in
             scheduleForegroundPromptClearIfNeeded()
         }
-        .onChange(of: settings.tutorialHintPolicy) { _, _ in
-            updateTutorialHintVisibility()
-        }
         .onChange(of: viewModel.presentationPhase) { _, _ in
             refreshRuntimeProviders()
-            updateTutorialHintVisibility()
+        }
+        .onChange(of: viewModel.isExpandedRuntimeActive) { _, _ in
+            refreshRuntimeProviders()
         }
         .onReceive(foregroundAppProvider.$prompt) { prompt in
             handleForegroundPrompt(prompt)
@@ -310,6 +306,7 @@ struct IslandRootView: View {
                     ExpandedIslandView(
                         viewModel: viewModel,
                         isContentReady: viewModel.shouldMountExpandedContent,
+                        runtimeIsActive: viewModel.isExpandedRuntimeActive,
                         contentRevealProgress: viewModel.contentRevealProgress,
                         secondaryContentRevealProgress: viewModel.secondaryContentRevealProgress,
                         settings: settings,
@@ -357,7 +354,6 @@ struct IslandRootView: View {
                 viewModel.toggleExpandedByClick()
             }
 
-            tutorialHintOverlay(canvasSize: canvasSize)
             externalPinButtonOverlay(canvasSize: canvasSize)
         }
         .frame(
@@ -385,18 +381,6 @@ struct IslandRootView: View {
         }
     }
 
-    @ViewBuilder
-    private func tutorialHintOverlay(canvasSize: CGSize) -> some View {
-        if isTutorialHintVisible {
-            IslandTutorialHintView(showsPinHint: settings.showPinButton)
-                .frame(width: min(max(280, canvasSize.width - 80), 560))
-                .opacity(viewModel.secondaryContentRevealProgress)
-                .offset(y: canvasSize.height + 7)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-                .zIndex(30)
-        }
-    }
-
     private var sideStatusContext: SideStatusContext {
         SideStatusContext(
             playback: currentSnapshot,
@@ -411,7 +395,7 @@ struct IslandRootView: View {
         let compactIcons = settings.showCustomCompactIcons
             ? [settings.compactLeftSideIcon, settings.compactRightSideIcon]
             : []
-        let isExpanded = viewModel.presentationPhase != .collapsed
+        let isExpanded = viewModel.isExpandedRuntimeActive
 
         let needsWeather = settings.showWeatherModule && isExpanded
             || compactIcons.contains(where: Self.usesWeatherData)
@@ -805,37 +789,6 @@ struct IslandRootView: View {
         updateCompactCapsuleMode()
     }
 
-    private func updateTutorialHintVisibility() {
-        guard viewModel.presentationPhase == .expanded else {
-            setTutorialHintVisible(false)
-            return
-        }
-
-        switch settings.tutorialHintPolicy {
-        case .off:
-            setTutorialHintVisible(false)
-        case .always:
-            setTutorialHintVisible(true)
-        case .once:
-            if !settings.hasShownTutorialHint || isTutorialHintVisible {
-                setTutorialHintVisible(true)
-                settings.markTutorialHintShown()
-            } else {
-                setTutorialHintVisible(false)
-            }
-        }
-    }
-
-    private func setTutorialHintVisible(_ visible: Bool) {
-        guard isTutorialHintVisible != visible else { return }
-
-        let animation: Animation = viewModel.reduceMotionEnabled
-            ? .easeOut(duration: 0.01)
-            : .easeOut(duration: 0.18)
-        withAnimation(animation) {
-            isTutorialHintVisible = visible
-        }
-    }
 }
 
 private struct IslandShellBoundsModifier<ShellShape: Shape>: ViewModifier {
@@ -861,96 +814,5 @@ private extension View {
         clipsToShape: Bool
     ) -> some View {
         modifier(IslandShellBoundsModifier(shellShape: shellShape, clipsToShape: clipsToShape))
-    }
-}
-
-private struct IslandTutorialHintView: View {
-    let showsPinHint: Bool
-
-    @State private var tipIndex = 0
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: currentTip.systemName)
-                .font(.system(size: 10.5, weight: .bold))
-                .symbolRenderingMode(.hierarchical)
-                .frame(width: 14)
-
-            Text(currentTip.text)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .id(currentTip.id)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-
-            Text("\(displayedTipIndex + 1)/\(tips.count)")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.45))
-                .monospacedDigit()
-        }
-        .font(.system(size: 11, weight: .semibold, design: .rounded))
-        .foregroundStyle(Color.white.opacity(0.86))
-        .padding(.horizontal, 12)
-        .frame(height: 24)
-        .background {
-            Capsule(style: .continuous)
-                .fill(Color.black.opacity(0.56))
-        }
-        .overlay {
-            Capsule(style: .continuous)
-                .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
-        }
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-        .allowsHitTesting(false)
-        .task(id: tips.count) {
-            guard tips.count > 1 else { return }
-            tipIndex = min(tipIndex, tips.count - 1)
-
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_200_000_000)
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
-                    tipIndex = (tipIndex + 1) % tips.count
-                }
-            }
-        }
-    }
-
-    private var currentTip: TutorialHint {
-        tips[displayedTipIndex]
-    }
-
-    private var displayedTipIndex: Int {
-        guard !tips.isEmpty else { return 0 }
-        return tipIndex % tips.count
-    }
-
-    private var tips: [TutorialHint] {
-        var values = [
-            TutorialHint(systemName: "rectangle.3.group", text: "顶部标签可以在主页、应用和文件之间切换"),
-            TutorialHint(systemName: "tray.and.arrow.down", text: "把文件拖到岛上，可暂存或继续隔空投送"),
-            TutorialHint(systemName: "gearshape", text: "右上角齿轮可以打开设置、反馈或退出应用"),
-            TutorialHint(systemName: "slider.horizontal.3", text: "设置里可以自定义紧凑状态左右显示的信息"),
-            TutorialHint(systemName: "music.note", text: "播放音乐时，可在紧凑状态显示歌曲名或歌词"),
-            TutorialHint(systemName: "square.grid.2x2", text: "快捷应用模块适合放常用 App，一点就打开"),
-            TutorialHint(systemName: "command", text: "快捷指令模块可以固定常用自动化流程"),
-            TutorialHint(systemName: "chart.bar", text: "设备信息模块会显示 CPU、内存、磁盘和存储状态"),
-            TutorialHint(systemName: "photo", text: "图片卡片可以放一张你喜欢的常驻图片"),
-            TutorialHint(systemName: "calendar", text: "日历模块能快速查看日期、农历和近期安排")
-        ]
-
-        if showsPinHint {
-            values.insert(
-                TutorialHint(systemName: "lock", text: "右下角按钮可以固定展开，再点一次取消固定"),
-                at: 2
-            )
-        }
-        return values
-    }
-
-    private struct TutorialHint: Identifiable {
-        let systemName: String
-        let text: String
-
-        var id: String { text }
     }
 }

@@ -92,7 +92,8 @@ final class ReminderProvider: ObservableObject {
 
     @Published private(set) var snapshot: ReminderSnapshot = .placeholder
 
-    private let store = EKEventStore()
+    private static let sharedStore = EKEventStore()
+    private var store: EKEventStore { Self.sharedStore }
     private var hasStarted = false
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = 0
@@ -144,22 +145,22 @@ final class ReminderProvider: ObservableObject {
     func createTodoReminder(request: ReminderCreationRequest) async -> String? {
         guard !request.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               await requestTodoSyncAccess() else { return nil }
-        return createReminder(request: request)
+        return createReminder(request: request, refreshSnapshot: false)
     }
 
     func completeTodoReminder(identifier: String) async -> Bool {
         guard await requestTodoSyncAccess() else { return false }
-        return updateReminderCompletion(identifier: identifier, isCompleted: true)
+        return updateReminderCompletion(identifier: identifier, isCompleted: true, refreshSnapshot: false)
     }
 
     func restoreTodoReminder(identifier: String) async -> Bool {
         guard await requestTodoSyncAccess() else { return false }
-        return updateReminderCompletion(identifier: identifier, isCompleted: false)
+        return updateReminderCompletion(identifier: identifier, isCompleted: false, refreshSnapshot: false)
     }
 
     func deleteTodoReminder(identifier: String) async -> Bool {
         guard await requestTodoSyncAccess() else { return false }
-        return removeReminder(identifier: identifier)
+        return removeReminder(identifier: identifier, refreshSnapshot: false)
     }
 
     func loadTodoTasksForSync(includeCompleted: Bool = false) async -> [TodoTask] {
@@ -171,7 +172,7 @@ final class ReminderProvider: ObservableObject {
             isAuthorized: true
         )
 
-        let tasks = await Self.makeTodoTasksFromReminders(includeCompleted: includeCompleted)
+        let tasks = await makeTodoTasksFromReminders(includeCompleted: includeCompleted)
         updateSnapshot(
             statusText: tasks.isEmpty ? "暂无待办" : "已同步 \(tasks.count) 个待办",
             items: snapshot.items,
@@ -339,7 +340,10 @@ final class ReminderProvider: ObservableObject {
     }
 
     @discardableResult
-    private func createReminder(request: ReminderCreationRequest) -> String? {
+    private func createReminder(
+        request: ReminderCreationRequest,
+        refreshSnapshot: Bool = true
+    ) -> String? {
         guard let calendar = store.defaultCalendarForNewReminders() else {
             updateSnapshot(
                 statusText: "没有默认提醒列表",
@@ -370,7 +374,9 @@ final class ReminderProvider: ObservableObject {
 
         do {
             try store.save(reminder, commit: true)
-            loadIncompleteReminders()
+            if refreshSnapshot {
+                loadIncompleteReminders()
+            }
             return reminder.calendarItemIdentifier
         } catch {
             updateSnapshot(
@@ -449,13 +455,19 @@ final class ReminderProvider: ObservableObject {
 
     @discardableResult
     private func markReminderCompleted(identifier: String) -> Bool {
-        updateReminderCompletion(identifier: identifier, isCompleted: true)
+        updateReminderCompletion(identifier: identifier, isCompleted: true, refreshSnapshot: true)
     }
 
     @discardableResult
-    private func updateReminderCompletion(identifier: String, isCompleted: Bool) -> Bool {
+    private func updateReminderCompletion(
+        identifier: String,
+        isCompleted: Bool,
+        refreshSnapshot: Bool = true
+    ) -> Bool {
         guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
-            loadIncompleteReminders()
+            if refreshSnapshot {
+                loadIncompleteReminders()
+            }
             return false
         }
 
@@ -464,7 +476,9 @@ final class ReminderProvider: ObservableObject {
 
         do {
             try store.save(reminder, commit: true)
-            loadIncompleteReminders()
+            if refreshSnapshot {
+                loadIncompleteReminders()
+            }
             return true
         } catch {
             updateSnapshot(
@@ -477,15 +491,19 @@ final class ReminderProvider: ObservableObject {
     }
 
     @discardableResult
-    private func removeReminder(identifier: String) -> Bool {
+    private func removeReminder(identifier: String, refreshSnapshot: Bool = true) -> Bool {
         guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder else {
-            loadIncompleteReminders()
+            if refreshSnapshot {
+                loadIncompleteReminders()
+            }
             return false
         }
 
         do {
             try store.remove(reminder, commit: true)
-            loadIncompleteReminders()
+            if refreshSnapshot {
+                loadIncompleteReminders()
+            }
             return true
         } catch {
             updateSnapshot(
@@ -523,30 +541,18 @@ final class ReminderProvider: ObservableObject {
         loadGeneration += 1
         let generation = loadGeneration
 
-        loadTask = Task.detached(priority: .utility) { [generation] in
-            guard !Task.isCancelled else { return }
-            let result = await Self.makeIncompleteRemindersSnapshot()
-            guard !Task.isCancelled else { return }
-
-            await MainActor.run { [weak self] in
-                guard let self,
-                      self.loadGeneration == generation,
-                      !Task.isCancelled else { return }
-                self.snapshot = result
-                self.loadTask = nil
-            }
+        loadTask = Task(priority: .utility) { [weak self, generation] in
+            guard let self, !Task.isCancelled else { return }
+            let result = await self.makeIncompleteRemindersSnapshot()
+            guard !Task.isCancelled,
+                  self.loadGeneration == generation else { return }
+            self.snapshot = result
+            self.loadTask = nil
         }
     }
 
-    nonisolated private static func makeIncompleteRemindersSnapshot() async -> ReminderSnapshot {
-        let store = EKEventStore()
-        let predicate = store.predicateForIncompleteReminders(
-            withDueDateStarting: nil,
-            ending: nil,
-            calendars: nil
-        )
-
-        let reminders = await fetchReminders(matching: predicate, store: store)
+    private func makeIncompleteRemindersSnapshot() async -> ReminderSnapshot {
+        let reminders = await fetchAllReminders()
         guard !Task.isCancelled else {
             return ReminderSnapshot(statusText: "正在读取提醒事项", items: [], isAuthorized: false)
         }
@@ -566,31 +572,23 @@ final class ReminderProvider: ObservableObject {
         )
     }
 
-    nonisolated private static func makeTodoTasksFromReminders(includeCompleted: Bool) async -> [TodoTask] {
-        let store = EKEventStore()
-        let incompletePredicate = store.predicateForIncompleteReminders(
-            withDueDateStarting: nil,
-            ending: nil,
-            calendars: nil
-        )
-
-        var reminders = await fetchReminders(matching: incompletePredicate, store: store)
+    private func makeTodoTasksFromReminders(includeCompleted: Bool) async -> [TodoTask] {
+        let reminders = await fetchAllReminders()
         guard !Task.isCancelled else { return [] }
 
-        if includeCompleted {
-            let completedPredicate = store.predicateForCompletedReminders(
-                withCompletionDateStarting: nil,
-                ending: nil,
-                calendars: nil
-            )
-            let completedReminders = await fetchReminders(matching: completedPredicate, store: store)
-            guard !Task.isCancelled else { return [] }
-            reminders.append(contentsOf: completedReminders)
-        }
+        let filteredReminders = includeCompleted ? reminders : reminders.filter { !$0.isCompleted }
 
-        return reminders
+        return filteredReminders
             .sorted(by: Self.sortReminders)
             .map(Self.todoTask(for:))
+    }
+
+    private func fetchAllReminders() async -> [EKReminder] {
+        let calendars = store.calendars(for: .reminder)
+        guard !calendars.isEmpty else { return [] }
+
+        let predicate = store.predicateForReminders(in: calendars)
+        return await Self.fetchReminders(matching: predicate, store: store)
     }
 
     nonisolated private static func fetchReminders(matching predicate: NSPredicate, store: EKEventStore) async -> [EKReminder] {

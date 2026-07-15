@@ -77,7 +77,7 @@ struct SidebarView: View {
             collapseButton
                 .padding(AppSpacing.sm)
         }
-        .frame(width: isCollapsed ? 60 : 208)
+        .frame(width: isCollapsed ? 60 : 184)
         .background {
             AppColor.sidebarBackground
                 .overlay(Color.white.opacity(0.16))

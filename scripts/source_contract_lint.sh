@@ -29,9 +29,9 @@ require_not_contains() {
   fi
 }
 
-require_contains "Views/SettingsAppShell.swift" "SettingsNavigationGroup(title: \"核心\"" "settings core navigation group"
-require_contains "Views/SettingsAppShell.swift" "SettingsNavigationGroup(title: \"自动化\"" "settings automation navigation group"
-require_contains "Views/SettingsAppShell.swift" "SettingsNavigationGroup(title: \"系统\"" "settings system navigation group"
+require_not_contains "Views/SettingsAppShell.swift" "SettingsNavigationGroup(title: \"核心\"" "removed settings core navigation heading"
+require_not_contains "Views/SettingsAppShell.swift" "SettingsNavigationGroup(title: \"自动化\"" "removed settings automation navigation heading"
+require_not_contains "Views/SettingsAppShell.swift" "SettingsNavigationGroup(title: \"系统\"" "removed settings system navigation heading"
 require_contains "Views/AppDesignSystem.swift" "0.961, green: 0.961, blue: 0.969" "approved settings background token"
 require_contains "Views/AppDesignSystem.swift" "static let largeCard: CGFloat = 16" "approved large card radius"
 require_contains "Views/AppDesignSystem.swift" "accessibilityReduceMotion" "settings reduce motion support"

@@ -19,8 +19,8 @@ private enum GeneralAnimationPace: String, CaseIterable, Identifiable {
     var response: Double {
         switch self {
         case .slow: 0.68
-        case .balanced: 0.50
-        case .fast: 0.36
+        case .balanced: 0.59
+        case .fast: 0.50
         }
     }
 }
@@ -212,15 +212,6 @@ struct GeneralSettingsView: View {
                 valueText: { String(format: "%.2f s", $0) }
             )
 
-            SettingsSegmentedRow(
-                icon: nil,
-                title: "教学引导提示",
-                subtitle: "控制灵动岛下方功能提示的显示策略",
-                options: TutorialHintPolicy.allCases,
-                optionTitle: \TutorialHintPolicy.title,
-                selection: $settings.tutorialHintPolicy
-            )
-
             AppSettingsToggleRow(
                 icon: nil,
                 title: "显示固定展开按钮",
@@ -337,8 +328,8 @@ struct GeneralSettingsView: View {
     private var animationPaceBinding: Binding<GeneralAnimationPace> {
         Binding(
             get: {
-                if settings.openSpeed >= 0.59 { return .slow }
-                if settings.openSpeed <= 0.42 { return .fast }
+                if settings.openSpeed >= 0.635 { return .slow }
+                if settings.openSpeed <= 0.545 { return .fast }
                 return .balanced
             },
             set: { pace in

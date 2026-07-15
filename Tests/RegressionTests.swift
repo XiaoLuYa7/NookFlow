@@ -818,6 +818,19 @@ final class SettingsLayoutContractTests: XCTestCase {
         XCTAssertTrue(source.contains("SettingsNavigationGroup(id:"))
         XCTAssertTrue(source.contains("ForEach(navigationGroups)"))
     }
+
+    func testSidebarUsesCompactExpandedWidth() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsAppShell.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".frame(width: isCollapsed ? 60 : 184)"))
+        XCTAssertFalse(source.contains(".frame(width: isCollapsed ? 60 : 208)"))
+    }
 }
 
 final class AppBrandIconPresentationContractTests: XCTestCase {
@@ -1091,6 +1104,202 @@ final class WeatherPresentationContractTests: XCTestCase {
         XCTAssertTrue(provider.contains("condition == \"定位中\" || condition == \"加载中\""))
         XCTAssertTrue(provider.contains("condition: \"加载中\""))
         XCTAssertTrue(provider.contains("symbolName: \"\""))
+    }
+}
+
+final class IslandExpansionSmoothnessContractTests: XCTestCase {
+    func testFinalOpeningSettleUsesReducedDisplacementAndNarrowDurationRange() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Models/IslandSettings.swift"),
+            encoding: .utf8
+        )
+        let tokens = try String(
+            contentsOf: root.appendingPathComponent("Views/IslandDesignTokens.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(settings.contains("case .subtle: 0.999"))
+        XCTAssertTrue(settings.contains("case .standard: 0.996"))
+        XCTAssertTrue(settings.contains("case .lively: 0.993"))
+        XCTAssertFalse(settings.contains("case .lively: 0.984"))
+
+        XCTAssertTrue(tokens.contains(
+            "static let shellOpenFinalSettleMinimumDuration: TimeInterval = 0.18"
+        ))
+        XCTAssertTrue(tokens.contains(
+            "static let shellOpenFinalSettleMaximumDuration: TimeInterval = 0.22"
+        ))
+        XCTAssertTrue(tokens.contains("let preSettleDuration = max(0, total - settle)"))
+        XCTAssertTrue(tokens.contains("toExpanded: preSettleDuration * (0.44 / 0.71)"))
+        XCTAssertTrue(tokens.contains("overshoot: preSettleDuration * (0.09 / 0.71)"))
+        XCTAssertTrue(tokens.contains("undershoot: preSettleDuration * (0.18 / 0.71)"))
+        XCTAssertFalse(tokens.contains("settle: total * 0.29"))
+    }
+
+    func testExpandedRuntimeStartsAfterVisualSettlementAndCanBeCancelled() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let viewModel = try String(
+            contentsOf: root.appendingPathComponent("Models/IslandViewModel.swift"),
+            encoding: .utf8
+        )
+        let rootView = try String(
+            contentsOf: root.appendingPathComponent("Views/IslandRootView.swift"),
+            encoding: .utf8
+        )
+        let expandedView = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(viewModel.contains(
+            "@Published private(set) var isExpandedRuntimeActive = false"
+        ))
+        XCTAssertTrue(viewModel.contains("private var runtimeActivationTask: Task<Void, Never>?"))
+        XCTAssertTrue(viewModel.contains("runtimeActivationTask?.cancel()"))
+        XCTAssertTrue(viewModel.contains("scheduleExpandedRuntimeActivation"))
+        XCTAssertTrue(rootView.contains(
+            "runtimeIsActive: viewModel.isExpandedRuntimeActive"
+        ))
+        XCTAssertTrue(rootView.contains(
+            "let isExpanded = viewModel.isExpandedRuntimeActive"
+        ))
+        XCTAssertTrue(expandedView.contains("let runtimeIsActive: Bool"))
+        XCTAssertTrue(expandedView.contains(".onChange(of: runtimeIsActive)"))
+        XCTAssertFalse(expandedView.contains(
+            "if phase == .expanded {\n                    refreshContentProviders(forceTodoSync: true)"
+        ))
+    }
+
+    func testOpeningRevealAvoidsBlurAndScaleDuringFinalSettle() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
+
+        let revealSection = try XCTUnwrap(
+            source.components(separatedBy: "private func reveal<Content").dropFirst().first?
+                .components(separatedBy: "private var topBar").first
+        )
+        XCTAssertFalse(revealSection.contains(".blur("))
+        XCTAssertFalse(revealSection.contains(".scaleEffect("))
+
+        XCTAssertFalse(source.contains(
+            ".blur(radius: CGFloat(1 - backgroundProgress) * 2)"
+        ))
+        XCTAssertFalse(source.contains(
+            ".blur(radius: CGFloat(1 - contentProgress) * 1.5)"
+        ))
+        XCTAssertFalse(source.contains(
+            ".scaleEffect(0.985 + CGFloat(backgroundProgress) * 0.015, anchor: .center)"
+        ))
+    }
+}
+
+final class IslandAnimationPaceContractTests: XCTestCase {
+    func testPacePresetsUseModeratedValuesAndBalancedDefaults() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settingsView = try String(
+            contentsOf: root.appendingPathComponent("Views/GeneralSettingsView.swift"),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Models/IslandSettings.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(settingsView.contains("case .slow: 0.68"))
+        XCTAssertTrue(settingsView.contains("case .balanced: 0.59"))
+        XCTAssertTrue(settingsView.contains("case .fast: 0.50"))
+        XCTAssertFalse(settingsView.contains("case .fast: 0.36"))
+        XCTAssertTrue(settingsView.contains("if settings.openSpeed >= 0.635"))
+        XCTAssertTrue(settingsView.contains("if settings.openSpeed <= 0.545"))
+
+        XCTAssertEqual(settings.components(separatedBy: "?? 0.59").count - 1, 2)
+        XCTAssertEqual(settings.components(separatedBy: "openSpeed = 0.59").count - 1, 1)
+        XCTAssertEqual(settings.components(separatedBy: "closeSpeed = 0.59").count - 1, 1)
+        XCTAssertTrue(settings.contains("private static func migratedAnimationSpeed"))
+        XCTAssertTrue(settings.contains("abs(value - 0.36) < 0.0001 ? 0.50 : value"))
+        XCTAssertTrue(settings.contains("openSpeed = Self.migratedAnimationSpeed(storedOpenSpeed)"))
+        XCTAssertTrue(settings.contains("closeSpeed = Self.migratedAnimationSpeed(storedCloseSpeed)"))
+    }
+}
+
+final class ReminderEventKitQueryContractTests: XCTestCase {
+    func testReminderQueriesReuseOneStoreAndAvoidDuplicateIslandFetches() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let provider = try String(
+            contentsOf: root.appendingPathComponent("Models/ReminderProvider.swift"),
+            encoding: .utf8
+        )
+        let expandedView = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertEqual(provider.components(separatedBy: "EKEventStore()").count - 1, 1)
+        XCTAssertTrue(provider.contains("private static let sharedStore = EKEventStore()"))
+        XCTAssertTrue(provider.contains("private var store: EKEventStore { Self.sharedStore }"))
+        XCTAssertTrue(provider.contains("let calendars = store.calendars(for: .reminder)"))
+        XCTAssertTrue(provider.contains("store.predicateForReminders(in: calendars)"))
+
+        let syncSection = try XCTUnwrap(
+            provider.components(separatedBy: "private func makeTodoTasksFromReminders").dropFirst().first?
+                .components(separatedBy: "private func fetchAllReminders").first
+        )
+        XCTAssertTrue(syncSection.contains("let reminders = await fetchAllReminders()"))
+        XCTAssertTrue(syncSection.contains("includeCompleted ? reminders : reminders.filter"))
+        XCTAssertFalse(syncSection.contains("predicateForIncompleteReminders"))
+        XCTAssertFalse(syncSection.contains("predicateForCompletedReminders"))
+
+        let refreshSection = try XCTUnwrap(
+            expandedView.components(separatedBy: "private func refreshContentProviders").dropFirst().first?
+                .components(separatedBy: "private func stopContentProviders").first
+        )
+        XCTAssertFalse(refreshSection.contains("reminderProvider.start()"))
+        XCTAssertTrue(provider.contains("createReminder(request: request, refreshSnapshot: false)"))
+        XCTAssertTrue(provider.contains("updateReminderCompletion(identifier: identifier, isCompleted: true, refreshSnapshot: false)"))
+        XCTAssertTrue(provider.contains("updateReminderCompletion(identifier: identifier, isCompleted: false, refreshSnapshot: false)"))
+        XCTAssertTrue(provider.contains("removeReminder(identifier: identifier, refreshSnapshot: false)"))
+    }
+}
+
+final class TutorialHintRemovalContractTests: XCTestCase {
+    func testTutorialHintFeatureIsCompletelyRemoved() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Models/IslandSettings.swift"),
+            encoding: .utf8
+        )
+        let generalSettings = try String(
+            contentsOf: root.appendingPathComponent("Views/GeneralSettingsView.swift"),
+            encoding: .utf8
+        )
+        let islandRoot = try String(
+            contentsOf: root.appendingPathComponent("Views/IslandRootView.swift"),
+            encoding: .utf8
+        )
+
+        for source in [settings, generalSettings, islandRoot] {
+            XCTAssertFalse(source.contains("TutorialHint"))
+            XCTAssertFalse(source.contains("tutorialHint"))
+            XCTAssertFalse(source.contains("教学引导提示"))
+        }
+        XCTAssertFalse(settings.contains("hasShownTutorialHint"))
+        XCTAssertFalse(islandRoot.contains("功能提示"))
     }
 }
 
