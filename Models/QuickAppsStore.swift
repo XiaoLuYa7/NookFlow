@@ -5,7 +5,6 @@ import Foundation
 final class QuickAppsStore: ObservableObject {
 
     static let shared = QuickAppsStore()
-    static let pageSize = 6
     static let maxCount = 36
 
     @Published private(set) var items: [QuickAppItem] = []
@@ -13,6 +12,7 @@ final class QuickAppsStore: ObservableObject {
     private let defaults = UserDefaults.standard
     private let storageKey = "settings.quickApps"
     private var iconCache: [String: NSImage] = [:]
+    private static let cachedIconSize = NSSize(width: 64, height: 64)
 
     private init() {
         load()
@@ -78,8 +78,10 @@ final class QuickAppsStore: ObservableObject {
     func icon(for item: QuickAppItem) -> NSImage {
         let path = item.applicationPath
         if let cached = iconCache[path] { return cached }
-        let icon = NSWorkspace.shared.icon(forFile: path)
-        icon.size = NSSize(width: 32, height: 32)
+
+        let workspaceIcon = NSWorkspace.shared.icon(forFile: path)
+        let icon = (workspaceIcon.copy() as? NSImage) ?? workspaceIcon
+        icon.size = Self.cachedIconSize
         iconCache[path] = icon
         return icon
     }

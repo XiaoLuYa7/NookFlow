@@ -20,17 +20,21 @@ struct PageHeaderView<Actions: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: AppSpacing.xl) {
-            HStack(alignment: .top, spacing: AppSpacing.md) {
+        HStack(alignment: .center, spacing: AppSpacing.xl) {
+            HStack(alignment: .center, spacing: AppSpacing.lg) {
                 if let icon {
                     Image(systemName: icon)
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(.system(size: 20, weight: .semibold))
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(AppColor.accent)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 44, height: 44)
                         .background {
-                            RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                                .fill(AppColor.accentSoft)
+                            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                                .fill(AppColor.accentSoft.opacity(0.82))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                                        .stroke(AppColor.accentBorder.opacity(0.62), lineWidth: 0.7)
+                                }
                         }
                 }
 
@@ -62,9 +66,11 @@ extension PageHeaderView where Actions == EmptyView {
 }
 
 struct SettingsPageScaffold<Header: View, Content: View, Footer: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private let horizontalPadding: CGFloat = AppSpacing.pageHorizontal
     private let verticalPadding: CGFloat = AppSpacing.pageVertical
-    private let sectionSpacing: CGFloat = 18
+    private let sectionSpacing: CGFloat = AppSpacing.section
+    private let contentTopPadding: CGFloat = 28
     let contentMaxWidth: CGFloat
     @ViewBuilder let header: Header
     @ViewBuilder let content: Content
@@ -87,16 +93,33 @@ struct SettingsPageScaffold<Header: View, Content: View, Footer: View>: View {
             header
                 .padding(.horizontal, horizontalPadding)
                 .padding(.top, verticalPadding)
-                .padding(.bottom, AppSpacing.lg)
+                .padding(.bottom, AppSpacing.xl)
                 .frame(maxWidth: contentMaxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
+                .background {
+                    if reduceTransparency {
+                        AppColor.pageBackground
+                    } else {
+                        Rectangle()
+                            .fill(.ultraThinMaterial)
+                            .overlay(AppColor.pageBackground.opacity(0.48))
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(AppColor.divider)
+                        .frame(height: 1)
+                        .allowsHitTesting(false)
+                }
+                .zIndex(1)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: sectionSpacing) {
                     content
                 }
                 .padding(.horizontal, horizontalPadding)
-                .padding(.bottom, AppSpacing.xxl)
+                .padding(.top, contentTopPadding)
+                .padding(.bottom, 40)
                 .frame(maxWidth: contentMaxWidth, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
@@ -146,7 +169,7 @@ struct SettingsSectionCard<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
             if title != nil || subtitle != nil {
-                VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                VStack(alignment: .leading, spacing: 3) {
                     if let title {
                         Text(title)
                             .font(AppTypography.sectionTitle(fontPreference))
@@ -158,23 +181,28 @@ struct SettingsSectionCard<Content: View>: View {
                             .foregroundStyle(AppColor.textSecondary)
                     }
                 }
+                .padding(.horizontal, AppSpacing.md)
             }
 
             content
+                .padding(.horizontal, AppSpacing.xs)
+                .padding(.vertical, AppSpacing.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .appSurface(.elevated, radius: AppRadius.largeCard)
 
             if let footer {
                 Text(footer)
                     .font(AppTypography.supporting(fontPreference))
                     .foregroundStyle(AppColor.textTertiary)
+                    .padding(.horizontal, AppSpacing.md)
             }
         }
-        .padding(AppSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .appSurface(.elevated, radius: AppRadius.largeCard)
     }
 }
 
 struct SettingsRow<Accessory: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appFontPreference) private var fontPreference
     @State private var isHovering = false
     let icon: String?
@@ -208,13 +236,13 @@ struct SettingsRow<Accessory: View>: View {
             }
             .padding(.horizontal, AppSpacing.rowHorizontal)
             .padding(.vertical, AppSpacing.rowVertical)
-            .frame(minHeight: 60)
+            .frame(minHeight: 54)
 
             if showsDivider {
                 Rectangle()
                     .fill(AppColor.divider)
                     .frame(height: 1)
-                    .padding(.leading, icon == nil ? AppSpacing.rowHorizontal : 58)
+                    .padding(.leading, icon == nil ? AppSpacing.rowHorizontal : 54)
             }
         }
         .background {
@@ -224,7 +252,10 @@ struct SettingsRow<Accessory: View>: View {
         .opacity(isEnabled ? 1 : AppControlStyle.disabledOpacity)
         .allowsHitTesting(isEnabled)
         .onHover { isHovering = $0 }
-        .animation(AppMotion.quick, value: isHovering)
+        .animation(
+            AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion),
+            value: isHovering
+        )
     }
 
     private var horizontalLayout: some View {
@@ -251,7 +282,7 @@ struct SettingsRow<Accessory: View>: View {
                     .font(.system(size: AppIconStyle.rowSize, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(AppColor.accent)
-                    .frame(width: AppIconStyle.rowFrame, height: AppIconStyle.rowFrame)
+                    .frame(width: 28, height: 28)
                     .background {
                         RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
                             .fill(AppColor.accentSoft.opacity(0.78))
@@ -438,7 +469,7 @@ struct PillSegmentedControl<Option: Hashable>: View {
         HStack(spacing: AppSpacing.xs) {
             ForEach(options, id: \.self) { option in
                 Button {
-                    withAnimation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion)) {
+                    withAnimation(AppMotion.resolved(AppMotion.settingsStandard, reduceMotion: reduceMotion)) {
                         selection = option
                     }
                 } label: {

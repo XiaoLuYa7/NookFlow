@@ -50,7 +50,6 @@ enum IslandDesignTokens {
     static let compactCapsuleHorizontalExtension: CGFloat = 64
     static let compactStatusCapsuleMaximumWidth: CGFloat = 360
     static let compactStatusCapsuleMaximumScreenRatio: CGFloat = 0.74
-    static let cameraSafeRegionVisualWidthCompensation: CGFloat = 4
     static let compactLyricsCapsuleHorizontalExtension: CGFloat = 150
     static let compactLyricsCapsuleMinimumWidth: CGFloat = 460
     static let compactLyricsCapsuleMaximumScreenRatio: CGFloat = 0.62
@@ -68,12 +67,24 @@ enum IslandDesignTokens {
     static let compactHoverPreviewDuration: TimeInterval = 0.12
     static let compactHoverHoldDuration: TimeInterval = 0.30
     static let compactHoverRestoreDuration: TimeInterval = 0.15
+    static let compactHoverPreviewAnimation = Animation.smooth(
+        duration: compactHoverPreviewDuration,
+        extraBounce: 0
+    )
+    static let compactHoverRestoreAnimation = Animation.smooth(
+        duration: compactHoverRestoreDuration,
+        extraBounce: 0
+    )
 
     static let compactCornerRadius: CGFloat = 21
     static let expandedCornerRadius: CGFloat = 34
     static let compactShoulderWidth: CGFloat = 30
     static let compactShoulderDepth: CGFloat = 10
     static let compactSideInset: CGFloat = 10
+    // Keep a visible shoulder outside the physical notch so the first hover
+    // frames are not completely occluded by the camera housing.
+    static let compactCameraShellHorizontalExtension: CGFloat = 10
+    static let shellTopEdgeBleedPhysicalPixels: CGFloat = 2
     static let expandedShoulderWidth: CGFloat = 56
     static let expandedShoulderDepth: CGFloat = 17
     static let expandedSideInset: CGFloat = 10
@@ -98,19 +109,28 @@ enum IslandDesignTokens {
     static let filesExpandedHeight: CGFloat = 500
     static let applicationsWindowVerticalPadding: CGFloat = 40
     static let moduleHeightCompressionRatio: CGFloat = 0.82
+    static let fourColumnsMinimumExpandedWidth: CGFloat = defaultExpandedSize.width
     static let fourColumnsMinimumExpandedHeight: CGFloat = 195
     static let fourColumnsMaximumExpandedHeight: CGFloat = 240
-    static let mediaModuleMinimumWidthWeight: CGFloat = 1.18
-    static let mediaModuleMaximumWidthWeight: CGFloat = 1.30
-    static let quickAppsModuleWidthWeight: CGFloat = 0.86
-    static let shortcutsModuleWidthWeight: CGFloat = 0.82
-    static let deviceInfoModuleWidthWeight: CGFloat = 0.90
+    static let weatherModuleFixedWidth: CGFloat = 168
+    // Keeps the 98pt artwork unchanged while growing the information region
+    // from roughly 75pt to 125pt (about two thirds wider).
+    static let mediaModuleFixedWidth: CGFloat = 240
+    static let todoModuleFixedWidth: CGFloat = 188
+    static let quickAppsTwoColumnFixedWidth: CGFloat = 126
+    static let quickAppsThreeColumnFixedWidth: CGFloat = 156
+    static let shortcutsModuleFixedWidth: CGFloat = 156
+    static let imageCardModuleFixedWidth: CGFloat = 124
+    static let deviceInfoModuleFixedWidth: CGFloat = 168
+    static let mirrorModuleFixedWidth: CGFloat = 168
 
-    static func mediaModuleWidthWeight(for islandHeight: CGFloat) -> CGFloat {
-        let range = max(1, fourColumnsMaximumExpandedHeight - fourColumnsMinimumExpandedHeight)
-        let progress = min(max((islandHeight - fourColumnsMinimumExpandedHeight) / range, 0), 1)
-        return mediaModuleMinimumWidthWeight
-            + (mediaModuleMaximumWidthWeight - mediaModuleMinimumWidthWeight) * progress
+    static func quickAppsModuleFixedWidth(for columnCount: QuickAppsColumnCount) -> CGFloat {
+        switch columnCount {
+        case .two:
+            quickAppsTwoColumnFixedWidth
+        case .three:
+            quickAppsThreeColumnFixedWidth
+        }
     }
 
     static let spring = Animation.spring(response: 0.46, dampingFraction: 0.82, blendDuration: 0.08)
@@ -130,79 +150,100 @@ enum IslandDesignTokens {
     static let pageFadeInAnimation = Animation.easeOut(duration: 0.16)
     static let pageSwapDelay: TimeInterval = 0.065
 
-    static let shellOpenMinimumDuration: TimeInterval = 0.52
-    static let shellOpenMaximumDuration: TimeInterval = 0.82
-    static let shellCloseMinimumDuration: TimeInterval = 0.34
-    static let shellCloseMaximumDuration: TimeInterval = 0.58
-    static let shellOpenInitialDelay: TimeInterval = 0.08
-    static let shellOpenPrimaryWidthOvershoot: CGFloat = 1.08
-    static let shellOpenPrimaryHeightOvershoot: CGFloat = 1.06
-    static let shellOpenUndershootScale: CGFloat = 0.97
-    static let shellOpenToExpandedDuration: TimeInterval = 0.28
-    static let shellOpenPrimaryOvershootDuration: TimeInterval = 0.10
-    static let shellOpenUndershootDuration: TimeInterval = 0.32
-    static let shellOpenFinalSettleDuration: TimeInterval = 0.30
-    static let shellOpenFinalSettleMinimumDuration: TimeInterval = 0.18
-    static let shellOpenFinalSettleMaximumDuration: TimeInterval = 0.22
-    static let shellOpenContentRevealLead: TimeInterval = 0.08
-    static let shellOpenContentRevealDelay: TimeInterval = shellOpenToExpandedDuration
-        + shellOpenPrimaryOvershootDuration
-        + shellOpenUndershootDuration
-        - shellOpenContentRevealLead
-    static let shellOpenKeyframeDuration: TimeInterval = shellOpenToExpandedDuration
-        + shellOpenPrimaryOvershootDuration
-        + shellOpenUndershootDuration
-        + shellOpenFinalSettleDuration
+    static let shellCloseMinimumDuration: TimeInterval = 0.25
+    static let shellCloseMaximumDuration: TimeInterval = 0.63
+    static let shellOpenInitialDelay: TimeInterval = 0
+    static let shellOpenPrimaryWidthOvershoot: CGFloat = 1.055
+    static let shellOpenPrimaryHeightOvershoot: CGFloat = 1.040
+    static let shellOpenBalancedDuration: TimeInterval = 0.78
+    static let shellOpenMinimumDuration: TimeInterval = 0.69
+    static let shellOpenMaximumDuration: TimeInterval = 0.87
+    static let fileDropShellOpenBalancedDuration: TimeInterval = 0.48
+    static let fileDropShellOpenMinimumDuration: TimeInterval = 0.39
+    static let fileDropShellOpenMaximumDuration: TimeInterval = 0.57
+    static let shellOpenExpansionRatio: Double = 0.49
+    static let shellOpenReboundRatio: Double = 0.12
+    static let shellOpenRecoveryRatio: Double = 0.22
+    static let shellOpenFinalSettleRatio: Double = 0.17
+    static let fileDropShellOpenExpansionRatio: Double = 0.55
+    static let fileDropShellOpenReboundRatio: Double = 0.13
+    static let fileDropShellOpenRecoveryRatio: Double = 0.18
+    static let fileDropShellOpenFinalSettleRatio: Double = 0.14
     /// Fast response at the start, followed by a long, gentle settle into the camera pill.
     static func shellCloseAnimation(duration: TimeInterval) -> Animation {
         .timingCurve(0.28, 0.46, 0.32, 1, duration: duration)
     }
-    static let primaryContentRevealDuration: TimeInterval = shellOpenFinalSettleDuration
-    static let secondaryContentRevealDuration: TimeInterval = 0.20
-    static let secondaryContentRevealDelay: TimeInterval = 0.04
+    static let contentLoadingDelay: TimeInterval = 0.08
+    static let cardRevealInterval: TimeInterval = 0.05
+    static let cardRevealDuration: TimeInterval = 0.32
+    static let primaryContentRevealDuration: TimeInterval = cardRevealDuration
     static let expandedRuntimeActivationDelay: TimeInterval = 0.05
-    static let contentHideDuration: TimeInterval = 0.13
+    static let contentHideDuration: TimeInterval = 0.12
     static let compactContentRevealDuration: TimeInterval = 0.10
     static let reduceMotionOpenDuration: TimeInterval = 0.18
     static let reduceMotionCloseDuration: TimeInterval = 0.16
 
     struct ShellOpenTiming {
-        let toExpanded: TimeInterval
-        let overshoot: TimeInterval
-        let undershoot: TimeInterval
+        let expansion: TimeInterval
+        let rebound: TimeInterval
+        let recovery: TimeInterval
         let settle: TimeInterval
 
         var total: TimeInterval {
-            toExpanded + overshoot + undershoot + settle
+            expansion + rebound + recovery + settle
         }
 
-        var contentRevealDelay: TimeInterval {
-            max(0, toExpanded + overshoot + undershoot - min(0.08, settle * 0.34))
+        var motionResponse: TimeInterval {
+            min(0.48, max(0.26, total * 0.56))
+        }
+
+        var widthMotionResponse: TimeInterval {
+            motionResponse * 0.96
+        }
+
+        var morphDuration: TimeInterval {
+            expansion + rebound
         }
     }
 
     static func shellOpenTiming(setting: Double) -> ShellOpenTiming {
-        let total = mappedDuration(
-            setting,
-            minimum: shellOpenMinimumDuration,
-            maximum: shellOpenMaximumDuration
+        let total = min(
+            max(
+                shellOpenBalancedDuration + (setting - 0.59),
+                shellOpenMinimumDuration
+            ),
+            shellOpenMaximumDuration
         )
-        let settle = mappedDuration(
-            setting,
-            minimum: shellOpenFinalSettleMinimumDuration,
-            maximum: shellOpenFinalSettleMaximumDuration
-        )
-        let preSettleDuration = max(0, total - settle)
         return ShellOpenTiming(
-            toExpanded: preSettleDuration * (0.44 / 0.71),
-            overshoot: preSettleDuration * (0.09 / 0.71),
-            undershoot: preSettleDuration * (0.18 / 0.71),
-            settle: settle
+            expansion: total * shellOpenExpansionRatio,
+            rebound: total * shellOpenReboundRatio,
+            recovery: total * shellOpenRecoveryRatio,
+            settle: total * shellOpenFinalSettleRatio
+        )
+    }
+
+    static func fileDropShellOpenTiming(setting: Double) -> ShellOpenTiming {
+        let total = min(
+            max(
+                fileDropShellOpenBalancedDuration + (setting - 0.59),
+                fileDropShellOpenMinimumDuration
+            ),
+            fileDropShellOpenMaximumDuration
+        )
+        return ShellOpenTiming(
+            expansion: total * fileDropShellOpenExpansionRatio,
+            rebound: total * fileDropShellOpenReboundRatio,
+            recovery: total * fileDropShellOpenRecoveryRatio,
+            settle: total * fileDropShellOpenFinalSettleRatio
         )
     }
 
     static func shellOpenDuration(setting: Double) -> TimeInterval {
         shellOpenTiming(setting: setting).total
+    }
+
+    static func fileDropShellOpenDuration(setting: Double) -> TimeInterval {
+        fileDropShellOpenTiming(setting: setting).total
     }
 
     static func shellCloseDuration(setting: Double) -> TimeInterval {

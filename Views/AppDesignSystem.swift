@@ -32,14 +32,14 @@ struct AppBrandIconView: View {
 }
 
 enum AppColor {
-    static let pageBackground = Color(red: 0.961, green: 0.961, blue: 0.969)
-    static let sidebarBackground = Color(red: 0.949, green: 0.957, blue: 0.969)
-    static let elevatedSurface = Color.white.opacity(0.96)
+    static let pageBackground = Color(red: 0.968, green: 0.970, blue: 0.976)
+    static let sidebarBackground = Color(red: 0.947, green: 0.952, blue: 0.963)
+    static let elevatedSurface = Color.white.opacity(0.94)
     static let solidSurface = Color.white
-    static let controlFill = Color.black.opacity(0.038)
-    static let controlFillHover = Color.black.opacity(0.062)
-    static let divider = Color.black.opacity(0.070)
-    static let border = Color.black.opacity(0.080)
+    static let controlFill = Color.black.opacity(0.032)
+    static let controlFillHover = Color.black.opacity(0.052)
+    static let divider = Color.black.opacity(0.060)
+    static let border = Color.black.opacity(0.065)
 
     static let textPrimary = Color.black.opacity(0.87)
     static let textSecondary = Color.black.opacity(0.56)
@@ -79,24 +79,24 @@ enum AppSpacing {
     static let xxl: CGFloat = 24
     static let xxxl: CGFloat = 32
 
-    static let pageHorizontal: CGFloat = 30
-    static let pageVertical: CGFloat = 28
-    static let section: CGFloat = 20
+    static let pageHorizontal: CGFloat = 32
+    static let pageVertical: CGFloat = 26
+    static let section: CGFloat = 24
     static let rowHorizontal: CGFloat = 16
     static let rowVertical: CGFloat = 12
 }
 
 enum AppRadius {
     static let control: CGFloat = 10
-    static let row: CGFloat = 12
-    static let card: CGFloat = 14
-    static let largeCard: CGFloat = 16
+    static let row: CGFloat = 10
+    static let card: CGFloat = 12
+    static let largeCard: CGFloat = 13
     static let panel: CGFloat = 20
     static let capsule: CGFloat = 999
 }
 
 enum AppTypography {
-    static let pageTitle = Font.system(size: 28, weight: .bold)
+    static let pageTitle = Font.system(size: 29, weight: .semibold)
     static let pageSubtitle = Font.system(size: 14, weight: .regular)
     static let sectionTitle = Font.system(size: 16, weight: .semibold)
     static let rowTitle = Font.system(size: 14, weight: .semibold)
@@ -107,7 +107,7 @@ enum AppTypography {
     static let badge = Font.system(size: 10, weight: .bold)
 
     static func pageTitle(_ preference: AppFontPreference) -> Font {
-        preference.font(size: 28, weight: .bold)
+        preference.font(size: 29, weight: .semibold)
     }
 
     static func pageSubtitle(_ preference: AppFontPreference) -> Font {
@@ -153,8 +153,8 @@ struct AppShadowStyle {
     let y: CGFloat
 
     static let card = AppShadowStyle(
-        color: .black.opacity(0.032),
-        radius: 12,
+        color: .black.opacity(0.030),
+        radius: 14,
         x: 0,
         y: 4
     )
@@ -172,6 +172,10 @@ enum AppMotion {
     static let standard = Animation.easeOut(duration: 0.18)
     static let page = Animation.easeOut(duration: 0.20)
     static let gentleSpring = Animation.spring(response: 0.28, dampingFraction: 0.90)
+    static let settingsPress = Animation.spring(response: 0.18, dampingFraction: 1.0)
+    static let settingsQuick = Animation.spring(response: 0.24, dampingFraction: 1.0)
+    static let settingsStandard = Animation.spring(response: 0.30, dampingFraction: 1.0)
+    static let settingsPage = Animation.spring(response: 0.36, dampingFraction: 1.0)
 
     static func resolved(_ animation: Animation, reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : animation
@@ -205,6 +209,8 @@ enum AppSurfaceKind {
 }
 
 private struct AppSurfaceModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let kind: AppSurfaceKind
     let radius: CGFloat
 
@@ -212,10 +218,10 @@ private struct AppSurfaceModifier: ViewModifier {
         content
             .background {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(fill)
+                    .fill(surfaceStyle)
                     .overlay {
                         RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .stroke(border, lineWidth: 1)
+                            .stroke(border, lineWidth: contrast == .increased ? 1 : 0.7)
                     }
                     .shadow(
                         color: kind == .elevated ? AppShadowStyle.card.color : .clear,
@@ -226,11 +232,16 @@ private struct AppSurfaceModifier: ViewModifier {
             }
     }
 
-    private var fill: Color {
+    private var surfaceStyle: AnyShapeStyle {
         switch kind {
-        case .elevated: AppColor.elevatedSurface
-        case .inset: AppColor.controlFill
-        case .island: AppColor.islandSurface
+        case .elevated:
+            reduceTransparency
+                ? AnyShapeStyle(AppColor.solidSurface)
+                : AnyShapeStyle(AppColor.elevatedSurface)
+        case .inset:
+            AnyShapeStyle(AppColor.controlFill)
+        case .island:
+            AnyShapeStyle(AppColor.islandSurface)
         }
     }
 
@@ -326,11 +337,16 @@ private struct AppSwitchToggleBody: View {
 }
 
 private struct AppSwitchButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? AppControlStyle.pressedScale : 1)
             .opacity(configuration.isPressed ? AppControlStyle.pressedOpacity : 1)
-            .animation(AppMotion.instant, value: configuration.isPressed)
+            .animation(
+                AppMotion.resolved(AppMotion.settingsPress, reduceMotion: reduceMotion),
+                value: configuration.isPressed
+            )
     }
 }
 
@@ -365,11 +381,10 @@ private struct AppButtonStyleBody: View {
             }
             .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
             .scaleEffect(configuration.isPressed ? AppControlStyle.pressedScale : 1)
-            .offset(y: isHovering && !configuration.isPressed ? AppControlStyle.hoverLift : 0)
             .opacity(isEnabled ? 1 : AppControlStyle.disabledOpacity)
             .onHover { isHovering = $0 }
-            .animation(AppMotion.resolved(.easeOut(duration: 0.12), reduceMotion: reduceMotion), value: isHovering)
-            .animation(AppMotion.resolved(AppMotion.instant, reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion), value: isHovering)
+            .animation(AppMotion.resolved(AppMotion.settingsPress, reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 
     private var foreground: Color {

@@ -12,20 +12,16 @@ struct ExpandedIslandView: View {
     @ObservedObject var settings: IslandSettings
     @ObservedObject var weatherProvider: WeatherProvider
     @ObservedObject var deviceInfoProvider: DeviceInfoProvider
+    @ObservedObject var applicationsProvider: ApplicationsProvider
+    @ObservedObject var fileProvider: FileDataProvider
+    @ObservedObject var dragController: ModuleDragController
+    @ObservedObject var reminderProvider: ReminderProvider
     let onOpenSettings: () -> Void
     let onOpenTodoSettings: () -> Void
     let onOpenFeedback: () -> Void
 
-    @StateObject private var applicationsProvider = ApplicationsProvider()
-    @StateObject private var fileProvider = FileDataProvider()
-    @StateObject private var dragController = ModuleDragController()
-    @StateObject private var calendarProvider = CalendarProvider()
-    @StateObject private var reminderProvider = ReminderProvider()
     @State private var todoSyncTask: Task<Void, Never>?
     @State private var isScrubbingPlayback = false
-    @State private var calendarWeekOffset = 0
-    @State private var calendarMonthOffset = 0
-    @State private var selectedCalendarDate: Date?
 
     // Playback + Lyrics state synced via onReceive
     @State private var currentSnapshot: PlaybackSnapshot = .idle
@@ -40,19 +36,10 @@ struct ExpandedIslandView: View {
     @State private var imageCardImage: NSImage?
     @State private var imageCardImagePath = ""
     @State private var imageCardLoadTask: Task<Void, Never>?
+    @State private var isEmptyModulesActionHovered = false
 
     var body: some View {
         panelSurface
-            .overlay {
-                if viewModel.isFileDropChooserVisible {
-                    FileDropChoiceOverlay(
-                        hoverTarget: viewModel.fileDropHoverTarget,
-                        previewName: viewModel.fileDropPreviewName
-                    )
-                    .opacity(contentRevealProgress)
-                    .transition(.scale(scale: 0.94, anchor: .top).combined(with: .opacity))
-                }
-            }
             .frame(
                 width: transitionHostSize.width,
                 height: transitionHostSize.height + viewModel.expandedContentOverflowHeight,
@@ -81,23 +68,13 @@ struct ExpandedIslandView: View {
                 }
             }
             .onChange(of: viewModel.presentationPhase) { _, phase in
-                if phase == .expanded || phase == .collapsed {
-                    resetCalendarSelectionToToday()
-                }
-
                 if phase == .collapsed {
                     stopContentProviders()
                     stopImageCardLoading()
                 }
             }
-            .onChange(of: settings.showCalendarModule) { _, _ in
-                refreshContentProviders()
-            }
             .onChange(of: settings.showTodoModule) { _, enabled in
                 refreshContentProviders(forceTodoSync: enabled)
-            }
-            .onChange(of: settings.calendarStyle) { _, _ in
-                resetCalendarSelectionToToday()
             }
             .onChange(of: settings.imageCardPath) { _, _ in
                 loadImageCardIfNeeded()
@@ -137,11 +114,23 @@ struct ExpandedIslandView: View {
 
     private var panelSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            reveal(topBar, progress: secondaryContentRevealProgress, offset: -2)
+            topBar
+                .islandContentMaterialized(
+                    isVisible: viewModel.visibleCardCount > 0,
+                    reduceMotion: viewModel.reduceMotionEnabled
+                )
+                .opacity(secondaryContentRevealProgress)
+                .allowsHitTesting(viewModel.visibleCardCount > 0)
             if viewModel.selectedTopTab == .home {
                 selectedPageContent
             } else {
-                reveal(selectedPageContent, progress: contentRevealProgress, offset: -4)
+                selectedPageContent
+                    .islandContentMaterialized(
+                        isVisible: viewModel.visibleCardCount > 1,
+                        reduceMotion: viewModel.reduceMotionEnabled
+                    )
+                    .opacity(contentRevealProgress)
+                    .allowsHitTesting(viewModel.visibleCardCount > 1)
             }
 
             Spacer(minLength: 0)
@@ -168,7 +157,19 @@ struct ExpandedIslandView: View {
             case .applications:
                 stablePage(ApplicationsGridView(provider: applicationsProvider), tab: .applications)
             case .files:
-                stablePage(FilesGridView(provider: fileProvider), tab: .files)
+                stablePage(
+                    FilesGridView(
+                        provider: fileProvider,
+                        onExternalDragStateChanged: { isDragging, fileName in
+                            if isDragging {
+                                viewModel.beginFileDrop(previewName: fileName)
+                            } else {
+                                viewModel.finishFileDropInteraction()
+                            }
+                        }
+                    ),
+                    tab: .files
+                )
             }
         }
         .frame(
@@ -220,22 +221,6 @@ struct ExpandedIslandView: View {
         viewModel.tabTransitionCanvasSize ?? contentSize
     }
 
-    private func reveal<Content: View>(
-        _ content: Content,
-        progress: Double,
-        offset: CGFloat
-    ) -> some View {
-        let clampedProgress = min(max(progress, 0), 1)
-
-        return content
-            .opacity(clampedProgress)
-            .offset(
-                y: viewModel.reduceMotionEnabled
-                    ? 0
-                    : offset * CGFloat(1 - clampedProgress)
-            )
-    }
-
     private var topBar: some View {
         HStack(alignment: .center, spacing: 14) {
             HStack(spacing: 8) {
@@ -249,10 +234,23 @@ struct ExpandedIslandView: View {
 
             settingsButton
                 .offset(x: -10)
+                .zIndex(1)
         }
+        .padding(.horizontal, 22)
+        .frame(width: visibleTopBarWidth)
+        .frame(maxWidth: .infinity, alignment: .center)
         .frame(height: IslandDesignTokens.expandedTopBarControlHeight, alignment: .center)
         .padding(.top, IslandDesignTokens.expandedTopBarTopPadding)
-        .padding(.horizontal, 22)
+    }
+
+    /// Home modules can be wider than the active display. Keep navigation
+    /// controls inside the visible screen instead of anchoring them to the
+    /// off-screen trailing edge of the card row.
+    private var visibleTopBarWidth: CGFloat {
+        guard let screenWidth = NSScreen.main?.frame.width else {
+            return contentSize.width
+        }
+        return min(contentSize.width, max(320, screenWidth - 72))
     }
 
     private var contentSize: CGSize {
@@ -286,19 +284,13 @@ struct ExpandedIslandView: View {
     private var settingsButton: some View {
         Menu {
             Button {
-                Task { @MainActor in
-                    await Task.yield()
-                    onOpenSettings()
-                }
+                onOpenSettings()
             } label: {
                 Label("打开设置", systemImage: "gearshape")
             }
 
             Button {
-                Task { @MainActor in
-                    await Task.yield()
-                    onOpenFeedback()
-                }
+                onOpenFeedback()
             } label: {
                 Label("问题反馈", systemImage: "bubble.left.and.exclamationmark")
             }
@@ -312,15 +304,16 @@ struct ExpandedIslandView: View {
             }
         } label: {
             Color.clear
-                .frame(width: 28, height: 28)
+                .frame(width: 32, height: 30)
+                .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
         .overlay {
             SettingsMenuLabel()
                 .allowsHitTesting(false)
         }
+        .fixedSize()
         .help("设置")
     }
 
@@ -338,7 +331,7 @@ struct ExpandedIslandView: View {
             if visibleModules.isEmpty {
                 emptyModulesView
             } else {
-                weightedModuleRow
+                fixedModuleRow
             }
         }
         .padding(.horizontal, IslandDesignTokens.expandedPadding)
@@ -347,7 +340,7 @@ struct ExpandedIslandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var weightedModuleRow: some View {
+    private var fixedModuleRow: some View {
         let modules = visibleModules
 
         return GeometryReader { proxy in
@@ -359,25 +352,19 @@ struct ExpandedIslandView: View {
                 // No .animation() modifier here — card rearrangement is animated
                 // explicitly via withAnimation in ModuleDragController.updateDrag().
                 ForEach(Array(modules.enumerated()), id: \.element) { idx, module in
-                    let backgroundProgress = moduleBackgroundRevealProgress(
-                        index: idx
-                    )
-                    let contentProgress = moduleContentRevealProgress(
-                        index: idx,
-                        count: modules.count
-                    )
-                    moduleCard(
-                        module,
-                        backgroundProgress: backgroundProgress,
-                        contentProgress: contentProgress
-                    )
+                    moduleCard(module)
                         .frame(width: layout.widths[idx], height: moduleCardHeight, alignment: .topLeading)
                         .offset(x: layout.offsets[idx])
                         .opacity(
                             dragController.isDragging && dragController.sourceIndex == idx
                                 ? 0
-                                : 1
+                                : contentRevealProgress
                         )
+                        .islandContentMaterialized(
+                            isVisible: idx + 1 < viewModel.visibleCardCount,
+                            reduceMotion: viewModel.reduceMotionEnabled
+                        )
+                        .allowsHitTesting(idx + 1 < viewModel.visibleCardCount)
                         .simultaneousGesture(moduleCardDragGesture(
                             cardIndex: idx,
                             cardOrigin: CGPoint(
@@ -414,39 +401,10 @@ struct ExpandedIslandView: View {
         }
     }
 
-    private func moduleBackgroundRevealProgress(index: Int) -> Double {
-        moduleRevealProgress(index: index, phaseDelay: 0)
-    }
-
-    private func moduleContentRevealProgress(index: Int, count: Int) -> Double {
-        guard count > 1 else {
-            return moduleRevealProgress(index: index, phaseDelay: 0.08)
-        }
-
-        return moduleRevealProgress(index: index, phaseDelay: 0.08)
-    }
-
-    private func moduleRevealProgress(index: Int, phaseDelay: TimeInterval) -> Double {
-        guard isContentReady else { return 0 }
-
-        let revealDuration = max(IslandDesignTokens.primaryContentRevealDuration, 0.01)
-        let itemDelay = min(Double(index) * 0.03, 0.18)
-        let animationDuration = 0.22
-        let start = min((itemDelay + phaseDelay) / revealDuration, 0.92)
-        let activeDuration = max(0.01, min(animationDuration / revealDuration, 1 - start))
-        return min(max((contentRevealProgress - start) / activeDuration, 0), 1)
-    }
-
     private func refreshContentProviders(forceTodoSync: Bool = false) {
         guard isContentReady, runtimeIsActive else {
             stopContentProviders()
             return
-        }
-
-        if settings.showCalendarModule {
-            calendarProvider.start()
-        } else {
-            calendarProvider.stop()
         }
 
         if settings.showTodoModule {
@@ -459,7 +417,6 @@ struct ExpandedIslandView: View {
     }
 
     private func stopContentProviders() {
-        calendarProvider.stop()
         reminderProvider.stop()
         todoSyncTask?.cancel()
         todoSyncTask = nil
@@ -529,17 +486,18 @@ struct ExpandedIslandView: View {
         containerWidth: CGFloat
     ) -> ModuleLayout {
         let spacing = moduleCardLayoutSpacing
-        let totalSpacing = spacing * CGFloat(max(0, modules.count - 1))
-        let availableWidth = max(1, containerWidth - totalSpacing)
-        let totalWeight = modules.reduce(CGFloat(0)) { $0 + moduleWidthWeight($1) }
+        let leadingInset = moduleRowLeadingInset(
+            modules: modules,
+            containerWidth: containerWidth
+        )
 
         var offsets: [CGFloat] = []
         var widths: [CGFloat] = []
         var midXs: [CGFloat] = []
-        var x: CGFloat = 0
+        var x = leadingInset
 
         for module in modules {
-            let w = availableWidth * moduleWidthWeight(module) / max(totalWeight, 1)
+            let w = moduleCardWidth(module)
             offsets.append(x)
             widths.append(w)
             midXs.append(x + w / 2)
@@ -559,24 +517,24 @@ struct ExpandedIslandView: View {
         }
 
         let spacing = moduleCardLayoutSpacing
-        let totalSpacing = spacing * CGFloat(max(0, modules.count - 1))
-        let availableWidth = max(1, containerWidth - totalSpacing)
-        let totalWeight = modules.reduce(CGFloat(0)) { $0 + moduleWidthWeight($1) }
+        let leadingInset = moduleRowLeadingInset(
+            modules: modules,
+            containerWidth: containerWidth
+        )
 
         let result = dragController.rearrangedLayout(
             modules: modules,
             containerWidth: containerWidth,
             spacing: spacing
-        ) { module in
-            availableWidth * moduleWidthWeight(module) / max(totalWeight, 1)
-        }
+        ) { moduleCardWidth($0) }
+        let offsets = result.offsets.map { $0 + leadingInset }
 
         var midXs: [CGFloat] = []
         for i in modules.indices {
-            midXs.append(result.offsets[i] + result.widths[i] / 2)
+            midXs.append(offsets[i] + result.widths[i] / 2)
         }
 
-        return ModuleLayout(offsets: result.offsets, widths: result.widths, midXs: midXs)
+        return ModuleLayout(offsets: offsets, widths: result.widths, midXs: midXs)
     }
 
     // MARK: - Module Drag Gesture
@@ -618,26 +576,25 @@ struct ExpandedIslandView: View {
 
     private func handleModuleDrop(modules: [IslandPanelModule]) {
         // Compute the final layout to determine where the preview should snap
-        let spacing: CGFloat = 6
+        let spacing = moduleCardLayoutSpacing
         let containerWidth = containerFrame.width > 0 ? containerFrame.width : 900
-        let totalSpacing = spacing * CGFloat(max(0, modules.count - 1))
-        let availableWidth = max(1, containerWidth - totalSpacing)
-        let totalWeight = modules.reduce(CGFloat(0)) { $0 + moduleWidthWeight($1) }
+        let leadingInset = moduleRowLeadingInset(
+            modules: modules,
+            containerWidth: containerWidth
+        )
 
         let finalLayout = dragController.rearrangedLayout(
             modules: modules,
             containerWidth: containerWidth,
             spacing: spacing
-        ) { module in
-            availableWidth * moduleWidthWeight(module) / max(totalWeight, 1)
-        }
+        ) { moduleCardWidth($0) }
 
         // Determine the snap target x-offset (top-leading)
         let snapTargetX: CGFloat
         if let srcIdx = dragController.sourceIndex {
-            snapTargetX = finalLayout.offsets[srcIdx]
+            snapTargetX = finalLayout.offsets[srcIdx] + leadingInset
         } else {
-            snapTargetX = 0
+            snapTargetX = leadingInset
         }
 
         // Animate preview to the target slot
@@ -657,11 +614,18 @@ struct ExpandedIslandView: View {
         }
     }
 
-    private func moduleWidthWeight(_ module: IslandPanelModule) -> CGFloat {
-        IslandShellLayout.moduleWidthWeight(
+    private func moduleCardWidth(_ module: IslandPanelModule) -> CGFloat {
+        IslandShellLayout.moduleFixedWidth(
             module,
-            referenceHeight: IslandShellLayout.moduleLayoutReferenceHeight(settings: settings)
+            quickAppsColumnCount: settings.quickAppsColumnCount
         )
+    }
+
+    private func moduleRowLeadingInset(
+        modules _: [IslandPanelModule],
+        containerWidth _: CGFloat
+    ) -> CGFloat {
+        0
     }
 
     private var visibleModules: [IslandPanelModule] {
@@ -673,41 +637,136 @@ struct ExpandedIslandView: View {
     }
 
     private var emptyModulesView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("No modules enabled")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(IslandDesignTokens.primaryText)
+        HStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(Color.white.opacity(0.075))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    }
 
-            Text("Open Settings to choose what appears here.")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(IslandDesignTokens.secondaryText)
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 17, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(Color.white.opacity(0.82))
+            }
+            .frame(width: 44, height: 44)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("定制你的首页")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .tracking(-0.15)
+                    .foregroundStyle(Color.white.opacity(0.94))
+
+                Text("选择常用模块，让重要信息始终触手可及。")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.48))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 24)
+
+            Button(action: onOpenSettings) {
+                Label("自定义首页", systemImage: "slider.horizontal.3")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(
+                        isEmptyModulesActionHovered ? 0.96 : 0.82
+                    ))
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background {
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(
+                                isEmptyModulesActionHovered ? 0.14 : 0.09
+                            ))
+                            .overlay {
+                                Capsule(style: .continuous)
+                                    .stroke(
+                                        Color.white.opacity(
+                                            isEmptyModulesActionHovered ? 0.20 : 0.12
+                                        ),
+                                        lineWidth: 1
+                                    )
+                            }
+                    }
+                    .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(IslandEmptyStateActionButtonStyle(
+                reduceMotion: viewModel.reduceMotionEnabled
+            ))
+            .onHover { isHovering in
+                withAnimation(AppMotion.resolved(
+                    AppMotion.quick,
+                    reduceMotion: viewModel.reduceMotionEnabled
+                )) {
+                    isEmptyModulesActionHovered = isHovering
+                }
+            }
+            .handCursor()
+            .help("打开设置并选择首页模块")
         }
-        .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, minHeight: moduleCardHeight, alignment: .leading)
+        .frame(maxWidth: 620)
+        .padding(.horizontal, 28)
+        .frame(maxWidth: .infinity, minHeight: moduleCardHeight, alignment: .center)
         .background {
             RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
-                .fill(IslandDesignTokens.moduleSurface)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.075),
+                            Color.white.opacity(0.042)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .overlay {
                     RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
-                        .stroke(IslandDesignTokens.moduleBorder, lineWidth: 1)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.14),
+                                    Color.white.opacity(0.06)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
                 }
+        }
+        .opacity(contentRevealProgress)
+        .islandContentMaterialized(
+            isVisible: viewModel.visibleCardCount > 1,
+            reduceMotion: viewModel.reduceMotionEnabled
+        )
+    }
+
+    private struct IslandEmptyStateActionButtonStyle: ButtonStyle {
+        let reduceMotion: Bool
+
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.975 : 1)
+                .opacity(configuration.isPressed ? 0.86 : 1)
+                .animation(
+                    AppMotion.resolved(
+                        AppMotion.settingsPress,
+                        reduceMotion: reduceMotion
+                    ),
+                    value: configuration.isPressed
+                )
         }
     }
 
     @ViewBuilder
-    private func moduleCard(
-        _ module: IslandPanelModule,
-        backgroundProgress: Double = 1,
-        contentProgress: Double = 1
-    ) -> some View {
+    private func moduleCard(_ module: IslandPanelModule) -> some View {
         let cornerRadius = module == .todo ? TodoScheduleCardMetrics.cornerRadius : AppRadius.largeCard
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let backgroundProgress = min(max(backgroundProgress, 0), 1)
-        let contentProgress = min(max(contentProgress, 0), 1)
 
         ZStack(alignment: .topLeading) {
             moduleCardBackground(module)
-                .opacity(backgroundProgress)
 
             VStack(alignment: .leading, spacing: moduleCardSpacing(for: module)) {
                 if shouldShowModuleHeader(for: module) {
@@ -717,8 +776,6 @@ struct ExpandedIslandView: View {
                 switch module {
                 case .weather:
                     weatherModuleContent
-                case .calendar:
-                    calendarModuleContent
                 case .todo:
                     todoModuleContent
                 case .media:
@@ -731,6 +788,8 @@ struct ExpandedIslandView: View {
                     imageCardModuleContent
                 case .deviceInfo:
                     deviceInfoModuleContent
+                case .mirror:
+                    MirrorCardView(isActive: isContentReady && runtimeIsActive)
                 }
             }
             .padding(.horizontal, moduleCardHorizontalPadding(for: module))
@@ -741,8 +800,6 @@ struct ExpandedIslandView: View {
                 maxHeight: moduleCardHeight,
                 alignment: .topLeading
             )
-            .opacity(contentProgress)
-            .offset(y: CGFloat(1 - contentProgress) * 2)
         }
         .frame(
             maxWidth: .infinity,
@@ -750,7 +807,6 @@ struct ExpandedIslandView: View {
             maxHeight: moduleCardHeight,
             alignment: .topLeading
         )
-        .offset(y: CGFloat(1 - backgroundProgress) * 5)
         .overlay {
             unifiedModuleCardBorder(shape)
         }
@@ -784,10 +840,10 @@ struct ExpandedIslandView: View {
         }
 
         return module != .media
-            && module != .calendar
             && module != .quickApps
             && module != .imageCard
             && module != .deviceInfo
+            && module != .mirror
     }
 
     private var shortcutsModuleContent: some View {
@@ -816,35 +872,62 @@ struct ExpandedIslandView: View {
             ZStack(alignment: .topLeading) {
                 ZStack(alignment: .bottomLeading) {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color(red: 0.20, green: 0.20, blue: 0.20))
+                        .fill(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .clear, location: 0.04),
+                                    .init(color: Color(red: 0.43, green: 0.96, blue: 0.78).opacity(0.36), location: 0.34),
+                                    .init(color: Color(red: 0.20, green: 0.65, blue: 1.00).opacity(0.28), location: 0.68),
+                                    .init(color: .clear, location: 0.96)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: cardSide, height: cardSide)
+                        .rotationEffect(.degrees(-rotationDegrees), anchor: .bottomLeading)
+                        .blur(radius: max(8, cardSide * 0.085))
+                        .offset(x: -cardSide * 0.025, y: cardSide * 0.035)
+
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.24, green: 0.25, blue: 0.27),
+                                    Color(red: 0.10, green: 0.11, blue: 0.13)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                         .frame(width: cardSide, height: cardSide)
 
-                    if let image = imageCardImage {
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: cardSide, height: cardSide)
-                            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                            .rotationEffect(.degrees(-rotationDegrees), anchor: .bottomLeading)
-                            .shadow(color: .black.opacity(0.34), radius: 10, x: 4, y: 7)
-                    } else {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                            .frame(width: cardSide, height: cardSide)
-                            .overlay {
-                                Image(systemName: "photo.on.rectangle.angled")
-                                    .font(.system(size: 30, weight: .semibold))
-                                    .foregroundStyle(Color.white.opacity(0.48))
-                            }
-                            .rotationEffect(.degrees(-rotationDegrees), anchor: .bottomLeading)
-                            .shadow(color: .black.opacity(0.26), radius: 9, x: 5, y: 7)
+                    Group {
+                        if let image = imageCardImage {
+                            Image(nsImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            Image("ImageCardDefault")
+                                .resizable()
+                                .scaledToFill()
+                        }
                     }
+                    .frame(width: cardSide, height: cardSide)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+                    }
+                    .rotationEffect(.degrees(-rotationDegrees), anchor: .bottomLeading)
+                    .shadow(color: Color(red: 0.14, green: 0.61, blue: 1.00).opacity(0.14), radius: 8, x: -2, y: 2)
+                    .shadow(color: .black.opacity(0.36), radius: 10, x: 4, y: 7)
                 }
                 .offset(x: visualOffsetX, y: visualOffsetY)
             }
             .frame(width: visualWidth, height: visualHeight, alignment: .topLeading)
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
-            .offset(x: -2, y: 2)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
+            .offset(x: -2)
         }
     }
 
@@ -1007,8 +1090,8 @@ struct ExpandedIslandView: View {
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color.white.opacity(0.10),
-                                Color.white.opacity(0.025),
+                                Color.white.opacity(0.075),
+                                Color.white.opacity(0.018),
                                 Color.clear
                             ],
                             center: .topLeading,
@@ -1022,7 +1105,7 @@ struct ExpandedIslandView: View {
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color.blue.opacity(0.10),
+                                Color.blue.opacity(0.07),
                                 Color.clear
                             ],
                             center: .bottomTrailing,
@@ -1036,10 +1119,6 @@ struct ExpandedIslandView: View {
     private func moduleCardSpacing(for module: IslandPanelModule) -> CGFloat {
         if module == .media {
             return 4
-        }
-
-        if module == .calendar {
-            return 2
         }
 
         if module == .todo {
@@ -1078,11 +1157,11 @@ struct ExpandedIslandView: View {
             return 0
         }
 
-        guard module == .calendar else {
-            return 14
+        if module == .mirror {
+            return 0
         }
 
-        return 5
+        return 14
     }
 
     private func moduleCardVerticalPadding(for module: IslandPanelModule) -> CGFloat {
@@ -1102,12 +1181,8 @@ struct ExpandedIslandView: View {
             return 8
         }
 
-        if module == .imageCard || module == .deviceInfo {
+        if module == .imageCard || module == .deviceInfo || module == .mirror {
             return 0
-        }
-
-        if module == .calendar {
-            return 6
         }
 
         return 8
@@ -1240,624 +1315,6 @@ struct ExpandedIslandView: View {
         return "\(humidity)%"
     }
 
-    private var calendarModuleContent: some View {
-        let calendar = calendarProvider.snapshot
-
-        switch settings.calendarStyle {
-        case .weeklySchedule:
-            return AnyView(calendarWeekContent(calendar))
-        case .monthlyGrid:
-            return AnyView(calendarMonthContent(calendar))
-        case .dotMatrix:
-            return AnyView(calendarDotMatrixContent(calendar))
-        }
-    }
-
-    private func calendarWeekContent(_ calendar: CalendarSnapshot) -> some View {
-        let today = Date()
-        let days = calendarWeekDays(for: today, offset: calendarWeekOffset)
-        let fallbackDate = days.indices.contains(3) ? days[3].date : today
-        let weekSelectedDate = selectedCalendarDate.flatMap { selectedDate in
-            days.contains { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) } ? selectedDate : nil
-        }
-        let selectedDate = weekSelectedDate
-            ?? days.first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) })?.date
-            ?? fallbackDate
-        let titleDate = selectedDate
-
-        return ZStack(alignment: .bottomLeading) {
-            VStack(alignment: .leading, spacing: calendarWeekVerticalSpacing) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(monthTitle(for: titleDate))
-                        .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color(red: 1, green: 0.27, blue: 0.29))
-                        .padding(.leading, calendarTextLeadingInset)
-
-                    Text(weekdayTitle(for: titleDate))
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.62))
-
-                    Spacer(minLength: 0)
-
-                    calendarWeekButton(systemName: "chevron.left") {
-                        withAnimation(.smooth(duration: 0.18, extraBounce: 0)) {
-                            calendarWeekOffset -= 1
-                            selectedCalendarDate = nil
-                        }
-                    }
-
-                    calendarWeekButton(systemName: "chevron.right") {
-                        withAnimation(.smooth(duration: 0.18, extraBounce: 0)) {
-                            calendarWeekOffset += 1
-                            selectedCalendarDate = nil
-                        }
-                    }
-                }
-                .frame(height: 18)
-
-                HStack(spacing: calendarWeekGridSpacing) {
-                    ForEach(days) { day in
-                        Text(day.weekday)
-                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.45))
-                            .frame(width: calendarWeekColumnWidth, alignment: .center)
-                    }
-                }
-                .frame(width: calendarWeekGridWidth, alignment: .leading)
-                .frame(height: 10)
-
-                HStack(spacing: calendarWeekGridSpacing) {
-                    ForEach(days) { day in
-                        calendarWeekDayCell(day, selectedDate: selectedDate)
-                            .frame(width: calendarWeekColumnWidth, alignment: .center)
-                    }
-                }
-                .frame(width: calendarWeekGridWidth, alignment: .leading)
-                .frame(height: 22)
-
-                calendarSchedule(calendar, for: selectedDate)
-                    .frame(height: 28, alignment: .topLeading)
-                    .padding(.leading, calendarTextLeadingInset)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            Text("\(monthDayTitle(for: selectedDate))·\(lunarDateTitle(for: selectedDate))")
-                .font(.system(size: 9.8, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.64))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: 14, alignment: .leading)
-                .padding(.leading, calendarTextLeadingInset)
-                .padding(.bottom, 1)
-        }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .clipped()
-        .help(calendar.statusText)
-    }
-
-    private var calendarWeekVerticalSpacing: CGFloat {
-        moduleCardHeight < 112 ? 4 : 6
-    }
-
-    private var calendarWeekColumnWidth: CGFloat {
-        moduleCardHeight < 112 ? 20 : 21
-    }
-
-    private var calendarWeekGridSpacing: CGFloat {
-        1
-    }
-
-    private var calendarWeekGridWidth: CGFloat {
-        calendarWeekColumnWidth * 7 + calendarWeekGridSpacing * 6
-    }
-
-    private var calendarTextLeadingInset: CGFloat {
-        6
-    }
-
-    private func resetCalendarSelectionToToday() {
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            calendarWeekOffset = 0
-            calendarMonthOffset = 0
-            selectedCalendarDate = nil
-        }
-    }
-
-    private func calendarWeekButton(systemName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.55))
-                .frame(width: 14, height: 18)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(systemName == "chevron.left" ? "上一周" : "下一周")
-    }
-
-    private func calendarWeekDayCell(_ day: CalendarWeekDay, selectedDate: Date) -> some View {
-        let isSelected = Calendar.current.isDate(day.date, inSameDayAs: selectedDate)
-        let isTodayMarker = day.isToday && !isSelected
-
-        return Button {
-            withAnimation(.smooth(duration: 0.16, extraBounce: 0)) {
-                selectedCalendarDate = day.date
-            }
-        } label: {
-            VStack(spacing: 3) {
-                ZStack {
-                    if isSelected {
-                        Circle()
-                            .fill(Color(red: 0.96, green: 0.14, blue: 0.17))
-                            .shadow(color: Color.red.opacity(0.22), radius: 4, y: 1)
-                            .frame(width: 18, height: 18)
-                    } else if isTodayMarker {
-                        Circle()
-                            .fill(Color(red: 0.96, green: 0.14, blue: 0.17).opacity(0.16))
-                            .overlay {
-                                Circle()
-                                    .stroke(Color(red: 1, green: 0.27, blue: 0.29).opacity(0.55), lineWidth: 1)
-                            }
-                            .frame(width: 18, height: 18)
-                    }
-
-                    Text("\(day.day)")
-                        .font(.system(size: isSelected ? 11.5 : 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.82))
-                        .monospacedDigit()
-                }
-                .frame(width: 19, height: 18)
-
-                Capsule()
-                    .fill(isSelected ? Color.white.opacity(0.52) : Color.clear)
-                    .frame(width: 11, height: 2)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func calendarSchedule(_ calendar: CalendarSnapshot, for date: Date) -> some View {
-        let events = Array(calendarEvents(in: calendar, for: date).prefix(2))
-
-        return VStack(alignment: .leading, spacing: 2) {
-            if events.isEmpty {
-                Text(calendar.isAuthorized ? "暂无日程" : calendar.statusText)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.45))
-                    .lineLimit(1)
-            } else {
-                ForEach(events) { event in
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(calendarAccentColor(event.calendarColorHex))
-                            .frame(width: 4, height: 4)
-
-                        Text("\(event.timeText)  \(event.title)")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.66))
-                            .lineLimit(1)
-
-                        Spacer(minLength: 0)
-                    }
-                    .frame(height: 13, alignment: .leading)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private func calendarEvents(in calendar: CalendarSnapshot, for date: Date) -> [CalendarEventSummary] {
-        let key = CalendarSnapshot.dayKey(for: date)
-        return calendar.eventsByDay[key] ?? []
-    }
-
-    private func calendarWeekDays(for date: Date, offset: Int) -> [CalendarWeekDay] {
-        let systemCalendar = Calendar.current
-        let startOfCurrentWeek = systemCalendar.startOfWeek(for: date)
-        let startOfTargetWeek = systemCalendar.date(
-            byAdding: .day,
-            value: offset * 7,
-            to: startOfCurrentWeek
-        ) ?? startOfCurrentWeek
-
-        return (0..<7).compactMap { index in
-            guard let dayDate = systemCalendar.date(byAdding: .day, value: index, to: startOfTargetWeek) else {
-                return nil
-            }
-
-            let day = systemCalendar.component(.day, from: dayDate)
-            return CalendarWeekDay(
-                id: dayDate.timeIntervalSinceReferenceDate,
-                date: dayDate,
-                weekday: calendarWeekdayTitles[index],
-                day: day,
-                isToday: systemCalendar.isDate(dayDate, inSameDayAs: date)
-            )
-        }
-    }
-
-    private func calendarMonthContent(_ calendar: CalendarSnapshot) -> some View {
-        let today = Date()
-        let displayedMonth = calendarDisplayedMonth(for: today)
-        let days = calendarMonthDays(for: displayedMonth)
-        let selectedDate = selectedCalendarDate.flatMap { date in
-            Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) ? date : nil
-        } ?? calendarDefaultDate(in: displayedMonth, today: today)
-
-        return GeometryReader { proxy in
-            let rowCount = CGFloat(max(1, days.count / 7))
-            let headerHeight: CGFloat = 18
-            let weekdayHeight: CGFloat = 12
-            let sectionSpacing: CGFloat = 6
-            let rowSpacing: CGFloat = 1
-            let contentWidth = max(1, proxy.size.width - calendarTextLeadingInset * 2)
-            let firstColumnTextInset = max(0, contentWidth / 14 - 9.5 / 2)
-            let availableGridHeight = max(
-                1,
-                proxy.size.height - headerHeight - weekdayHeight - sectionSpacing
-            )
-            let rowHeight = min(
-                19,
-                max(10, (availableGridHeight - rowSpacing * max(0, rowCount - 1)) / rowCount)
-            )
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center, spacing: 0) {
-                    Color.clear
-                        .frame(width: firstColumnTextInset, height: 1)
-
-                    Text(monthDayTitle(for: selectedDate))
-                        .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color(red: 1, green: 0.27, blue: 0.29))
-
-                    Text(weekdayTitle(for: selectedDate))
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.62))
-
-                    Spacer(minLength: 0)
-
-                    calendarMonthNavigation
-                }
-                .frame(height: headerHeight)
-
-                Spacer()
-                    .frame(height: 3)
-
-                HStack(spacing: 0) {
-                    ForEach(calendarWeekdayTitles, id: \.self) { title in
-                        Text(title)
-                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.46))
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .frame(height: weekdayHeight)
-
-                Spacer()
-                    .frame(height: 3)
-
-                LazyVGrid(columns: calendarDayColumns, spacing: rowSpacing) {
-                    ForEach(days) { day in
-                        calendarMonthStyleDayCell(
-                            day,
-                            selectedDate: selectedDate,
-                            height: rowHeight
-                        )
-                    }
-                }
-            }
-            .padding(.horizontal, calendarTextLeadingInset)
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-        }
-        .help(calendar.statusText)
-    }
-
-    private func calendarDotMatrixContent(_ calendar: CalendarSnapshot) -> some View {
-        let today = Date()
-        let displayedMonth = calendarDisplayedMonth(for: today)
-        let days = calendarMonthDays(for: displayedMonth)
-        let selectedDate = selectedCalendarDate.flatMap { date in
-            Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) ? date : nil
-        } ?? calendarDefaultDate(in: displayedMonth, today: today)
-
-        return GeometryReader { proxy in
-            let rowCount = CGFloat(max(1, days.count / 7))
-            let headerHeight: CGFloat = 18
-            let weekdayHeight: CGFloat = 11
-            let footerHeight: CGFloat = 14
-            let verticalSpacing: CGFloat = 4
-            let contentWidth = max(1, proxy.size.width - calendarTextLeadingInset * 2)
-            let firstColumnTextInset = max(0, contentWidth / 14 - 9 / 2)
-            let availableGridHeight = max(
-                1,
-                proxy.size.height - headerHeight - weekdayHeight - footerHeight - verticalSpacing * 3
-            )
-            let rowHeight = max(7, availableGridHeight / rowCount)
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center, spacing: 0) {
-                    Color.clear
-                        .frame(width: firstColumnTextInset, height: 1)
-
-                    Text(monthTitle(for: displayedMonth))
-                        .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color(red: 1, green: 0.27, blue: 0.29))
-
-                    Spacer(minLength: 0)
-
-                    calendarMonthNavigation
-                }
-                .frame(height: headerHeight)
-
-                Spacer().frame(height: verticalSpacing)
-
-                HStack(spacing: 0) {
-                    ForEach(calendarWeekdayTitles, id: \.self) { title in
-                        Text(title)
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.48))
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .frame(height: weekdayHeight)
-
-                Spacer().frame(height: verticalSpacing)
-
-                LazyVGrid(columns: calendarDayColumns, spacing: 0) {
-                    ForEach(days) { day in
-                        calendarDotDayCell(day, selectedDate: selectedDate, height: rowHeight)
-                    }
-                }
-
-                Spacer(minLength: verticalSpacing)
-
-                Text("\(dayTitle(for: selectedDate)) · \(weekdayTitle(for: selectedDate)) · \(lunarDateTitle(for: selectedDate))")
-                    .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.58))
-                    .lineLimit(1)
-                    .frame(height: footerHeight, alignment: .leading)
-                    .padding(.leading, firstColumnTextInset)
-            }
-            .padding(.horizontal, calendarTextLeadingInset)
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
-        }
-        .help(calendar.statusText)
-    }
-
-    private var calendarMonthNavigation: some View {
-        HStack(spacing: 2) {
-            calendarWeekButton(systemName: "chevron.left") {
-                moveCalendarMonth(by: -1)
-            }
-
-            calendarWeekButton(systemName: "chevron.right") {
-                moveCalendarMonth(by: 1)
-            }
-        }
-    }
-
-    private func moveCalendarMonth(by delta: Int) {
-        withAnimation(.smooth(duration: 0.18, extraBounce: 0)) {
-            let preferredDay = Calendar.current.component(.day, from: selectedCalendarDate ?? Date())
-            calendarMonthOffset += delta
-            let targetMonth = calendarDisplayedMonth(for: Date())
-            selectedCalendarDate = calendarDate(in: targetMonth, preferredDay: preferredDay)
-        }
-    }
-
-    private func calendarDisplayedMonth(for today: Date) -> Date {
-        let calendar = Calendar.current
-        let currentMonth = calendar.date(
-            from: calendar.dateComponents([.year, .month], from: today)
-        ) ?? today
-        return calendar.date(byAdding: .month, value: calendarMonthOffset, to: currentMonth) ?? currentMonth
-    }
-
-    private func calendarDefaultDate(in displayedMonth: Date, today: Date) -> Date {
-        if Calendar.current.isDate(displayedMonth, equalTo: today, toGranularity: .month) {
-            return today
-        }
-        return calendarDate(in: displayedMonth, preferredDay: Calendar.current.component(.day, from: today))
-    }
-
-    private func calendarDate(in month: Date, preferredDay: Int) -> Date {
-        let calendar = Calendar.current
-        let dayRange = calendar.range(of: .day, in: .month, for: month)
-        let day = min(max(1, preferredDay), dayRange?.count ?? 1)
-        var components = calendar.dateComponents([.year, .month], from: month)
-        components.day = day
-        return calendar.date(from: components) ?? month
-    }
-
-    private var calendarWeekdayTitles: [String] {
-        ["日", "一", "二", "三", "四", "五", "六"]
-    }
-
-    private var calendarDayColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 0, alignment: .center), count: 7)
-    }
-
-    private func calendarMonthStyleDayCell(
-        _ day: CalendarMonthDay,
-        selectedDate: Date,
-        height: CGFloat
-    ) -> some View {
-        let isSelected = day.date.map {
-            Calendar.current.isDate($0, inSameDayAs: selectedDate)
-        } ?? false
-        let circleSize = min(19, max(14, height + 3))
-
-        return Button {
-            guard let date = day.date else { return }
-            withAnimation(.smooth(duration: 0.18, extraBounce: 0)) {
-                selectedCalendarDate = date
-            }
-        } label: {
-            ZStack {
-                if isSelected {
-                    Circle()
-                        .fill(Color(red: 0.94, green: 0.10, blue: 0.13))
-                        .shadow(color: Color.red.opacity(0.18), radius: 3, y: 1)
-                        .frame(width: circleSize, height: circleSize)
-                }
-
-                if let number = day.day {
-                    Text("\(number)")
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.82))
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(day.date == nil)
-    }
-
-    private func calendarDotDayCell(
-        _ day: CalendarMonthDay,
-        selectedDate: Date,
-        height: CGFloat
-    ) -> some View {
-        let isSelected = day.date.map {
-            Calendar.current.isDate($0, inSameDayAs: selectedDate)
-        } ?? false
-
-        return Button {
-            guard let date = day.date else { return }
-            withAnimation(.easeOut(duration: 0.16)) {
-                selectedCalendarDate = date
-            }
-        } label: {
-            ZStack {
-                if day.date != nil {
-                    Circle()
-                        .fill(isSelected ? Color(red: 1, green: 0.24, blue: 0.28) : Color.white.opacity(0.56))
-                        .frame(width: isSelected ? 9 : 4, height: isSelected ? 9 : 4)
-
-                    if isSelected {
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 3, height: 3)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(day.date == nil)
-    }
-
-    private func calendarMonthDays(for date: Date) -> [CalendarMonthDay] {
-        let systemCalendar = Calendar.current
-        let todayComponents = systemCalendar.dateComponents([.year, .month, .day], from: date)
-        guard
-            let firstDayOfMonth = systemCalendar.date(from: systemCalendar.dateComponents([.year, .month], from: date)),
-            let dayRange = systemCalendar.range(of: .day, in: .month, for: firstDayOfMonth)
-        else {
-            return []
-        }
-
-        let leadingBlankCount = max(0, systemCalendar.component(.weekday, from: firstDayOfMonth) - 1)
-        let monthKey = CalendarSnapshot.dayKey(for: firstDayOfMonth)
-        var days = (0..<leadingBlankCount).map { index in
-            CalendarMonthDay(id: "\(monthKey)-leading-\(index)", date: nil, day: nil, isToday: false)
-        }
-
-        for day in dayRange {
-            let date = systemCalendar.date(byAdding: .day, value: day - 1, to: firstDayOfMonth)
-            let isToday = todayComponents.day == day
-            days.append(
-                CalendarMonthDay(
-                    id: "\(monthKey)-day-\(day)",
-                    date: date,
-                    day: day,
-                    isToday: isToday
-                )
-            )
-        }
-
-        while days.count % 7 != 0 {
-            days.append(
-                CalendarMonthDay(
-                    id: "\(monthKey)-trailing-\(days.count)",
-                    date: nil,
-                    day: nil,
-                    isToday: false
-                )
-            )
-        }
-
-        return days
-    }
-
-    private func monthTitle(for date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月"
-        return formatter.string(from: date)
-    }
-
-    private func monthDayTitle(for date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月d日"
-        return formatter.string(from: date)
-    }
-
-    private func dayTitle(for date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "d日"
-        return formatter.string(from: date)
-    }
-
-    private func weekdayTitle(for date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "E"
-        return formatter.string(from: date)
-    }
-
-    private func lunarDateTitle(for date: Date) -> String {
-        let calendar = Calendar(identifier: .chinese)
-        let components = calendar.dateComponents([.month, .day, .isLeapMonth], from: date)
-        guard let month = components.month, let day = components.day else {
-            return "农历"
-        }
-
-        let leapPrefix = components.isLeapMonth == true ? "闰" : ""
-        return "\(leapPrefix)\(lunarMonthName(month))\(lunarDayName(day))"
-    }
-
-    private func lunarMonthName(_ month: Int) -> String {
-        let names = ["正月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "冬月", "腊月"]
-        guard names.indices.contains(month - 1) else {
-            return "农历"
-        }
-
-        return names[month - 1]
-    }
-
-    private func lunarDayName(_ day: Int) -> String {
-        let names = [
-            "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十",
-            "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
-            "廿一", "廿二", "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十"
-        ]
-        guard names.indices.contains(day - 1) else {
-            return ""
-        }
-
-        return names[day - 1]
-    }
-
     private var todoModuleContent: some View {
         TodoScheduleCardView(
             tasks: viewModel.todoTasks,
@@ -1977,16 +1434,6 @@ struct ExpandedIslandView: View {
         isScrubbingPlayback ? playbackScrubProgress : playback.progress
     }
 
-    private func calendarAccentColor(_ hex: String?) -> Color {
-        guard
-            let hex,
-            let color = NSColor(hexString: hex)
-        else {
-            return Color.white.opacity(0.52)
-        }
-
-        return Color(nsColor: color).opacity(0.88)
-    }
 }
 
 private enum WeatherCardMetrics {
@@ -2184,14 +1631,12 @@ private struct WeatherMainIconView: View {
     }
 
     var body: some View {
-        Group {
-            if needsContinuousTimeline {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    iconFrame(phase: context.date.timeIntervalSinceReferenceDate)
-                }
-            } else {
-                iconFrame(phase: 0)
-            }
+        TimelineView(.animation(paused: !needsContinuousTimeline)) { context in
+            iconFrame(
+                phase: needsContinuousTimeline
+                    ? context.date.timeIntervalSinceReferenceDate
+                    : 0
+            )
         }
         .animation(.easeOut(duration: 0.18), value: kind)
     }
@@ -5773,39 +5218,39 @@ private extension Comparable {
 
 enum IslandPanelModule: String, CaseIterable, Identifiable {
     case weather
-    case calendar
     case todo
     case media
     case quickApps
     case shortcuts
     case imageCard
     case deviceInfo
+    case mirror
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .weather: "天气"
-        case .calendar: "日历"
         case .todo: "待办"
         case .media: "播放"
         case .quickApps: "快捷应用"
         case .shortcuts: "快捷指令"
         case .imageCard: "图片卡片"
         case .deviceInfo: "设备信息"
+        case .mirror: "镜子"
         }
     }
 
     var systemName: String {
         switch self {
         case .weather: "cloud.sun.fill"
-        case .calendar: "calendar"
         case .todo: "checklist"
         case .media: "waveform"
         case .quickApps: "square.grid.3x2"
         case .shortcuts: "arrow.down.circle.fill"
         case .imageCard: "photo"
         case .deviceInfo: "desktopcomputer"
+        case .mirror: "person.crop.square"
         }
     }
 }
@@ -5847,29 +5292,6 @@ private struct FinderGlyph: View {
     }
 }
 
-private struct CalendarMonthDay: Identifiable {
-    let id: String
-    let date: Date?
-    let day: Int?
-    let isToday: Bool
-}
-
-private struct CalendarWeekDay: Identifiable {
-    let id: TimeInterval
-    let date: Date
-    let weekday: String
-    let day: Int
-    let isToday: Bool
-}
-
-private extension Calendar {
-    func startOfWeek(for date: Date) -> Date {
-        let startOfDay = startOfDay(for: date)
-        let weekday = component(.weekday, from: startOfDay)
-        return self.date(byAdding: .day, value: 1 - weekday, to: startOfDay) ?? startOfDay
-    }
-}
-
 enum IslandTopTab: CaseIterable, Identifiable {
     case home
     case applications
@@ -5902,7 +5324,7 @@ enum IslandTopTab: CaseIterable, Identifiable {
     }
 }
 
-private struct TopTabButton: View {
+struct TopTabButton: View {
     let tab: IslandTopTab
     let isSelected: Bool
     let action: () -> Void
@@ -6231,6 +5653,8 @@ private struct MusicIdleLaunchCard: View {
 private enum MusicLaunchTarget: CaseIterable, Identifiable {
     case music
     case spotify
+    case qqMusic
+    case netEaseMusic
 
     var id: String { title }
 
@@ -6238,6 +5662,8 @@ private enum MusicLaunchTarget: CaseIterable, Identifiable {
         switch self {
         case .music: "音乐"
         case .spotify: "Spotify"
+        case .qqMusic: "QQ音乐"
+        case .netEaseMusic: "网易云音乐"
         }
     }
 
@@ -6247,6 +5673,10 @@ private enum MusicLaunchTarget: CaseIterable, Identifiable {
             ["com.apple.Music"]
         case .spotify:
             ["com.spotify.client"]
+        case .qqMusic:
+            ["com.tencent.QQMusicMac"]
+        case .netEaseMusic:
+            ["com.netease.163music", "com.netease.163music.mac", "com.netease.cloudmusic"]
         }
     }
 
@@ -6254,6 +5684,7 @@ private enum MusicLaunchTarget: CaseIterable, Identifiable {
         switch self {
         case .music: ("music", "png")
         case .spotify: ("spotify", "png")
+        case .qqMusic, .netEaseMusic: nil
         }
     }
 
@@ -6261,6 +5692,8 @@ private enum MusicLaunchTarget: CaseIterable, Identifiable {
         switch self {
         case .music: "music.note"
         case .spotify: "dot.radiowaves.left.and.right"
+        case .qqMusic: "q.circle.fill"
+        case .netEaseMusic: "waveform.circle.fill"
         }
     }
 
@@ -6268,6 +5701,8 @@ private enum MusicLaunchTarget: CaseIterable, Identifiable {
         switch self {
         case .music: Color(red: 0.98, green: 0.22, blue: 0.36)
         case .spotify: Color(red: 0.11, green: 0.72, blue: 0.28)
+        case .qqMusic: Color(red: 0.98, green: 0.78, blue: 0.10)
+        case .netEaseMusic: Color(red: 0.90, green: 0.10, blue: 0.12)
         }
     }
 
@@ -6714,9 +6149,9 @@ private struct MusicArtworkCover: View {
     @ViewBuilder
     private var artworkContent: some View {
         switch source {
-        case .file(let url, let version):
+        case .file(let url, let id):
             AsyncPlaybackArtworkImage(
-                source: .file(url, version: version),
+                source: .file(url, id: id),
                 width: width,
                 height: height
             ) {
@@ -6774,6 +6209,8 @@ private struct MusicArtworkCover: View {
             if let icon = MusicPlayerAppIcon.icon(for: appName) {
                 Image(nsImage: icon)
                     .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
                     .scaledToFill()
             } else {
                 RoundedRectangle(cornerRadius: badgeSize * 0.24, style: .continuous)
@@ -6789,32 +6226,116 @@ private struct MusicArtworkCover: View {
         .clipShape(RoundedRectangle(cornerRadius: badgeSize * 0.24, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: badgeSize * 0.24, style: .continuous)
-                .stroke(Color.black.opacity(0.24), lineWidth: 0.7)
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.6)
         }
-        .shadow(color: .black.opacity(0.26), radius: 2, y: 1)
+        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
     }
 }
 
 private enum MusicPlayerAppIcon {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 4
+        return cache
+    }()
+
     static func icon(for appName: String) -> NSImage? {
         let normalized = appName.lowercased()
         let bundleIdentifier: String?
 
         if normalized.contains("spotify") {
             bundleIdentifier = "com.spotify.client"
+        } else if normalized.contains("qq") || normalized.contains("腾讯") {
+            bundleIdentifier = "com.tencent.QQMusicMac"
+        } else if normalized.contains("网易") || normalized.contains("netease") {
+            bundleIdentifier = SystemNowPlayingMetadataParser.netEaseMusicBundleIdentifiers.first {
+                NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
+            }
         } else if normalized.contains("music") || normalized.contains("音乐") {
             bundleIdentifier = "com.apple.Music"
         } else {
             bundleIdentifier = nil
         }
 
-        guard let bundleIdentifier,
+        guard let bundleIdentifier else {
+            return nil
+        }
+        if let cached = cache.object(forKey: bundleIdentifier as NSString) {
+            return cached
+        }
+        guard
               let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
         else {
             return nil
         }
 
-        return NSWorkspace.shared.icon(forFile: url.path)
+        let icon = croppedToVisibleBounds(NSWorkspace.shared.icon(forFile: url.path))
+        cache.setObject(icon, forKey: bundleIdentifier as NSString)
+        return icon
+    }
+
+    private static func croppedToVisibleBounds(_ image: NSImage) -> NSImage {
+        var proposedRect = NSRect(x: 0, y: 0, width: 256, height: 256)
+        guard
+            let source = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil),
+            source.width > 0,
+            source.height > 0
+        else {
+            return image
+        }
+
+        let width = source.width
+        let height = source.height
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                | CGBitmapInfo.byteOrder32Big.rawValue
+        ) else {
+            return image
+        }
+
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var minX = width
+        var minY = height
+        var maxX = -1
+        var maxY = -1
+        let alphaThreshold: UInt8 = 8
+        for y in 0..<height {
+            let rowStart = y * bytesPerRow
+            for x in 0..<width where pixels[rowStart + x * 4 + 3] > alphaThreshold {
+                minX = min(minX, x)
+                minY = min(minY, y)
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+            }
+        }
+
+        guard maxX >= minX, maxY >= minY else { return image }
+        let padding = max(1, min(width, height) / 256)
+        minX = max(0, minX - padding)
+        minY = max(0, minY - padding)
+        maxX = min(width - 1, maxX + padding)
+        maxY = min(height - 1, maxY + padding)
+
+        let cropRect = CGRect(
+            x: minX,
+            y: minY,
+            width: maxX - minX + 1,
+            height: maxY - minY + 1
+        )
+        guard let cropped = source.cropping(to: cropRect) else { return image }
+        return NSImage(
+            cgImage: cropped,
+            size: NSSize(width: cropped.width, height: cropped.height)
+        )
     }
 }
 
@@ -6954,8 +6475,8 @@ private struct AsyncPlaybackArtworkImage<Placeholder: View>: View {
 
     private var cacheKey: String {
         switch source {
-        case .file(let url, let version):
-            return PlaybackArtworkImageCache.cacheKey(for: url, version: version)
+        case .file(let url, let id):
+            return PlaybackArtworkImageCache.cacheKey(for: url, id: id)
         case .imageData(_, let id):
             return PlaybackArtworkImageCache.cacheKey(forDataID: id)
         case .remote, nil:
@@ -6986,13 +6507,12 @@ private struct AsyncPlaybackArtworkImage<Placeholder: View>: View {
             return
         }
 
-        image = nil
         let source = source
         loadTask = Task { @MainActor in
             let loadedImage = await Task.detached(priority: .utility) { () -> NSImage? in
                 switch source {
-                case .file(let url, let version):
-                    return PlaybackArtworkImageCache.shared.loadImage(for: url, version: version)
+                case .file(let url, let id):
+                    return PlaybackArtworkImageCache.shared.loadImage(for: url, id: id)
                 case .imageData(let data, let id):
                     return PlaybackArtworkImageCache.shared.loadImage(for: data, id: id)
                 case .remote, nil:
@@ -7008,8 +6528,8 @@ private struct AsyncPlaybackArtworkImage<Placeholder: View>: View {
 
     private func cachedImage() -> NSImage? {
         switch source {
-        case .file(let url, let version):
-            return PlaybackArtworkImageCache.shared.cachedImage(for: url, version: version)
+        case .file(let url, let id):
+            return PlaybackArtworkImageCache.shared.cachedImage(for: url, id: id)
         case .imageData(_, let id):
             return PlaybackArtworkImageCache.shared.cachedImage(forDataID: id)
         case .remote, nil:
@@ -7027,24 +6547,24 @@ private final class PlaybackArtworkImageCache {
         cache.countLimit = 12
     }
 
-    static func cacheKey(for url: URL, version: TimeInterval) -> String {
-        "\(url.path)#\(version)"
+    static func cacheKey(for url: URL, id: String) -> String {
+        "\(url.path)#\(id)"
     }
 
     static func cacheKey(forDataID id: String) -> String {
         "data#\(id)"
     }
 
-    func cachedImage(for url: URL, version: TimeInterval) -> NSImage? {
-        cache.object(forKey: Self.cacheKey(for: url, version: version) as NSString)
+    func cachedImage(for url: URL, id: String) -> NSImage? {
+        cache.object(forKey: Self.cacheKey(for: url, id: id) as NSString)
     }
 
     func cachedImage(forDataID id: String) -> NSImage? {
         cache.object(forKey: Self.cacheKey(forDataID: id) as NSString)
     }
 
-    func loadImage(for url: URL, version: TimeInterval) -> NSImage? {
-        let key = Self.cacheKey(for: url, version: version) as NSString
+    func loadImage(for url: URL, id: String) -> NSImage? {
+        let key = Self.cacheKey(for: url, id: id) as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }
@@ -7089,13 +6609,13 @@ private struct SettingsMenuLabel: View {
                 color: Color.white.opacity(isHovering ? 0.16 : 0),
                 radius: isHovering ? 5 : 0
             )
-            .frame(width: 28, height: 28)
+            .frame(width: 32, height: 30)
             .contentShape(Rectangle())
-        .onHover { hovering in
-            isHovering = hovering
-        }
-        .handCursor()
-        .animation(.easeOut(duration: 0.12), value: isHovering)
+            .onHover { hovering in
+                isHovering = hovering
+            }
+            .handCursor()
+            .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 }
 
@@ -7124,81 +6644,6 @@ private struct HoverIconButton: View {
         .handCursor()
         .animation(.easeOut(duration: 0.12), value: isHovering)
         .help(help)
-    }
-}
-
-private struct FileDropChoiceOverlay: View {
-    let hoverTarget: IslandFileDropTarget?
-    let previewName: String?
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 22) {
-                dropCard(
-                    target: .staging,
-                    systemName: "tray.and.arrow.down",
-                    title: "存放文稿"
-                )
-
-                dropCard(
-                    target: .airDrop,
-                    systemName: "airdrop",
-                    title: "隔空投送"
-                )
-            }
-            .padding(.top, 108)
-            .padding(.horizontal, 72)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color.black.opacity(0.18))
-        .allowsHitTesting(false)
-    }
-
-    private func dropCard(
-        target: IslandFileDropTarget,
-        systemName: String,
-        title: String
-    ) -> some View {
-        let isActive = hoverTarget == target
-
-        return VStack(spacing: 16) {
-            Image(systemName: systemName)
-                .font(.system(size: target == .staging ? 56 : 50, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(isActive ? Color.white : Color.white.opacity(0.58))
-                .shadow(color: Color.white.opacity(isActive ? 0.22 : 0), radius: 10)
-
-            Text(title)
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .foregroundStyle(isActive ? Color.white : Color.white.opacity(0.76))
-
-            if let previewName, target == hoverTarget {
-                Text(previewName)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.88)))
-                    .transition(.scale(scale: 0.92).combined(with: .opacity))
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 170)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(isActive ? 0.13 : 0.05))
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(
-                    isActive ? Color.white.opacity(0.92) : Color.white.opacity(0.34),
-                    style: StrokeStyle(lineWidth: isActive ? 3 : 2, dash: [9, 7])
-                )
-        }
-        .scaleEffect(isActive ? 1.018 : 1)
-        .animation(.spring(response: 0.20, dampingFraction: 0.82), value: isActive)
     }
 }
 

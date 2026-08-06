@@ -22,4 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         islandWindowController.bringSettingsToFrontIfVisible()
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        NotificationCoordinator.shared.stop()
+        MediaRemoteStreamBridge.shared.shutdown()
+    }
 }

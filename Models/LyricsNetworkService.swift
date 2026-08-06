@@ -7,7 +7,6 @@ protocol LyricsNetworking {
         album: String,
         duration: TimeInterval
     ) async -> LyricsFetchResult
-    func fetchITunesTrackID(title: String, artist: String) async -> String?
 }
 
 extension LyricsNetworking {
@@ -20,11 +19,27 @@ final class LyricsNetworkService: LyricsNetworking {
 
     private let session: URLSession
     private let minimumAcceptedScore = 60
+    private let immediateAcceptanceScore = 90
+    private let softDeadline: Duration = .milliseconds(1_200)
 
     init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForRequest = 6
+        config.timeoutIntervalForResource = 8
         self.session = URLSession(configuration: config)
+    }
+
+    private func url(
+        host: String,
+        path: String,
+        queryItems: [URLQueryItem]
+    ) -> URL? {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = host
+        components.path = path
+        components.queryItems = queryItems
+        return components.url
     }
 
     // MARK: - Public
@@ -42,36 +57,74 @@ final class LyricsNetworkService: LyricsNetworking {
             duration: duration
         )
 
-        let candidates = await withTaskGroup(of: LyricsCandidate?.self, returning: [LyricsCandidate].self) { group in
-            group.addTask { await self.fetchQQLyrics(request: request) }
-            group.addTask { await self.fetchNetEaseLyrics(request: request) }
-            group.addTask { await self.fetchKugouLyrics(request: request) }
-            group.addTask { await self.fetchLrclibLyrics(request: request) }
+        return await withTaskGroup(of: LyricsSearchEvent.self, returning: LyricsFetchResult.self) { group in
+            let sourceCount = 4
+            group.addTask { .candidate(await self.fetchQQLyrics(request: request)) }
+            group.addTask { .candidate(await self.fetchNetEaseLyrics(request: request)) }
+            group.addTask { .candidate(await self.fetchKugouLyrics(request: request)) }
+            group.addTask { .candidate(await self.fetchLrclibLyrics(request: request)) }
+            group.addTask {
+                try? await Task.sleep(for: self.softDeadline)
+                return .softDeadline
+            }
 
-            var candidates: [LyricsCandidate] = []
-            for await candidate in group {
-                if let candidate, !candidate.lyrics.isEmpty, candidate.score >= self.minimumAcceptedScore {
-                    candidates.append(candidate)
+            var best: LyricsCandidate?
+            var completedSourceCount = 0
+            for await event in group {
+                switch event {
+                case .candidate(let candidate):
+                    completedSourceCount += 1
+
+                    if let candidate,
+                       !candidate.lyrics.isEmpty,
+                       candidate.score >= self.minimumAcceptedScore {
+                        if isBetter(candidate, than: best) {
+                            best = candidate
+                        }
+
+                        if candidate.score >= self.immediateAcceptanceScore,
+                           candidate.hasExactWordTiming {
+                            group.cancelAll()
+                            return .success(candidate.taggedLyrics)
+                        }
+                    }
+
+                    // A miss from one provider is only a completed attempt, not
+                    // a user-visible failure. Publish unavailable only after all
+                    // lyric providers have completed without a usable candidate.
+                    if completedSourceCount == sourceCount {
+                        group.cancelAll()
+                        guard let best else { return .notFound }
+                        return .success(best.taggedLyrics)
+                    }
+
+                case .softDeadline:
+                    if let best {
+                        group.cancelAll()
+                        return .success(best.taggedLyrics)
+                    }
                 }
             }
-            return candidates
-        }
 
-        guard let best = candidates.max(by: { lhs, rhs in
-            if lhs.score != rhs.score { return lhs.score < rhs.score }
-            return sourcePriority(lhs.source) < sourcePriority(rhs.source)
-        }) else {
-            return .notFound
+            // The explicit source-completion branch above is the normal exit.
+            // Keep this fallback for cancellation-safe exhaustiveness.
+            guard let best else { return .notFound }
+            return .success(best.taggedLyrics)
         }
-
-        return .success(best.lyrics)
     }
 
     // MARK: - QQ Music
 
     private func fetchQQLyrics(request: LyricsSearchRequest) async -> LyricsCandidate? {
-        let query = "\(request.title) \(request.artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let searchURL = URL(string: "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?p=1&n=8&w=\(query)") else {
+        guard let searchURL = url(
+            host: "c.y.qq.com",
+            path: "/soso/fcgi-bin/client_search_cp",
+            queryItems: [
+                URLQueryItem(name: "p", value: "1"),
+                URLQueryItem(name: "n", value: "8"),
+                URLQueryItem(name: "w", value: "\(request.title) \(request.artist)")
+            ]
+        ) else {
             return nil
         }
 
@@ -149,8 +202,14 @@ final class LyricsNetworkService: LyricsNetworking {
     // MARK: - NetEase
 
     private func fetchNetEaseLyrics(request: LyricsSearchRequest) async -> LyricsCandidate? {
-        let query = "\(request.title) \(request.artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let searchURL = URL(string: "https://neteasecloudmusicapi-ten-wine.vercel.app/cloudsearch?keywords=\(query)&limit=8") else {
+        guard let searchURL = url(
+            host: "neteasecloudmusicapi-ten-wine.vercel.app",
+            path: "/cloudsearch",
+            queryItems: [
+                URLQueryItem(name: "keywords", value: "\(request.title) \(request.artist)"),
+                URLQueryItem(name: "limit", value: "8")
+            ]
+        ) else {
             return nil
         }
 
@@ -183,7 +242,7 @@ final class LyricsNetworkService: LyricsNetworking {
     }
 
     private func fetchNetEaseLyricsByID(_ songID: Int) async -> [LyricLine]? {
-        guard let url = URL(string: "https://neteasecloudmusicapi-ten-wine.vercel.app/lyric?id=\(songID)") else {
+        guard let url = URL(string: "https://neteasecloudmusicapi-ten-wine.vercel.app/lyric/new?id=\(songID)") else {
             return nil
         }
 
@@ -191,9 +250,14 @@ final class LyricsNetworkService: LyricsNetworking {
             let (data, _) = try await session.data(from: url)
             let lyricsResponse = try JSONDecoder().decode(NetEaseLyricsResponse.self, from: data)
 
-            guard let lrcString = lyricsResponse.lrc?.lyric, !lrcString.isEmpty else { return nil }
-
-            let original = LyricsParser.parse(lrcString, format: .netEase)
+            let lineLyrics = lyricsResponse.lrc?.lyric.flatMap { lyric in
+                lyric.isEmpty ? nil : LyricsParser.parse(lyric, format: .netEase)
+            } ?? []
+            let wordLyrics = lyricsResponse.yrc?.lyric.flatMap { lyric in
+                lyric.isEmpty ? nil : LyricsParser.parse(lyric, format: .netEaseWord)
+            } ?? []
+            let original = wordLyrics.isEmpty ? lineLyrics : wordLyrics
+            guard !original.isEmpty else { return nil }
 
             if let tlyricString = lyricsResponse.tlyric?.lyric, !tlyricString.isEmpty {
                 let translation = LyricsParser.parse(tlyricString, format: .netEase)
@@ -209,8 +273,15 @@ final class LyricsNetworkService: LyricsNetworking {
     // MARK: - Kugou Music
 
     private func fetchKugouLyrics(request: LyricsSearchRequest) async -> LyricsCandidate? {
-        let query = "\(request.title) \(request.artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let searchURL = URL(string: "https://mobileservice.kugou.com/api/v3/search/song?keyword=\(query)&page=1&pagesize=8") else {
+        guard let searchURL = url(
+            host: "mobileservice.kugou.com",
+            path: "/api/v3/search/song",
+            queryItems: [
+                URLQueryItem(name: "keyword", value: "\(request.title) \(request.artist)"),
+                URLQueryItem(name: "page", value: "1"),
+                URLQueryItem(name: "pagesize", value: "8")
+            ]
+        ) else {
             return nil
         }
 
@@ -274,16 +345,27 @@ final class LyricsNetworkService: LyricsNetworking {
     // MARK: - lrclib
 
     private func fetchLrclibLyrics(request: LyricsSearchRequest) async -> LyricsCandidate? {
-        let encodedTitle = request.title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let encodedArtist = request.artist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let encodedAlbum = request.album.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-
-        if let exactURL = URL(string: "https://lrclib.net/api/get?track_name=\(encodedTitle)&artist_name=\(encodedArtist)&album_name=\(encodedAlbum)"),
+        if let exactURL = url(
+            host: "lrclib.net",
+            path: "/api/get",
+            queryItems: [
+                URLQueryItem(name: "track_name", value: request.title),
+                URLQueryItem(name: "artist_name", value: request.artist),
+                URLQueryItem(name: "album_name", value: request.album)
+            ]
+        ),
            let exact = await fetchLrclibFromURL(exactURL, request: request, exactRequestBonus: 4) {
             return exact
         }
 
-        guard let searchURL = URL(string: "https://lrclib.net/api/search?track_name=\(encodedTitle)&artist_name=\(encodedArtist)") else {
+        guard let searchURL = url(
+            host: "lrclib.net",
+            path: "/api/search",
+            queryItems: [
+                URLQueryItem(name: "track_name", value: request.title),
+                URLQueryItem(name: "artist_name", value: request.artist)
+            ]
+        ) else {
             return nil
         }
 
@@ -341,28 +423,6 @@ final class LyricsNetworkService: LyricsNetworking {
         }
     }
 
-    // MARK: - iTunes Search (for track ID)
-
-    func fetchITunesTrackID(title: String, artist: String) async -> String? {
-        let query = "\(title) \(artist)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let url = URL(string: "https://itunes.apple.com/search?term=\(query)&entity=song&limit=1") else {
-            return nil
-        }
-
-        do {
-            let (data, _) = try await session.data(from: url)
-            struct ITunesResponse: Decodable {
-                let results: [ITunesTrack]
-                struct ITunesTrack: Decodable {
-                    let trackId: Int
-                }
-            }
-            let response = try JSONDecoder().decode(ITunesResponse.self, from: data)
-            return response.results.first.map { String($0.trackId) }
-        } catch {
-            return nil
-        }
-    }
 }
 
 private struct LyricsSearchRequest {
@@ -376,6 +436,35 @@ private struct LyricsCandidate {
     let source: LyricsSource
     let score: Int
     let lyrics: [LyricLine]
+
+    var hasExactWordTiming: Bool {
+        lyrics.contains(where: \.hasExactWordTiming)
+    }
+
+    var taggedLyrics: [LyricLine] {
+        lyrics.map { line in
+            LyricLine(
+                startTimeMS: line.startTimeMS,
+                words: line.words,
+                translation: line.translation,
+                source: source,
+                timedUnits: line.timedUnits
+            )
+        }
+    }
+}
+
+private enum LyricsSearchEvent {
+    case candidate(LyricsCandidate?)
+    case softDeadline
+}
+
+private func isBetter(_ candidate: LyricsCandidate, than current: LyricsCandidate?) -> Bool {
+    guard let current else { return true }
+    let candidateScore = candidate.score + (candidate.hasExactWordTiming ? 3 : 0)
+    let currentScore = current.score + (current.hasExactWordTiming ? 3 : 0)
+    if candidateScore != currentScore { return candidateScore > currentScore }
+    return sourcePriority(candidate.source) > sourcePriority(current.source)
 }
 
 private func sourcePriority(_ source: LyricsSource) -> Int {

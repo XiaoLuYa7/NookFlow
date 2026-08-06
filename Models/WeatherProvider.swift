@@ -51,8 +51,15 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     private var weatherTask: Task<Void, Never>?
     private var refreshTimer: Timer?
     private var scheduledRefreshInterval: TimeInterval?
-    private static var hasRequestedAuthorization = false
+    private var locationTimeoutTimer: Timer?
+    private var isLocationUpdateActive = false
+    private var hasUsableLocationForCurrentRequest = false
+    private static let authorizationRequestLock = NSLock()
+    private static var authorizationRequestInFlight = false
     private static let defaultRefreshInterval: TimeInterval = 15 * 60
+    private static let locationTimeout: TimeInterval = 30
+    private static let systemLocationMaxAge: TimeInterval = 24 * 60 * 60
+    private static let persistedLocationMaxAge: TimeInterval = 30 * 24 * 60 * 60
 
     override init() {
         super.init()
@@ -62,6 +69,7 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
 
     deinit {
         refreshTimer?.invalidate()
+        locationTimeoutTimer?.invalidate()
         weatherTask?.cancel()
         geocoder.cancelGeocode()
         manager.stopUpdatingLocation()
@@ -69,8 +77,9 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func start(autoRefreshInterval: TimeInterval? = defaultRefreshInterval) {
-        if !hasStarted {
-            hasStarted = true
+        let shouldRequestLocation = !hasStarted || (!snapshot.isLive && !isLocationUpdateActive)
+        hasStarted = true
+        if shouldRequestLocation {
             requestLocationIfPossible()
         }
         configureAutoRefresh(interval: autoRefreshInterval)
@@ -87,29 +96,41 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
         weatherTask?.cancel()
         weatherTask = nil
         geocoder.cancelGeocode()
-        manager.stopUpdatingLocation()
+        finishLocationUpdate()
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        if manager.authorizationStatus != .notDetermined {
+            Self.finishAuthorizationRequest()
+        }
         guard hasStarted else { return }
         requestLocationIfPossible()
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
+        guard let location = locations.last, Self.isUsable(location) else { return }
+        hasUsableLocationForCurrentRequest = true
+        Self.persist(location)
+        finishLocationUpdate()
         loadWeather(for: location)
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        if let clError = error as? CLError, clError.code == .locationUnknown {
+            return
+        }
+
+        finishLocationUpdate()
+        guard !hasUsableLocationForCurrentRequest, !snapshot.isLive else { return }
         updateSnapshot(
-                WeatherSnapshot(
-                    temperature: nil,
-                    apparentTemperature: nil,
-                    humidity: nil,
-                    condition: "无法定位",
-                    locationName: "当前位置",
+            WeatherSnapshot(
+                temperature: nil,
+                apparentTemperature: nil,
+                humidity: nil,
+                condition: "无法定位",
+                locationName: "当前位置",
                 symbolName: "exclamationmark.triangle.fill",
-                detail: "请稍后重试",
+                detail: "请开启 Wi-Fi 后重试",
                 isLive: false
             )
         )
@@ -134,11 +155,10 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
 
         switch manager.authorizationStatus {
         case .notDetermined:
-            guard !Self.hasRequestedAuthorization else { return }
-            Self.hasRequestedAuthorization = true
+            guard Self.claimAuthorizationRequest() else { return }
             manager.requestWhenInUseAuthorization()
         case .authorizedAlways, .authorizedWhenInUse:
-            manager.requestLocation()
+            beginLocationUpdate()
         case .denied, .restricted:
             updateSnapshot(
                 WeatherSnapshot(
@@ -166,6 +186,127 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
                 )
             )
         }
+    }
+
+    private func beginLocationUpdate() {
+        guard !isLocationUpdateActive else { return }
+
+        hasUsableLocationForCurrentRequest = useCachedLocationIfAvailable()
+        isLocationUpdateActive = true
+        manager.pausesLocationUpdatesAutomatically = false
+        manager.startUpdatingLocation()
+
+        locationTimeoutTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.locationTimeout, repeats: false) { [weak self] _ in
+            guard let self, self.isLocationUpdateActive else { return }
+            self.finishLocationUpdate()
+            guard !self.hasUsableLocationForCurrentRequest, !self.snapshot.isLive else { return }
+            self.updateSnapshot(
+                WeatherSnapshot(
+                    temperature: nil,
+                    apparentTemperature: nil,
+                    humidity: nil,
+                    condition: "无法定位",
+                    locationName: "当前位置",
+                    symbolName: "exclamationmark.triangle.fill",
+                    detail: "请开启 Wi-Fi 后重试",
+                    isLive: false
+                )
+            )
+        }
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        locationTimeoutTimer = timer
+    }
+
+    private func finishLocationUpdate() {
+        locationTimeoutTimer?.invalidate()
+        locationTimeoutTimer = nil
+        manager.stopUpdatingLocation()
+        isLocationUpdateActive = false
+    }
+
+    @discardableResult
+    private func useCachedLocationIfAvailable() -> Bool {
+        let now = Date()
+        let location: CLLocation?
+        if let systemLocation = manager.location,
+           Self.isUsable(systemLocation),
+           now.timeIntervalSince(systemLocation.timestamp) <= Self.systemLocationMaxAge {
+            location = systemLocation
+        } else {
+            location = Self.persistedLocation(now: now)
+        }
+
+        guard let location else { return false }
+        if !snapshot.isLive {
+            loadWeather(for: location)
+        }
+        return true
+    }
+
+    private static func isUsable(_ location: CLLocation) -> Bool {
+        CLLocationCoordinate2DIsValid(location.coordinate)
+            && location.horizontalAccuracy >= 0
+            && location.horizontalAccuracy <= 50_000
+    }
+
+    private static func persist(_ location: CLLocation) {
+        let defaults = UserDefaults.standard
+        defaults.set(location.coordinate.latitude, forKey: CachedLocationKeys.latitude)
+        defaults.set(location.coordinate.longitude, forKey: CachedLocationKeys.longitude)
+        defaults.set(location.horizontalAccuracy, forKey: CachedLocationKeys.horizontalAccuracy)
+        defaults.set(location.timestamp.timeIntervalSince1970, forKey: CachedLocationKeys.timestamp)
+    }
+
+    private static func persistedLocation(now: Date) -> CLLocation? {
+        let defaults = UserDefaults.standard
+        guard
+            defaults.object(forKey: CachedLocationKeys.latitude) != nil,
+            defaults.object(forKey: CachedLocationKeys.longitude) != nil,
+            defaults.object(forKey: CachedLocationKeys.timestamp) != nil
+        else {
+            return nil
+        }
+
+        let timestamp = Date(
+            timeIntervalSince1970: defaults.double(forKey: CachedLocationKeys.timestamp)
+        )
+        guard now.timeIntervalSince(timestamp) <= persistedLocationMaxAge else { return nil }
+
+        let location = CLLocation(
+            coordinate: CLLocationCoordinate2D(
+                latitude: defaults.double(forKey: CachedLocationKeys.latitude),
+                longitude: defaults.double(forKey: CachedLocationKeys.longitude)
+            ),
+            altitude: 0,
+            horizontalAccuracy: max(0, defaults.double(forKey: CachedLocationKeys.horizontalAccuracy)),
+            verticalAccuracy: -1,
+            timestamp: timestamp
+        )
+        return isUsable(location) ? location : nil
+    }
+
+    private enum CachedLocationKeys {
+        static let latitude = "weather.lastLocation.latitude"
+        static let longitude = "weather.lastLocation.longitude"
+        static let horizontalAccuracy = "weather.lastLocation.horizontalAccuracy"
+        static let timestamp = "weather.lastLocation.timestamp"
+    }
+
+    private static func claimAuthorizationRequest() -> Bool {
+        authorizationRequestLock.lock()
+        defer { authorizationRequestLock.unlock() }
+
+        guard !authorizationRequestInFlight else { return false }
+        authorizationRequestInFlight = true
+        return true
+    }
+
+    private static func finishAuthorizationRequest() {
+        authorizationRequestLock.lock()
+        authorizationRequestInFlight = false
+        authorizationRequestLock.unlock()
     }
 
     private func loadWeather(for location: CLLocation) {

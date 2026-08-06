@@ -45,6 +45,7 @@ struct InAppNotificationPayload {
     let title: String
     let message: String
     let kind: InAppNotificationKind
+    let createdAt = Date()
 }
 
 private enum InAppNotificationMetrics {
@@ -68,15 +69,43 @@ final class InAppNotificationWindowController {
     private var queue: [InAppNotificationPayload] = []
     private var presentationTask: Task<Void, Never>?
     private var isPresenting = false
+    private var presentationGeneration = 0
 
     private init() {}
 
     func show(_ payload: InAppNotificationPayload) {
+        guard NotificationDeliveryPolicy.shouldDeliver(
+            createdAt: payload.createdAt,
+            now: Date(),
+            isSystemSleeping: false,
+            suppressedUntil: nil
+        ) else {
+            return
+        }
         queue.append(payload)
         presentNextIfNeeded()
     }
 
+    func discardPendingNotifications() {
+        presentationGeneration += 1
+        presentationTask?.cancel()
+        presentationTask = nil
+        queue.removeAll()
+        isPresenting = false
+        panel?.alphaValue = 0
+        panel?.orderOut(nil)
+        panel?.contentView = nil
+    }
+
     private func presentNextIfNeeded() {
+        queue.removeAll {
+            !NotificationDeliveryPolicy.shouldDeliver(
+                createdAt: $0.createdAt,
+                now: Date(),
+                isSystemSleeping: false,
+                suppressedUntil: nil
+            )
+        }
         guard !isPresenting, !queue.isEmpty else { return }
         isPresenting = true
         let payload = queue.removeFirst()
@@ -85,6 +114,8 @@ final class InAppNotificationWindowController {
 
     private func present(_ payload: InAppNotificationPayload) {
         presentationTask?.cancel()
+        presentationGeneration += 1
+        let generation = presentationGeneration
 
         let panel = makePanelIfNeeded()
         let panelSize = InAppNotificationMetrics.panelSize
@@ -121,6 +152,7 @@ final class InAppNotificationWindowController {
                 panel.animator().setFrameOrigin(startFrame.origin)
             } completionHandler: { [weak self, weak panel] in
                 Task { @MainActor in
+                    guard self?.presentationGeneration == generation else { return }
                     panel?.alphaValue = 0
                     panel?.orderOut(nil)
                     panel?.contentView = nil

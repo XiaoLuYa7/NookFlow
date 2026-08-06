@@ -2,16 +2,40 @@ import Foundation
 
 // MARK: - Lyric Line
 
-struct LyricLine: Identifiable, Hashable, Equatable {
+struct LyricTimedUnit: Hashable, Equatable, Codable, Sendable {
+    let text: String
+    let startTimeMS: TimeInterval
+    let durationMS: TimeInterval
+
+    var endTimeMS: TimeInterval {
+        startTimeMS + max(0, durationMS)
+    }
+}
+
+struct LyricLine: Identifiable, Hashable, Equatable, Sendable {
     let id = UUID()
     var startTimeMS: TimeInterval
     let words: String
     var translation: String?
+    var source: LyricsSource?
+    var timedUnits: [LyricTimedUnit]?
 
-    init(startTimeMS: TimeInterval, words: String, translation: String? = nil) {
+    init(
+        startTimeMS: TimeInterval,
+        words: String,
+        translation: String? = nil,
+        source: LyricsSource? = nil,
+        timedUnits: [LyricTimedUnit]? = nil
+    ) {
         self.startTimeMS = startTimeMS
         self.words = words
         self.translation = translation
+        self.source = source
+        self.timedUnits = timedUnits
+    }
+
+    var hasExactWordTiming: Bool {
+        timedUnits?.contains(where: { !$0.text.isEmpty && $0.durationMS > 0 }) == true
     }
 }
 
@@ -25,7 +49,7 @@ struct CandidateSong: Identifiable, Hashable {
     let source: LyricsSource
 }
 
-enum LyricsSource: String, Hashable {
+enum LyricsSource: String, Hashable, Codable, Sendable {
     case qq
     case netEase
     case kugou
@@ -104,6 +128,7 @@ struct NetEaseSearchResponse: Decodable {
 struct NetEaseLyricsResponse: Decodable {
     let lrc: NetEaseLyric?
     let tlyric: NetEaseLyric?
+    let yrc: NetEaseLyric?
 
     struct NetEaseLyric: Decodable {
         let lyric: String?

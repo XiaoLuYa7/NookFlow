@@ -13,13 +13,13 @@ enum IslandShellLayout {
         return order.filter { module in
             switch module {
             case .weather:    settings.showWeatherModule
-            case .calendar:   settings.showCalendarModule
             case .todo:       settings.showTodoModule
             case .media:      settings.showMediaModule
             case .quickApps:  settings.showQuickAppsModule
             case .shortcuts:  settings.showShortcutsModule
             case .imageCard:  settings.showImageCardModule
             case .deviceInfo: settings.showDeviceInfoModule
+            case .mirror:     settings.showMirrorModule
             }
         }
     }
@@ -43,51 +43,45 @@ enum IslandShellLayout {
     static func effectiveIslandWidth(settings: IslandSettings) -> CGFloat {
         let modules = visibleModules(settings: settings)
         guard !modules.isEmpty else {
-            return settings.islandSize.width
+            return max(
+                settings.islandSize.width,
+                IslandDesignTokens.fourColumnsMinimumExpandedWidth
+            )
         }
 
         let spacing = moduleCardLayoutSpacing
-        let baseCount = max(1, modules.filter { $0 != .shortcuts }.count)
-        let baseGridWidth = max(1, settings.islandSize.width - IslandDesignTokens.expandedPadding * 2)
-        let baseCardWidth = max(0, (baseGridWidth - spacing * CGFloat(baseCount - 1)) / CGFloat(baseCount))
-        let totalWeight = modules.reduce(CGFloat(0)) { partial, module in
-            partial + moduleWidthWeight(module, referenceHeight: moduleLayoutReferenceHeight(settings: settings))
+        let cardsWidth = modules.reduce(CGFloat(0)) { partial, module in
+            partial + moduleFixedWidth(
+                module,
+                quickAppsColumnCount: settings.quickAppsColumnCount
+            )
         }
         let totalSpacing = spacing * CGFloat(max(0, modules.count - 1))
-        let minimumWidthUnit = modules.reduce(CGFloat(0)) { current, module in
-            let weight = moduleWidthWeight(
-                module,
-                referenceHeight: moduleLayoutReferenceHeight(settings: settings)
-            )
-            return max(current, moduleMinimumWidth(module) / max(weight, 0.01))
-        }
-        let minimumContentWidth = minimumWidthUnit * totalWeight
-            + totalSpacing
-            + IslandDesignTokens.expandedPadding * 2
-        let weightedContentWidth = baseCardWidth * totalWeight
+        let fixedContentWidth = cardsWidth
             + totalSpacing
             + IslandDesignTokens.expandedPadding * 2
 
-        return max(weightedContentWidth, minimumContentWidth)
+        return max(
+            IslandDesignTokens.fourColumnsMinimumExpandedWidth,
+            fixedContentWidth
+        )
     }
 
     static func contentSize(settings: IslandSettings, selectedTopTab: IslandTopTab) -> CGSize {
-        let unifiedWidth = effectiveIslandWidth(settings: settings)
-
         switch selectedTopTab {
         case .applications:
             return CGSize(
-                width: unifiedWidth,
+                width: settings.islandSize.width,
                 height: IslandDesignTokens.applicationsExpandedHeight
             )
         case .files:
             return CGSize(
-                width: unifiedWidth,
+                width: settings.islandSize.width,
                 height: IslandDesignTokens.filesExpandedHeight
             )
         case .home:
             return CGSize(
-                width: unifiedWidth,
+                width: effectiveIslandWidth(settings: settings),
                 height: effectiveIslandHeight(settings: settings)
             )
         }
@@ -245,50 +239,28 @@ enum IslandShellLayout {
         )
     }
 
-    static func moduleWidthWeight(_ module: IslandPanelModule, referenceHeight: CGFloat) -> CGFloat {
+    static func moduleFixedWidth(
+        _ module: IslandPanelModule,
+        quickAppsColumnCount: QuickAppsColumnCount
+    ) -> CGFloat {
         switch module {
         case .weather:
-            return 1.03
+            return IslandDesignTokens.weatherModuleFixedWidth
         case .media:
-            return IslandDesignTokens.mediaModuleWidthWeight(for: referenceHeight)
-        case .calendar:
-            return 1.2
+            return IslandDesignTokens.mediaModuleFixedWidth
         case .todo:
-            return 0.92
+            return IslandDesignTokens.todoModuleFixedWidth
         case .quickApps:
-            return IslandDesignTokens.quickAppsModuleWidthWeight
+            return IslandDesignTokens.quickAppsModuleFixedWidth(for: quickAppsColumnCount)
         case .shortcuts:
-            return IslandDesignTokens.shortcutsModuleWidthWeight
+            return IslandDesignTokens.shortcutsModuleFixedWidth
         case .imageCard:
-            return 0.68
+            return IslandDesignTokens.imageCardModuleFixedWidth
         case .deviceInfo:
-            return IslandDesignTokens.deviceInfoModuleWidthWeight
+            return IslandDesignTokens.deviceInfoModuleFixedWidth
+        case .mirror:
+            return IslandDesignTokens.mirrorModuleFixedWidth
         }
-    }
-
-    private static func moduleMinimumWidth(_ module: IslandPanelModule) -> CGFloat {
-        switch module {
-        case .calendar:
-            return 174
-        case .weather:
-            return 150
-        case .media:
-            return 190
-        case .quickApps:
-            return 140
-        case .shortcuts:
-            return 136
-        case .imageCard:
-            return 104
-        case .deviceInfo:
-            return 168
-        case .todo:
-            return 188
-        }
-    }
-
-    static func moduleLayoutReferenceHeight(settings: IslandSettings) -> CGFloat {
-        effectiveIslandHeight(settings: settings) + IslandDesignTokens.expandedTopBarHeightReduction
     }
 
     private static func clamped(_ value: CGFloat) -> CGFloat {

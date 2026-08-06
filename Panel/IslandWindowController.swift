@@ -18,11 +18,16 @@ final class IslandWindowController: NSObject {
     private var trackingView: IslandTrackingView?
     private var cancellables = Set<AnyCancellable>()
     private var tabPanelFrameSettlementTask: Task<Void, Never>?
+    private var workspaceVisibilitySettlementTask: Task<Void, Never>?
+    private var settingsPresentationTask: Task<Void, Never>?
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
     private var didShowUnsupportedHardwareAlert = false
     private var hasActiveExternalInteractiveFrame = false
     private var externalInteractionDismissGraceDeadline: Date?
+    private var isExternalFileDragSessionActive = false
+    private var fileDropHoverSuppressionRect: NSRect?
+    private var requiresFreshNotchHoverAfterFileDrop = false
     private let externalInteractionDismissGraceDelay: TimeInterval = 0.85
 
     deinit {
@@ -40,6 +45,8 @@ final class IslandWindowController: NSObject {
         }
         cancellables.removeAll()
         tabPanelFrameSettlementTask?.cancel()
+        workspaceVisibilitySettlementTask?.cancel()
+        settingsPresentationTask?.cancel()
         let trackingView = trackingView
         let panel = panel
         Task { @MainActor in
@@ -78,14 +85,14 @@ final class IslandWindowController: NSObject {
 
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
-            selector: #selector(workspaceVisibilityDidChange),
+            selector: #selector(activeSpaceDidChange),
             name: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil
         )
 
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
-            selector: #selector(workspaceVisibilityDidChange),
+            selector: #selector(activeApplicationDidChange),
             name: NSWorkspace.didActivateApplicationNotification,
             object: nil
         )
@@ -139,23 +146,36 @@ final class IslandWindowController: NSObject {
             self?.handleMouseInsideChanged(isInside)
         }
         trackingView.onCameraAreaHoverChanged = { [weak self] isHovering in
-            self?.viewModel.updateCameraHover(isHovering)
+            self?.handleCameraAreaHoverChanged(isHovering)
         }
         trackingView.onFileDragChanged = { [weak self] isActive, target, previewName in
             guard let self else { return }
             if isActive {
-                self.setPanelFrame(for: .expanded)
-                if !self.viewModel.isFileDropChooserVisible {
-                    self.viewModel.beginFileDrop(previewName: previewName)
-                }
+                self.viewModel.beginFileDrop(previewName: previewName)
                 self.viewModel.updateFileDropTarget(target)
             } else {
-                self.viewModel.endFileDrop()
+                self.viewModel.finishFileDropInteraction()
             }
+        }
+        trackingView.onExternalFileDragSessionChanged = { [weak self] isActive in
+            self?.handleExternalFileDragSessionChanged(isActive)
+        }
+        trackingView.shouldActivateFileDrop = { [weak self, weak trackingView] point in
+            guard let self,
+                  let trackingView,
+                  let window = trackingView.window
+            else { return false }
+
+            let windowPoint = trackingView.convert(point, to: nil)
+            let screenPoint = window.convertPoint(toScreen: windowPoint)
+            return self.fileDropActivationRect.contains(screenPoint)
+        }
+        trackingView.shouldRetainFileDropAfterExit = { [weak self] screenPoint in
+            self?.fileDropActivationRect.contains(screenPoint) == true
         }
         trackingView.onFileDrop = { [weak self] urls, target in
             guard let self, let target else { return false }
-            self.viewModel.endFileDrop()
+            self.viewModel.finishFileDropInteraction()
 
             switch target {
             case .staging:
@@ -200,7 +220,52 @@ final class IslandWindowController: NSObject {
     }
 
     private func setPanelFrame(for mode: IslandMode, display: Bool = false) {
+        if viewModel.isFileDropChooserVisible {
+            setPanelFrameForFileDropChooser(display: display)
+            return
+        }
         setPanelFrameToCurrentEnvelope(display: display)
+    }
+
+    private func setPanelFrameForFileDropChooser(display: Bool = false) {
+        trackingView?.expandedShellSize = IslandFileDropLayout.size
+        guard let panel else { return }
+
+        let targetRect = panelRect(
+            for: IslandFileDropLayout.windowSize(
+                for: viewModel.fileDropShellCanvasSize
+            )
+        )
+        let envelopeSize = CGSize(
+            width: max(panel.frame.width, targetRect.width),
+            height: max(panel.frame.height, targetRect.height)
+        )
+        // Keep the transparent host at its envelope for the whole drag. Shrinking
+        // it at the end of the SwiftUI animation forced a second full layout pass
+        // and produced the visible hitch reported during expanded-to-drop morphs.
+        applyPanelFrame(
+            panelRect(for: envelopeSize),
+            display: display,
+            layoutImmediately: false
+        )
+    }
+
+    private func preparePanelFrameForFileDropRestoration(to tab: IslandTopTab) {
+        guard let panel else { return }
+
+        let targetSize = panelEnvelopeSize(selectedTopTab: tab)
+        let envelopeSize = CGSize(
+            width: max(panel.frame.width, targetSize.width),
+            height: max(panel.frame.height, targetSize.height)
+        )
+        applyPanelFrame(panelRect(for: envelopeSize), display: false)
+    }
+
+    private func restoreExpandedShellTrackingSize() {
+        trackingView?.expandedShellSize = IslandShellLayout.contentSize(
+            settings: settings,
+            selectedTopTab: viewModel.selectedTopTab
+        )
     }
 
     private func setPanelFrameToCurrentEnvelope(
@@ -259,17 +324,37 @@ final class IslandWindowController: NSObject {
         }
     }
 
-    private func applyPanelFrame(_ rect: NSRect, display: Bool) {
+    private func applyPanelFrame(
+        _ rect: NSRect,
+        display: Bool,
+        layoutImmediately: Bool = true
+    ) {
         guard let panel else { return }
         if panel.frame != rect {
             panel.setFrame(rect, display: display)
         }
 
-        panel.contentView?.setFrameSize(rect.size)
-        panel.contentView?.layoutSubtreeIfNeeded()
+        if layoutImmediately {
+            panel.contentView?.setFrameSize(rect.size)
+            panel.contentView?.layoutSubtreeIfNeeded()
+        }
     }
 
     private func handleMouseInsideChanged(_ isInside: Bool) {
+        if viewModel.isFileDropChooserVisible {
+            viewModel.cancelCollapse()
+            return
+        }
+
+        if isExternalFileDragSessionActive || NSEvent.pressedMouseButtons != 0 {
+            viewModel.cancelPendingCapsuleExpand()
+            return
+        }
+
+        if shouldSuppressHoverAfterFileDrop(at: NSEvent.mouseLocation) {
+            return
+        }
+
         if isInside, isPointerInsidePanel {
             viewModel.cancelCollapse()
             return
@@ -301,14 +386,35 @@ final class IslandWindowController: NSObject {
             ? 0
             : viewModel.expandedContentOverflowHeight
         let compactEnvelope = CGSize(
-            width: viewModel.compactCapsuleSize.width * IslandDesignTokens.compactHoverWidthScale + 40,
+            width: viewModel.compactCapsuleSize.width
+                * IslandDesignTokens.compactHoverWidthScale + 40,
             height: viewModel.compactCapsuleSize.height * IslandDesignTokens.compactHoverHeightScale
                 + IslandDesignTokens.applicationsWindowVerticalPadding
         )
+        let fileDropSourceSize = CGSize(
+            width: viewModel.compactCapsuleSize.width
+                * IslandDesignTokens.compactHoverWidthScale,
+            height: viewModel.compactCapsuleSize.height
+                * IslandDesignTokens.compactHoverHeightScale
+        )
+        let fileDropCanvas = IslandFileDropLayout.openingCanvasSize(
+            from: fileDropSourceSize,
+            bounce: settings.bounceLevel
+        )
+        let fileDropEnvelope = IslandFileDropLayout.windowSize(for: fileDropCanvas)
 
         return CGSize(
-            width: max(expandedEnvelope.width, compactEnvelope.width),
-            height: max(expandedEnvelope.height + expandedOverflowHeight, compactEnvelope.height)
+            width: max(
+                max(expandedEnvelope.width, compactEnvelope.width),
+                fileDropEnvelope.width
+            ),
+            height: max(
+                max(
+                    expandedEnvelope.height + expandedOverflowHeight,
+                    compactEnvelope.height
+                ),
+                fileDropEnvelope.height
+            )
         )
     }
 
@@ -324,7 +430,12 @@ final class IslandWindowController: NSObject {
         let centerX = NotchGeometryProvider.cameraSafeRegionCenterX(for: screen)
             ?? screenFrame.midX
         let x = round((centerX - width / 2) * scale) / scale
-        let y = round((screenFrame.maxY - height) * scale) / scale
+        // Keep two physical pixels of the shell beyond the display edge. One
+        // pixel was still vulnerable to SwiftUI shape antialiasing while the
+        // file-drop host resized, exposing a bright hairline above the chooser.
+        let screenTop = ceil(screenFrame.maxY * scale) / scale
+        let topEdgeBleed = IslandDesignTokens.shellTopEdgeBleedPhysicalPixels / scale
+        let y = screenTop + topEdgeBleed - height
 
         return NSRect(x: x, y: y, width: width, height: height)
     }
@@ -388,7 +499,16 @@ final class IslandWindowController: NSObject {
         }
 
         let cameraWidth = max(1, cameraCapsule.width)
-        let height = max(1, cameraCapsule.height)
+        // Reveal a restrained edge outside the system-reported camera gap.
+        let cameraShellWidth = cameraWidth
+            + IslandDesignTokens.compactCameraShellHorizontalExtension * 2
+        let scale = max(1, screen.backingScaleFactor)
+        // The host intentionally bleeds beyond the display edge. Add the same
+        // physical amount to the compact shell so its visible bottom still
+        // reaches the menu-bar boundary instead of ending two pixels early.
+        let topEdgeBleed = IslandDesignTokens.shellTopEdgeBleedPhysicalPixels / scale
+        let height = max(1, cameraCapsule.height + topEdgeBleed)
+        let displayAlignedHeight = ceil(height * scale) / scale
         let minimumStatusWidth = max(
             180,
             cameraWidth + IslandDesignTokens.compactCapsuleHorizontalExtension * 2
@@ -405,9 +525,9 @@ final class IslandWindowController: NSObject {
         )
 
         return (
-            CGSize(width: ceil(cameraWidth), height: ceil(height)),
-            CGSize(width: ceil(statusWidth), height: ceil(height)),
-            CGSize(width: ceil(lyricWidth), height: ceil(height))
+            CGSize(width: ceil(cameraShellWidth), height: displayAlignedHeight),
+            CGSize(width: ceil(statusWidth), height: displayAlignedHeight),
+            CGSize(width: ceil(lyricWidth), height: displayAlignedHeight)
         )
     }
 
@@ -522,10 +642,15 @@ final class IslandWindowController: NSObject {
     }
 
     private var currentInteractiveShellRect: NSRect {
+        if viewModel.isFileDropChooserVisible {
+            let shellRect = visualShellRect(for: IslandFileDropLayout.size)
+            return shellRect.union(externalPinButtonHitRect(attachedTo: shellRect))
+        }
+
         switch viewModel.presentationPhase {
         case .collapsed:
             return compactCapsuleHitRect
-        case .expandingShell, .revealingContent:
+        case .expandingShell, .loadingContent:
             return interactiveShellRect(
                 for: IslandShellLayout.openingEnvelopeSize(
                     settings: settings,
@@ -542,6 +667,24 @@ final class IslandWindowController: NSObject {
         }
     }
 
+    private var fileDropActivationRect: NSRect {
+        let interactiveRect = currentInteractiveShellRect
+        guard viewModel.presentationPhase == .collapsed,
+              !viewModel.isFileDropChooserVisible
+        else {
+            return interactiveRect
+        }
+
+        return NSRect(
+            x: interactiveRect.minX - IslandFileDropLayout.compactActivationHorizontalPadding,
+            y: interactiveRect.minY - IslandFileDropLayout.compactActivationBottomPadding,
+            width: interactiveRect.width
+                + IslandFileDropLayout.compactActivationHorizontalPadding * 2,
+            height: interactiveRect.height
+                + IslandFileDropLayout.compactActivationBottomPadding
+        )
+    }
+
     private func interactiveShellRect(for size: CGSize) -> NSRect {
         let shellRect = visualShellRect(for: size)
         let overflowHeight = viewModel.presentationPhase == .collapsed
@@ -556,7 +699,12 @@ final class IslandWindowController: NSObject {
             )
             : shellRect
         guard settings.showPinButton else { return interactiveRect }
-        return interactiveRect.union(externalPinButtonHitRect(attachedTo: shellRect))
+        let pinAnchorSize = IslandShellLayout.contentSize(
+            settings: settings,
+            selectedTopTab: viewModel.selectedTopTab
+        )
+        let pinAnchorRect = visualShellRect(for: pinAnchorSize)
+        return interactiveRect.union(externalPinButtonHitRect(attachedTo: pinAnchorRect))
     }
 
     private func externalPinButtonHitRect(attachedTo shellRect: NSRect) -> NSRect {
@@ -579,14 +727,14 @@ final class IslandWindowController: NSObject {
         guard localMouseMonitor == nil, globalMouseMonitor == nil else { return }
 
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
+            matching: [.mouseMoved]
         ) { [weak self] event in
             self?.handlePointerMoved(at: NSEvent.mouseLocation)
             return event
         }
 
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
+            matching: [.mouseMoved]
         ) { [weak self] _ in
             self?.handlePointerMoved(at: NSEvent.mouseLocation)
         }
@@ -604,16 +752,84 @@ final class IslandWindowController: NSObject {
     }
 
     private func updateCompactHoverState(at globalPoint: NSPoint) {
-        guard viewModel.presentationPhase == .collapsed else { return }
+        guard !isExternalFileDragSessionActive,
+              NSEvent.pressedMouseButtons == 0,
+              !viewModel.isFileDropChooserVisible,
+              !shouldSuppressHoverAfterFileDrop(at: globalPoint),
+              viewModel.presentationPhase == .collapsed
+        else { return }
         viewModel.updateCameraHover(compactCapsuleContains(globalPoint))
     }
 
+    private func handleCameraAreaHoverChanged(_ isHovering: Bool) {
+        guard !isExternalFileDragSessionActive,
+              NSEvent.pressedMouseButtons == 0,
+              !viewModel.isFileDropChooserVisible,
+              !shouldSuppressHoverAfterFileDrop(at: NSEvent.mouseLocation)
+        else {
+            viewModel.cancelPendingCapsuleExpand()
+            return
+        }
+        viewModel.updateCameraHover(isHovering)
+    }
+
+    private func handleExternalFileDragSessionChanged(_ isActive: Bool) {
+        guard isExternalFileDragSessionActive != isActive else { return }
+        isExternalFileDragSessionActive = isActive
+
+        if isActive {
+            workspaceVisibilitySettlementTask?.cancel()
+            workspaceVisibilitySettlementTask = nil
+            viewModel.cancelPendingCapsuleExpand()
+        } else if !viewModel.isFileDropChooserVisible {
+            schedulePanelVisibilityReconciliation(delay: 0.30)
+        }
+    }
+
     private func handlePointerMoved(at globalPoint: NSPoint) {
+        guard !viewModel.isFileDropChooserVisible else {
+            viewModel.cancelCollapse()
+            return
+        }
+
+        guard !shouldSuppressHoverAfterFileDrop(
+            at: globalPoint,
+            allowsRelease: true
+        ) else {
+            return
+        }
+
         if viewModel.presentationPhase == .collapsed {
             updateCompactHoverState(at: globalPoint)
         } else {
             reconcilePointerHoverState()
         }
+    }
+
+    private func shouldSuppressHoverAfterFileDrop(
+        at globalPoint: NSPoint,
+        allowsRelease: Bool = false
+    ) -> Bool {
+        guard requiresFreshNotchHoverAfterFileDrop else {
+            return false
+        }
+
+        if let suppressionRect = fileDropHoverSuppressionRect,
+           suppressionRect.contains(globalPoint) {
+            return true
+        }
+
+        fileDropHoverSuppressionRect = nil
+
+        guard allowsRelease,
+              viewModel.presentationPhase == .collapsed,
+              compactCapsuleContains(globalPoint)
+        else {
+            return true
+        }
+
+        requiresFreshNotchHoverAfterFileDrop = false
+        return false
     }
 
     private func compactCapsuleContains(_ globalPoint: NSPoint) -> Bool {
@@ -655,9 +871,8 @@ final class IslandWindowController: NSObject {
             }
             .store(in: &cancellables)
 
-        Publishers.CombineLatest4(
+        Publishers.CombineLatest3(
             settings.$showWeatherModule,
-            settings.$showCalendarModule,
             settings.$showTodoModule,
             settings.$showMediaModule
         )
@@ -690,6 +905,20 @@ final class IslandWindowController: NSObject {
             }
             .store(in: &cancellables)
 
+        Publishers.CombineLatest3(
+            settings.$showImageCardModule,
+            settings.$showDeviceInfoModule,
+            settings.$showMirrorModule
+        )
+        .dropFirst()
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _ in
+            guard let self else { return }
+            guard !self.viewModel.isCollapsing else { return }
+            self.setPanelFrame(for: self.viewModel.mode)
+        }
+        .store(in: &cancellables)
+
         viewModel.$presentationPhase
             .dropFirst()
             .receive(on: DispatchQueue.main)
@@ -698,15 +927,52 @@ final class IslandWindowController: NSObject {
 
                 switch phase {
                 case .expandingShell:
-                    self.setPanelFrameToCurrentEnvelope()
+                    self.setPanelFrame(for: self.viewModel.mode)
                 case .collapsed:
+                    self.restoreExpandedShellTrackingSize()
                     self.setPanelFrameToCurrentEnvelope()
                 case .expanded:
-                    self.setPanelFrameToCurrentEnvelope()
+                    self.setPanelFrame(for: self.viewModel.mode)
                     self.reconcilePointerHoverState()
-                case .revealingContent, .hidingContent, .collapsingShell:
+                case .loadingContent, .hidingContent, .collapsingShell:
                     break
                 }
+            }
+            .store(in: &cancellables)
+
+        viewModel.$isFileDropChooserVisible
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] isVisible in
+                guard let self else { return }
+                if isVisible {
+                    self.fileDropHoverSuppressionRect = nil
+                    self.requiresFreshNotchHoverAfterFileDrop = false
+                    // Mission Control can activate Dock and change Spaces while a
+                    // file is held at the screen edge. Cancel any queued visibility
+                    // scan so it cannot compete with the chooser's opening frames.
+                    self.workspaceVisibilitySettlementTask?.cancel()
+                    self.workspaceVisibilitySettlementTask = nil
+                    // Resize the transparent host without forcing AppKit to draw
+                    // the outgoing island before SwiftUI commits the chooser.
+                    self.setPanelFrameForFileDropChooser(display: false)
+                } else {
+                    self.fileDropHoverSuppressionRect = self
+                        .visualShellRect(for: IslandFileDropLayout.size)
+                        .insetBy(dx: -8, dy: -8)
+                    self.requiresFreshNotchHoverAfterFileDrop = true
+                    self.viewModel.cancelPendingCapsuleExpand()
+                    self.restoreExpandedShellTrackingSize()
+                    self.setPanelFrameToCurrentEnvelope(display: false)
+                    self.schedulePanelVisibilityReconciliation(delay: 0.30)
+                }
+            }
+            .store(in: &cancellables)
+
+        viewModel.$fileDropRestorationTarget
+            .compactMap { $0 }
+            .sink { [weak self] tab in
+                self?.preparePanelFrameForFileDropRestoration(to: tab)
             }
             .store(in: &cancellables)
 
@@ -775,6 +1041,7 @@ final class IslandWindowController: NSObject {
             .sink { [weak self] tab in
                 guard let self,
                       self.viewModel.mode == .expanded,
+                      !self.viewModel.isFileDropChooserVisible,
                       !self.viewModel.isCollapsing
                 else {
                     return
@@ -826,8 +1093,37 @@ final class IslandWindowController: NSObject {
         applyPanelVisibility()
     }
 
-    @objc private func workspaceVisibilityDidChange() {
-        applyPanelVisibility()
+    @objc private func activeSpaceDidChange() {
+        // The notification is delivered while Mission Control is still settling.
+        // Reordering a high-level panel or enumerating every on-screen window here
+        // steals frames from the file-drop shell animation.
+        guard !isExternalFileDragSessionActive,
+              !viewModel.isFileDropChooserVisible
+        else { return }
+        schedulePanelVisibilityReconciliation(delay: 0.28)
+    }
+
+    @objc private func activeApplicationDidChange() {
+        // Application activation can fire several times during a Space gesture.
+        // Coalesce those events into a single visibility pass.
+        guard !isExternalFileDragSessionActive,
+              !viewModel.isFileDropChooserVisible
+        else { return }
+        schedulePanelVisibilityReconciliation(delay: 0.10)
+    }
+
+    private func schedulePanelVisibilityReconciliation(delay: TimeInterval) {
+        workspaceVisibilitySettlementTask?.cancel()
+        workspaceVisibilitySettlementTask = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(delay * 1_000_000_000)
+                )
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.workspaceVisibilitySettlementTask = nil
+            self.applyPanelVisibility()
+        }
     }
 
     private func applyPanelVisibility() {
@@ -840,10 +1136,20 @@ final class IslandWindowController: NSObject {
             return
         }
 
+        if isExternalFileDragSessionActive || viewModel.isFileDropChooserVisible {
+            // The panel was already visible for AppKit to accept this drag.
+            // Keep the drag interaction responsive and avoid the synchronous
+            // CGWindowListCopyWindowInfo scan until the chooser is dismissed.
+            if !panel.isVisible || !panel.isOnActiveSpace {
+                panel.orderFrontRegardless()
+            }
+            return
+        }
+
         if settings.hideInFullscreen, isFullscreenAppActive() {
             viewModel.collapse()
             panel.orderOut(nil)
-        } else {
+        } else if !panel.isVisible || !panel.isOnActiveSpace {
             panel.orderFrontRegardless()
         }
     }
@@ -860,7 +1166,9 @@ final class IslandWindowController: NSObject {
         if !settings.hideInFullscreen {
             behavior.insert(.fullScreenAuxiliary)
         }
-        panel.collectionBehavior = behavior
+        if panel.collectionBehavior != behavior {
+            panel.collectionBehavior = behavior
+        }
     }
 
     private func isFullscreenAppActive() -> Bool {
@@ -939,14 +1247,16 @@ final class IslandWindowController: NSObject {
 
     private func openSettingsWindow(page: SettingsPage, presentFeedback: Bool) {
         viewModel.cancelCollapse()
+        settingsPresentationTask?.cancel()
 
         // The island is a non-activating status-bar panel. Deferring the settings
         // window presentation to the next main-loop turn prevents AppKit from
         // swallowing makeKey/orderFront while the custom island menu is closing.
-        Task { @MainActor [weak self] in
+        settingsPresentationTask = Task { @MainActor [weak self] in
             await Task.yield()
-            guard let self else { return }
+            guard let self, !Task.isCancelled else { return }
             self.settingsWindowController.show(page: page, presentFeedback: presentFeedback)
+            self.settingsPresentationTask = nil
         }
     }
 }
@@ -957,15 +1267,23 @@ private final class IslandTrackingView: NSView {
     var onMouseInsideChanged: ((Bool) -> Void)?
     var onCameraAreaHoverChanged: ((Bool) -> Void)?
     var onFileDragChanged: ((Bool, IslandFileDropTarget?, String?) -> Void)?
+    var onExternalFileDragSessionChanged: ((Bool) -> Void)?
     var onFileDrop: (([URL], IslandFileDropTarget?) -> Bool)?
+    var shouldActivateFileDrop: ((NSPoint) -> Bool)?
+    var shouldRetainFileDropAfterExit: ((NSPoint) -> Bool)?
     var compactCapsuleSize = IslandDesignTokens.defaultCompactCapsuleSize
     var expandedShellSize = CGSize(width: 900, height: 260)
 
     private var trackingArea: NSTrackingArea?
     private var isFileDropActive = false
     private var isCameraAreaHovered = false
+    private var fileDropExitWorkItem: DispatchWorkItem?
+    private var activeExternalDragSequenceNumber: Int?
+    private var activeExternalDragURLs: [URL] = []
+    private var activeExternalDragPreviewName: String?
 
     deinit {
+        fileDropExitWorkItem?.cancel()
         if let trackingArea {
             removeTrackingArea(trackingArea)
         }
@@ -974,10 +1292,18 @@ private final class IslandTrackingView: NSView {
     }
 
     func clearHandlers() {
+        fileDropExitWorkItem?.cancel()
+        fileDropExitWorkItem = nil
         onMouseInsideChanged = nil
         onCameraAreaHoverChanged = nil
         onFileDragChanged = nil
+        onExternalFileDragSessionChanged = nil
         onFileDrop = nil
+        shouldActivateFileDrop = nil
+        shouldRetainFileDropAfterExit = nil
+        activeExternalDragSequenceNumber = nil
+        activeExternalDragURLs.removeAll(keepingCapacity: false)
+        activeExternalDragPreviewName = nil
     }
 
     override func viewDidMoveToWindow() {
@@ -1029,24 +1355,65 @@ private final class IslandTrackingView: NSView {
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        isFileDropActive = false
-        onFileDragChanged?(false, nil, nil)
+        if let sender, isInternalFileDrag(sender) {
+            cancelPendingFileDropExit()
+            return
+        }
+
+        let exitPoint = draggingScreenPoint(from: sender)
+        if isFileDropActive,
+           shouldRetainFileDropAfterExit?(exitPoint) == true {
+            cancelPendingFileDropExit()
+            onFileDragChanged?(true, nil, activeExternalDragPreviewName)
+            return
+        }
+
+        scheduleFileDropExit()
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        finishExternalFileDragSession(notifyInteractionEnded: true)
+    }
+
+    override func updateDraggingItemsForDrag(_ sender: NSDraggingInfo?) {
+        guard let sender,
+              isFileDropActive,
+              !isInternalFileDrag(sender)
+        else { return }
+
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        let maximumPreviewY = bounds.maxY - IslandFileDropLayout.dragPreviewSafeTopInset
+
+        sender.enumerateDraggingItems(
+            options: [],
+            for: self,
+            classes: [NSURL.self],
+            searchOptions: options
+        ) { draggingItem, _, _ in
+            var frame = draggingItem.draggingFrame
+            guard frame.height > 0, frame.maxY > maximumPreviewY else { return }
+            frame.origin.y -= frame.maxY - maximumPreviewY
+            draggingItem.draggingFrame = frame
+        }
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        cancelPendingFileDropExit()
         guard !isInternalFileDrag(sender) else {
-            isFileDropActive = false
-            onFileDragChanged?(false, nil, nil)
             return false
         }
 
         let point = convert(sender.draggingLocation, from: nil)
         let target = fileDropTarget(for: point)
-        let urls = fileURLs(from: sender)
+        let payload = externalFileDragPayload(from: sender)
+        let urls = payload.urls
 
         isFileDropActive = false
         guard !urls.isEmpty else {
             onFileDragChanged?(false, nil, nil)
+            finishExternalFileDragSession(notifyInteractionEnded: false)
             return false
         }
 
@@ -1054,34 +1421,113 @@ private final class IslandTrackingView: NSView {
         if !didDrop {
             onFileDragChanged?(false, nil, nil)
         }
+        finishExternalFileDragSession(notifyInteractionEnded: false)
 
         return didDrop
     }
 
     private func updateFileDrop(_ sender: NSDraggingInfo) -> NSDragOperation {
+        cancelPendingFileDropExit()
         guard !isInternalFileDrag(sender) else {
-            isFileDropActive = false
-            onFileDragChanged?(false, nil, nil)
             return []
         }
 
-        let urls = fileURLs(from: sender)
+        let payload = externalFileDragPayload(from: sender)
+        let urls = payload.urls
         guard !urls.isEmpty else { return [] }
 
         let point = convert(sender.draggingLocation, from: nil)
-        let shouldActivate = isFileDropActive || compactCapsuleContains(point) || fileDropTarget(for: point) != nil
+        let shouldActivate = isFileDropActive
+            || (shouldActivateFileDrop?(point) ?? compactCapsuleContains(point))
+            || fileDropTarget(for: point) != nil
         guard shouldActivate else { return [] }
 
+        let wasFileDropActive = isFileDropActive
         isFileDropActive = true
-        onFileDragChanged?(true, fileDropTarget(for: point), previewName(for: urls))
+        if !wasFileDropActive {
+            updateDraggingItemsForDrag(sender)
+        }
+        onFileDragChanged?(true, fileDropTarget(for: point), payload.previewName)
         return .copy
+    }
+
+    private func scheduleFileDropExit() {
+        fileDropExitWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.fileDropExitWorkItem = nil
+            self.finishExternalFileDragSession(notifyInteractionEnded: true)
+        }
+        fileDropExitWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + IslandFileDropLayout.transientExitGraceDuration,
+            execute: workItem
+        )
+    }
+
+    private func cancelPendingFileDropExit() {
+        fileDropExitWorkItem?.cancel()
+        fileDropExitWorkItem = nil
     }
 
     private func isInternalFileDrag(_ sender: NSDraggingInfo) -> Bool {
         sender.draggingPasteboard.types?.contains(Self.internalFileDragType) == true
     }
 
+    private func draggingScreenPoint(from sender: NSDraggingInfo?) -> NSPoint {
+        guard let sender, let window else {
+            return NSEvent.mouseLocation
+        }
+
+        return window.convertPoint(toScreen: sender.draggingLocation)
+    }
+
+    private func externalFileDragPayload(
+        from sender: NSDraggingInfo
+    ) -> (urls: [URL], previewName: String?) {
+        let sequenceNumber = sender.draggingSequenceNumber
+        if activeExternalDragSequenceNumber == sequenceNumber {
+            return (activeExternalDragURLs, activeExternalDragPreviewName)
+        }
+
+        let urls = fileURLs(from: sender)
+        activeExternalDragSequenceNumber = sequenceNumber
+        activeExternalDragURLs = urls
+        activeExternalDragPreviewName = previewName(for: urls)
+        if !urls.isEmpty {
+            onExternalFileDragSessionChanged?(true)
+        }
+        return (urls, activeExternalDragPreviewName)
+    }
+
+    private func finishExternalFileDragSession(notifyInteractionEnded: Bool) {
+        cancelPendingFileDropExit()
+        let wasDropActive = isFileDropActive
+        let hadExternalSession = !activeExternalDragURLs.isEmpty
+
+        isFileDropActive = false
+        activeExternalDragSequenceNumber = nil
+        activeExternalDragURLs.removeAll(keepingCapacity: false)
+        activeExternalDragPreviewName = nil
+
+        if notifyInteractionEnded, wasDropActive {
+            onFileDragChanged?(false, nil, nil)
+        }
+        if hadExternalSession {
+            onExternalFileDragSessionChanged?(false)
+        }
+    }
+
     private func updateCameraHoverState(for event: NSEvent) {
+        guard !isFileDropActive, NSEvent.pressedMouseButtons == 0 else {
+            if isCameraAreaHovered {
+                isCameraAreaHovered = false
+                onCameraAreaHoverChanged?(false)
+            }
+            return
+        }
+
         let point = convert(event.locationInWindow, from: nil)
         let isHovering = compactCapsuleContains(point)
         guard isCameraAreaHovered != isHovering else { return }
@@ -1129,8 +1575,8 @@ private final class IslandTrackingView: NSView {
 
     private func fileDropTarget(for point: NSPoint) -> IslandFileDropTarget? {
         let shellRect = expandedShellRect
-        guard shellRect.width >= 520,
-              shellRect.height >= 240,
+        guard shellRect.width >= IslandFileDropLayout.size.width,
+              shellRect.height >= IslandFileDropLayout.size.height,
               shellRect.contains(point)
         else { return nil }
 
@@ -1139,10 +1585,10 @@ private final class IslandTrackingView: NSView {
             y: point.y - shellRect.minY
         )
 
-        let horizontalPadding: CGFloat = 72
-        let spacing: CGFloat = 22
-        let zoneHeight: CGFloat = 170
-        let topOffset: CGFloat = 108
+        let horizontalPadding = IslandFileDropLayout.horizontalPadding
+        let spacing = IslandFileDropLayout.spacing
+        let zoneHeight = IslandFileDropLayout.destinationHeight
+        let topOffset = IslandFileDropLayout.destinationsTopInset
         let zoneWidth = max(1, (shellRect.width - horizontalPadding * 2 - spacing) / 2)
         let y = shellRect.height - topOffset - zoneHeight
         let stagingRect = NSRect(

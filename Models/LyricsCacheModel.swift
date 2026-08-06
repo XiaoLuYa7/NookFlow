@@ -3,17 +3,16 @@ import Foundation
 import SwiftData
 #endif
 
-@MainActor
 protocol LyricsCaching {
-    func cacheKey(
+    nonisolated func cacheKey(
         for trackID: String?,
         title: String,
         artist: String,
         album: String,
         duration: TimeInterval
     ) -> String
-    func get(key: String, maxAge: TimeInterval) -> [LyricLine]?
-    func set(key: String, title: String, artist: String, lyrics: [LyricLine])
+    func get(key: String, maxAge: TimeInterval) async -> [LyricLine]?
+    func set(key: String, title: String, artist: String, lyrics: [LyricLine]) async
 }
 
 extension LyricsCaching {
@@ -21,15 +20,15 @@ extension LyricsCaching {
         cacheKey(for: trackID, title: title, artist: artist, album: "", duration: 0)
     }
 
-    func get(key: String) -> [LyricLine]? {
-        get(key: key, maxAge: 30 * 24 * 3600)
+    func get(key: String) async -> [LyricLine]? {
+        await get(key: key, maxAge: 30 * 24 * 3600)
     }
 }
 
 // LyricLine Codable conformance
 extension LyricLine: Codable {
     enum CodingKeys: String, CodingKey {
-        case startTimeMS, words, translation
+        case startTimeMS, words, translation, source, timedUnits
     }
 
     init(from decoder: Decoder) throws {
@@ -37,6 +36,8 @@ extension LyricLine: Codable {
         self.startTimeMS = try container.decode(TimeInterval.self, forKey: .startTimeMS)
         self.words = try container.decode(String.self, forKey: .words)
         self.translation = try container.decodeIfPresent(String.self, forKey: .translation)
+        self.source = try container.decodeIfPresent(LyricsSource.self, forKey: .source)
+        self.timedUnits = try container.decodeIfPresent([LyricTimedUnit].self, forKey: .timedUnits)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -44,6 +45,8 @@ extension LyricLine: Codable {
         try container.encode(startTimeMS, forKey: .startTimeMS)
         try container.encode(words, forKey: .words)
         try container.encodeIfPresent(translation, forKey: .translation)
+        try container.encodeIfPresent(source, forKey: .source)
+        try container.encodeIfPresent(timedUnits, forKey: .timedUnits)
     }
 }
 
@@ -69,19 +72,24 @@ final class CachedLyrics {
     }
 }
 
-@MainActor
-final class LyricsCacheService: LyricsCaching {
+actor LyricsCacheService: LyricsCaching {
     private let container: ModelContainer?
+    private let context: ModelContext?
+    private var memoryEntries: [String: (lyrics: [LyricLine], fetchedAt: Date, lastAccess: Date)] = [:]
+    private let maxMemoryEntries = 24
 
     init() {
         do {
-            container = try ModelContainer(for: CachedLyrics.self)
+            let container = try ModelContainer(for: CachedLyrics.self)
+            self.container = container
+            self.context = ModelContext(container)
         } catch {
             container = nil
+            context = nil
         }
     }
 
-    func cacheKey(
+    nonisolated func cacheKey(
         for trackID: String?,
         title: String,
         artist: String,
@@ -100,23 +108,53 @@ final class LyricsCacheService: LyricsCaching {
     }
 
     func get(key: String, maxAge: TimeInterval = 30 * 24 * 3600) -> [LyricLine]? {
-        guard let container else { return nil }
+        let now = Date()
+        if var entry = memoryEntries[key], now.timeIntervalSince(entry.fetchedAt) < maxAge {
+            entry.lastAccess = now
+            memoryEntries[key] = entry
+            return entry.lyrics
+        }
+        memoryEntries.removeValue(forKey: key)
+
+        guard let context else { return nil }
 
         let descriptor = FetchDescriptor<CachedLyrics>(
             predicate: #Predicate { $0.cacheKey == key }
         )
 
-        guard let cached = try? container.mainContext.fetch(descriptor).first,
-              Date().timeIntervalSince(cached.fetchedAt) < maxAge else {
+        guard let cached = try? context.fetch(descriptor).first else {
             return nil
         }
 
-        return cached.lyrics
+        guard now.timeIntervalSince(cached.fetchedAt) < maxAge else {
+            context.delete(cached)
+            try? context.save()
+            return nil
+        }
+
+        let lyrics = cached.lyrics
+        guard !lyrics.isEmpty else {
+            context.delete(cached)
+            try? context.save()
+            return nil
+        }
+        memoryEntries[key] = (lyrics, cached.fetchedAt, now)
+        trimMemoryCacheIfNeeded()
+        return lyrics
     }
 
     func set(key: String, title: String, artist: String, lyrics: [LyricLine]) {
-        guard let container else { return }
-        let context = container.mainContext
+        guard !lyrics.isEmpty else {
+            memoryEntries.removeValue(forKey: key)
+            removePersistedEntry(key: key)
+            return
+        }
+
+        let now = Date()
+        memoryEntries[key] = (lyrics, now, now)
+        trimMemoryCacheIfNeeded()
+
+        guard let context else { return }
 
         // Remove existing entry
         let descriptor = FetchDescriptor<CachedLyrics>(
@@ -126,20 +164,18 @@ final class LyricsCacheService: LyricsCaching {
             context.delete(existing)
         }
 
-        // Don't cache empty results — allow re-fetching next time
-        guard !lyrics.isEmpty else {
-            try? context.save()
-            return
-        }
-
         let entry = CachedLyrics(cacheKey: key, title: title, artist: artist, lyrics: lyrics)
         context.insert(entry)
         try? context.save()
     }
 
     func remove(key: String) {
-        guard let container else { return }
-        let context = container.mainContext
+        memoryEntries.removeValue(forKey: key)
+        removePersistedEntry(key: key)
+    }
+
+    private func removePersistedEntry(key: String) {
+        guard let context else { return }
 
         let descriptor = FetchDescriptor<CachedLyrics>(
             predicate: #Predicate { $0.cacheKey == key }
@@ -149,14 +185,23 @@ final class LyricsCacheService: LyricsCaching {
             try? context.save()
         }
     }
+
+    private func trimMemoryCacheIfNeeded() {
+        guard memoryEntries.count > maxMemoryEntries else { return }
+        let overflow = memoryEntries.count - maxMemoryEntries
+        let keysToRemove = memoryEntries
+            .sorted { $0.value.lastAccess < $1.value.lastAccess }
+            .prefix(overflow)
+            .map(\.key)
+        keysToRemove.forEach { memoryEntries.removeValue(forKey: $0) }
+    }
 }
 #else
-@MainActor
-final class LyricsCacheService: LyricsCaching {
+actor LyricsCacheService: LyricsCaching {
     private var entries: [String: (title: String, artist: String, lyrics: [LyricLine], fetchedAt: Date)] = [:]
     private let maxEntries = 128
 
-    func cacheKey(
+    nonisolated func cacheKey(
         for trackID: String?,
         title: String,
         artist: String,

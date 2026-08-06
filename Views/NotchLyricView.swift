@@ -53,26 +53,16 @@ struct NotchLyricView: View {
             )
         )
 
-        Group {
-            if needsTimeline {
-                TimelineView(.animation) { timeline in
-                    flatLyricText(
-                        text,
-                        progress: currentProgress(at: timeline.date),
-                        needsScroll: needsScroll,
-                        textW: textW,
-                        viewW: viewW
-                    )
-                }
-            } else {
-                flatLyricText(
-                    text,
-                    progress: initialProgress,
-                    needsScroll: needsScroll,
-                    textW: textW,
-                    viewW: viewW
-                )
-            }
+        TimelineView(.animation(paused: !needsTimeline)) { timeline in
+            flatLyricText(
+                text,
+                progress: needsTimeline
+                    ? currentProgress(at: timeline.date)
+                    : initialProgress,
+                needsScroll: needsScroll,
+                textW: textW,
+                viewW: viewW
+            )
         }
         .frame(width: viewW, height: geometry.height, alignment: .center)
         .padding(.horizontal, 10)
@@ -95,24 +85,15 @@ struct NotchLyricView: View {
             )
         )
 
-        Group {
-            if needsTimeline {
-                TimelineView(.animation) { timeline in
-                    notchLyricText(
-                        text,
-                        progress: currentProgress(at: timeline.date),
-                        textW: textW,
-                        viewW: viewW
-                    )
-                }
-            } else {
-                notchLyricText(
-                    text,
-                    progress: initialProgress,
-                    textW: textW,
-                    viewW: viewW
-                )
-            }
+        TimelineView(.animation(paused: !needsTimeline)) { timeline in
+            notchLyricText(
+                text,
+                progress: needsTimeline
+                    ? currentProgress(at: timeline.date)
+                    : initialProgress,
+                textW: textW,
+                viewW: viewW
+            )
         }
         .frame(width: geometry.totalWidth, height: geometry.height)
         .clipped()

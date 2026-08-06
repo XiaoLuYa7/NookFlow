@@ -29,12 +29,18 @@ final class NotificationCoordinator {
     private var wasLowBattery = false
     private var wasNearlyCharged = false
     private var wasLowStorage = false
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var isSystemSleeping = false
+    private var deliverySuppressedUntil: Date?
 
     private static let waterProgressDayKey = "notifications.waterProgressDay"
 
     private init() {}
 
     isolated deinit {
+        for observer in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
         stopRuntimeResources()
     }
 
@@ -42,7 +48,16 @@ final class NotificationCoordinator {
         guard !isStarted else { return }
         isStarted = true
 
+        installWorkspaceObservers()
         preferencesDidChange(requestAuthorization: false)
+    }
+
+    func stop() {
+        guard isStarted else { return }
+        isStarted = false
+        removeWorkspaceObservers()
+        stopRuntimeResources()
+        InAppNotificationWindowController.shared.discardPendingNotifications()
     }
 
     func preferencesDidChange(requestAuthorization _: Bool) {
@@ -66,6 +81,11 @@ final class NotificationCoordinator {
     }
 
     private func refreshRuntimeState() {
+        guard !isSystemSleeping else {
+            stopRuntimeResources()
+            return
+        }
+
         let settings = notificationSettingsSnapshot()
         let requirements = NotificationRuntimePolicy.requirements(for: settings)
 
@@ -164,6 +184,65 @@ final class NotificationCoordinator {
         runtimeTask = nil
         stopNetworkMonitor()
         stopWeatherSubscription()
+    }
+
+    private func installWorkspaceObservers() {
+        guard workspaceObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+
+        for name in [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification] {
+            workspaceObservers.append(
+                center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.pauseForSystemSleep()
+                    }
+                }
+            )
+        }
+
+        for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.didWakeNotification] {
+            workspaceObservers.append(
+                center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.resumeAfterSystemWake()
+                    }
+                }
+            )
+        }
+    }
+
+    private func removeWorkspaceObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            center.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
+    }
+
+    private func pauseForSystemSleep() {
+        guard !isSystemSleeping else { return }
+        isSystemSleeping = true
+        deliverySuppressedUntil = nil
+        sittingActiveDuration = 0
+        stopRuntimeResources()
+        InAppNotificationWindowController.shared.discardPendingNotifications()
+    }
+
+    private func resumeAfterSystemWake() {
+        guard isSystemSleeping else { return }
+
+        let now = Date()
+        isSystemSleeping = false
+        deliverySuppressedUntil = now.addingTimeInterval(
+            NotificationDeliveryPolicy.wakeRecoverySuppression
+        )
+        lastRuntimeCheck = now
+        lastDeviceCheck = now
+        lastNetworkStatus = nil
+        sittingActiveDuration = 0
+        highUsageSampleCount = 0
+        InAppNotificationWindowController.shared.discardPendingNotifications()
+        refreshRuntimeState()
     }
 
     private func runRuntimeChecks(_ settings: NotificationSettingsSnapshot) async {
@@ -510,6 +589,14 @@ final class NotificationCoordinator {
         cooldown: TimeInterval
     ) async {
         let now = Date()
+        guard NotificationDeliveryPolicy.shouldDeliver(
+            createdAt: now,
+            now: now,
+            isSystemSleeping: isSystemSleeping,
+            suppressedUntil: deliverySuppressedUntil
+        ) else {
+            return
+        }
         if cooldown > 0,
            let lastSent = lastSentDates[identifier],
            now.timeIntervalSince(lastSent) < cooldown {

@@ -43,6 +43,15 @@ enum AppFontPreference: String, CaseIterable, Identifiable {
     }
 }
 
+enum QuickAppsColumnCount: Int, CaseIterable, Identifiable {
+    case two = 2
+    case three = 3
+
+    var id: Int { rawValue }
+    var title: String { "\(rawValue) 列" }
+    var pageSize: Int { rawValue * 2 }
+}
+
 enum IslandBounceLevel: String, CaseIterable, Identifiable {
     case subtle
     case standard
@@ -68,27 +77,20 @@ enum IslandBounceLevel: String, CaseIterable, Identifiable {
 
     var widthOvershoot: CGFloat {
         switch self {
-        case .subtle: 1.008
-        case .standard: 1.022
-        case .lively: 1.038
+        case .subtle: 1.012
+        case .standard: 1.028
+        case .lively: 1.047
         }
     }
 
     var heightOvershoot: CGFloat {
         switch self {
-        case .subtle: 1.005
-        case .standard: 1.014
-        case .lively: 1.024
+        case .subtle: 1.008
+        case .standard: 1.019
+        case .lively: 1.034
         }
     }
 
-    var undershootScale: CGFloat {
-        switch self {
-        case .subtle: 0.999
-        case .standard: 0.996
-        case .lively: 0.993
-        }
-    }
 }
 
 enum IslandExpansionMode: String, CaseIterable, Identifiable {
@@ -197,6 +199,25 @@ enum DesktopLyricsPosition: String, CaseIterable, Identifiable {
     }
 }
 
+enum LyricsPresentationMode: String, CaseIterable, Identifiable {
+    case capsule
+    case desktop
+    case menuBar
+
+    var id: String { rawValue }
+
+    func title(language: IslandLanguage) -> String {
+        switch (language, self) {
+        case (.chinese, .capsule): "胶囊歌词"
+        case (.chinese, .desktop): "桌面展示"
+        case (.chinese, .menuBar): "菜单栏展示"
+        case (.english, .capsule): "Capsule"
+        case (.english, .desktop): "Desktop"
+        case (.english, .menuBar): "Menu Bar"
+        }
+    }
+}
+
 enum DesktopLyricsColorMode: String, CaseIterable, Identifiable {
     case automatic
     case lightText
@@ -212,25 +233,6 @@ enum DesktopLyricsColorMode: String, CaseIterable, Identifiable {
         case (.english, .automatic): "Automatic"
         case (.english, .lightText): "Light text"
         case (.english, .darkText): "Dark text"
-        }
-    }
-}
-
-enum CalendarStyle: String, CaseIterable, Identifiable {
-    case weeklySchedule
-    case monthlyGrid
-    case dotMatrix
-
-    var id: String { rawValue }
-
-    func title(language: IslandLanguage) -> String {
-        switch (language, self) {
-        case (.chinese, .weeklySchedule): "周视图"
-        case (.chinese, .monthlyGrid): "月视图"
-        case (.chinese, .dotMatrix): "点阵视图"
-        case (.english, .weeklySchedule): "Weekly"
-        case (.english, .monthlyGrid): "Monthly"
-        case (.english, .dotMatrix): "Dot Matrix"
         }
     }
 }
@@ -293,7 +295,14 @@ final class IslandSettings: ObservableObject {
     }
 
     @Published var foregroundHoldDuration: Double {
-        didSet { save(foregroundHoldDuration, for: Keys.foregroundHoldDuration) }
+        didSet {
+            let clampedValue = min(max(foregroundHoldDuration, 0.5), 2.0)
+            if foregroundHoldDuration != clampedValue {
+                foregroundHoldDuration = clampedValue
+                return
+            }
+            save(foregroundHoldDuration, for: Keys.foregroundHoldDuration)
+        }
     }
 
     @Published var trackpadFeedbackMode: TrackpadFeedbackMode {
@@ -310,14 +319,6 @@ final class IslandSettings: ObservableObject {
 
     @Published var showWeatherModule: Bool {
         didSet { save(showWeatherModule, for: Keys.showWeatherModule) }
-    }
-
-    @Published var showCalendarModule: Bool {
-        didSet { save(showCalendarModule, for: Keys.showCalendarModule) }
-    }
-
-    @Published var calendarStyle: CalendarStyle {
-        didSet { save(calendarStyle.rawValue, for: Keys.calendarStyle) }
     }
 
     @Published var showTodoModule: Bool {
@@ -344,8 +345,46 @@ final class IslandSettings: ObservableObject {
         didSet { save(allowSpotifyAccess, for: Keys.allowSpotifyAccess) }
     }
 
+    @Published var allowQQMusicAccess: Bool {
+        didSet { save(allowQQMusicAccess, for: Keys.allowQQMusicAccess) }
+    }
+
+    @Published var allowNetEaseMusicAccess: Bool {
+        didSet { save(allowNetEaseMusicAccess, for: Keys.allowNetEaseMusicAccess) }
+    }
+
     @Published var showDesktopLyrics: Bool {
-        didSet { save(showDesktopLyrics, for: Keys.showDesktopLyrics) }
+        didSet {
+            save(showDesktopLyrics, for: Keys.showDesktopLyrics)
+            synchronizeLyricsPresentation()
+        }
+    }
+
+    @Published var lyricsPresentationMode: LyricsPresentationMode {
+        didSet {
+            save(lyricsPresentationMode.rawValue, for: Keys.lyricsPresentationMode)
+            synchronizeLyricsPresentation()
+        }
+    }
+
+    @Published var menuBarLyricsWidth: Double {
+        didSet {
+            let clampedValue = min(max(menuBarLyricsWidth, 100), 150)
+            if menuBarLyricsWidth != clampedValue {
+                menuBarLyricsWidth = clampedValue
+                return
+            }
+            save(menuBarLyricsWidth, for: Keys.menuBarLyricsWidth)
+        }
+    }
+
+    @Published var menuBarLyricsShowsPlaybackControls: Bool {
+        didSet {
+            save(
+                menuBarLyricsShowsPlaybackControls,
+                for: Keys.menuBarLyricsShowsPlaybackControls
+            )
+        }
     }
 
     @Published var desktopLyricsPosition: DesktopLyricsPosition {
@@ -364,6 +403,10 @@ final class IslandSettings: ObservableObject {
         didSet { save(showQuickAppsModule, for: Keys.showQuickAppsModule) }
     }
 
+    @Published var quickAppsColumnCount: QuickAppsColumnCount {
+        didSet { save(quickAppsColumnCount.rawValue, for: Keys.quickAppsColumnCount) }
+    }
+
     @Published var showShortcutsModule: Bool {
         didSet { save(showShortcutsModule, for: Keys.showShortcutsModule) }
     }
@@ -374,6 +417,10 @@ final class IslandSettings: ObservableObject {
 
     @Published var showDeviceInfoModule: Bool {
         didSet { save(showDeviceInfoModule, for: Keys.showDeviceInfoModule) }
+    }
+
+    @Published var showMirrorModule: Bool {
+        didSet { save(showMirrorModule, for: Keys.showMirrorModule) }
     }
 
     @Published var imageCardPath: String {
@@ -438,7 +485,9 @@ final class IslandSettings: ObservableObject {
         foregroundAppPromptDisplayMode = ForegroundAppPromptDisplayMode(
             rawValue: defaults.string(forKey: Keys.foregroundAppPromptDisplayMode) ?? ""
         ) ?? .applicationName
-        foregroundHoldDuration = defaults.object(forKey: Keys.foregroundHoldDuration) as? Double ?? 1.0
+        let savedForegroundHoldDuration =
+            defaults.object(forKey: Keys.foregroundHoldDuration) as? Double ?? 1.0
+        foregroundHoldDuration = min(max(savedForegroundHoldDuration, 0.5), 2.0)
         trackpadFeedbackMode = TrackpadFeedbackMode(
             rawValue: defaults.string(forKey: Keys.trackpadFeedbackMode) ?? ""
         ) ?? .single
@@ -449,17 +498,34 @@ final class IslandSettings: ObservableObject {
             rawValue: defaults.string(forKey: Keys.displayStrategy) ?? ""
         ) ?? .main
         showWeatherModule = defaults.object(forKey: Keys.showWeatherModule) as? Bool ?? true
-        showCalendarModule = defaults.object(forKey: Keys.showCalendarModule) as? Bool ?? true
-        calendarStyle = CalendarStyle(
-            rawValue: defaults.string(forKey: Keys.calendarStyle) ?? ""
-        ) ?? .weeklySchedule
         showTodoModule = defaults.object(forKey: Keys.showTodoModule) as? Bool ?? true
         showMediaModule = defaults.object(forKey: Keys.showMediaModule) as? Bool ?? true
         showMusicTrackName = defaults.object(forKey: Keys.showMusicTrackName) as? Bool ?? true
-        showMusicLyrics = defaults.object(forKey: Keys.showMusicLyrics) as? Bool ?? true
+        let legacyCapsuleLyricsEnabled =
+            defaults.object(forKey: Keys.showMusicLyrics) as? Bool
+        showMusicLyrics = legacyCapsuleLyricsEnabled ?? true
         allowAppleMusicAccess = defaults.object(forKey: Keys.allowAppleMusicAccess) as? Bool ?? true
         allowSpotifyAccess = defaults.object(forKey: Keys.allowSpotifyAccess) as? Bool ?? false
-        showDesktopLyrics = defaults.object(forKey: Keys.showDesktopLyrics) as? Bool ?? true
+        allowQQMusicAccess = defaults.object(forKey: Keys.allowQQMusicAccess) as? Bool ?? false
+        allowNetEaseMusicAccess = defaults.object(forKey: Keys.allowNetEaseMusicAccess) as? Bool ?? false
+        let legacyDesktopLyricsEnabled =
+            defaults.object(forKey: Keys.showDesktopLyrics) as? Bool
+        showDesktopLyrics = legacyDesktopLyricsEnabled == true
+            || legacyCapsuleLyricsEnabled == true
+            || (legacyDesktopLyricsEnabled == nil && legacyCapsuleLyricsEnabled == nil)
+        if let storedMode = LyricsPresentationMode(
+            rawValue: defaults.string(forKey: Keys.lyricsPresentationMode) ?? ""
+        ) {
+            lyricsPresentationMode = storedMode
+        } else {
+            lyricsPresentationMode = legacyDesktopLyricsEnabled == true ? .desktop : .capsule
+        }
+        menuBarLyricsWidth = min(
+            max(defaults.object(forKey: Keys.menuBarLyricsWidth) as? Double ?? 220, 100),
+            150
+        )
+        menuBarLyricsShowsPlaybackControls =
+            defaults.object(forKey: Keys.menuBarLyricsShowsPlaybackControls) as? Bool ?? true
         desktopLyricsPosition = DesktopLyricsPosition(
             rawValue: defaults.string(forKey: Keys.desktopLyricsPosition) ?? ""
         ) ?? .bottomLeft
@@ -468,9 +534,13 @@ final class IslandSettings: ObservableObject {
             rawValue: defaults.string(forKey: Keys.desktopLyricsColorMode) ?? ""
         ) ?? .automatic
         showQuickAppsModule = defaults.object(forKey: Keys.showQuickAppsModule) as? Bool ?? true
+        quickAppsColumnCount = QuickAppsColumnCount(
+            rawValue: defaults.object(forKey: Keys.quickAppsColumnCount) as? Int ?? 2
+        ) ?? .two
         showShortcutsModule = defaults.object(forKey: Keys.showShortcutsModule) as? Bool ?? true
         showImageCardModule = defaults.object(forKey: Keys.showImageCardModule) as? Bool ?? true
         showDeviceInfoModule = defaults.object(forKey: Keys.showDeviceInfoModule) as? Bool ?? true
+        showMirrorModule = defaults.object(forKey: Keys.showMirrorModule) as? Bool ?? false
         imageCardPath = defaults.string(forKey: Keys.imageCardPath) ?? ""
         let storedOpenSpeed = defaults.object(forKey: Keys.openSpeed) as? Double ?? 0.59
         let storedCloseSpeed = defaults.object(forKey: Keys.closeSpeed) as? Double ?? 0.59
@@ -493,7 +563,16 @@ final class IslandSettings: ObservableObject {
         defaults.removeObject(forKey: Keys.islandHeight)
         defaults.removeObject(forKey: "settings.hideDock")
 
+        synchronizeLyricsPresentation()
         applyPresentationOptions()
+    }
+
+    private func synchronizeLyricsPresentation() {
+        let shouldShowCapsuleLyrics =
+            showDesktopLyrics && lyricsPresentationMode == .capsule
+        if showMusicLyrics != shouldShowCapsuleLyrics {
+            showMusicLyrics = shouldShowCapsuleLyrics
+        }
     }
 
     private static func migratedAnimationSpeed(_ value: Double) -> Double {
@@ -569,22 +648,28 @@ final class IslandSettings: ObservableObject {
         static let islandBackgroundStyle = "settings.islandBackgroundStyle"
         static let displayStrategy = "settings.displayStrategy"
         static let showWeatherModule = "settings.showWeatherModule"
-        static let showCalendarModule = "settings.showCalendarModule"
-        static let calendarStyle = "settings.calendarStyle"
         static let showTodoModule = "settings.showTodoModule"
         static let showMediaModule = "settings.showMediaModule"
         static let showMusicTrackName = "settings.showMusicTrackName"
         static let showMusicLyrics = "settings.showMusicLyrics"
         static let allowAppleMusicAccess = "settings.allowAppleMusicAccess"
         static let allowSpotifyAccess = "settings.allowSpotifyAccess"
+        static let allowQQMusicAccess = "settings.allowQQMusicAccess"
+        static let allowNetEaseMusicAccess = "settings.allowNetEaseMusicAccess"
         static let showDesktopLyrics = "settings.showDesktopLyrics"
+        static let lyricsPresentationMode = "settings.lyricsPresentationMode"
+        static let menuBarLyricsWidth = "settings.menuBarLyricsWidth"
+        static let menuBarLyricsShowsPlaybackControls =
+            "settings.menuBarLyricsShowsPlaybackControls"
         static let desktopLyricsPosition = "settings.desktopLyricsPosition"
         static let desktopLyricsInteractionEnabled = "settings.desktopLyricsInteractionEnabled"
         static let desktopLyricsColorMode = "settings.desktopLyricsColorMode"
         static let showQuickAppsModule = "settings.showQuickAppsModule"
+        static let quickAppsColumnCount = "settings.quickAppsColumnCount"
         static let showShortcutsModule = "settings.showShortcutsModule"
         static let showImageCardModule = "settings.showImageCardModule"
         static let showDeviceInfoModule = "settings.showDeviceInfoModule"
+        static let showMirrorModule = "settings.showMirrorModule"
         static let imageCardPath = "settings.imageCardPath"
         static let openSpeed = "settings.openSpeed"
         static let closeSpeed = "settings.closeSpeed"

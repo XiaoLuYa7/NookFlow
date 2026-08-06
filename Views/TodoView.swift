@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum TodoStyle {
@@ -433,6 +434,9 @@ private struct TodoSettingsValuePickerRow<Value: Hashable>: View {
 private extension TodoTaskDraft {
     var reminderCreationRequest: ReminderCreationRequest {
         let dueTime = dueTime ?? date
+        let tagsText = [category.tagText, priority.tagText]
+            .compactMap { $0 }
+            .joined(separator: " ")
         return ReminderCreationRequest(
             title: title,
             notes: notes,
@@ -442,7 +446,7 @@ private extension TodoTaskDraft {
             dueTime: dueTime,
             hasAlarm: hasAlarm,
             location: location,
-            tagsText: ""
+            tagsText: tagsText
         )
     }
 }
@@ -724,6 +728,21 @@ struct TodoTaskRowView: View {
 }
 
 struct NewTodoSheetView: View {
+    private enum NumericInputField: Hashable {
+        case year
+        case month
+        case day
+        case hour
+        case minute
+
+        var maxLength: Int {
+            switch self {
+            case .year: 4
+            case .month, .day, .hour, .minute: 2
+            }
+        }
+    }
+
     private enum TimeOption: String, CaseIterable, Identifiable {
         case morning
         case noon
@@ -764,10 +783,12 @@ struct NewTodoSheetView: View {
     @State private var customTime: Date
     @State private var hourText: String
     @State private var minuteText: String
-    @State private var isProgrammaticallyUpdatingTimeFields = false
+    @State private var category: TodoCategory = .none
+    @State private var priority: TodoPriority = .normal
     @State private var hasAlarm = false
     @State private var location = ""
     @FocusState private var isTitleFocused: Bool
+    @FocusState private var focusedNumericInput: NumericInputField?
 
     let onCancel: () -> Void
     let onSave: (TodoTaskDraft) -> Void
@@ -793,6 +814,7 @@ struct NewTodoSheetView: View {
             ScrollView {
                 VStack(spacing: 10) {
                     taskContentSection
+                    taskAttributesSection
                     scheduleSection
                     reminderDetailsSection
                 }
@@ -805,6 +827,7 @@ struct NewTodoSheetView: View {
         }
         .frame(width: 520, height: 650)
         .background(AppColor.pageBackground)
+        .background(OutsideTextFieldFocusDismissal())
         .onAppear {
             isTitleFocused = true
         }
@@ -909,24 +932,60 @@ struct NewTodoSheetView: View {
         }
     }
 
+    private var taskAttributesSection: some View {
+        sheetSection {
+            Text("任务属性")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(AppColor.textTertiary)
+
+            sheetRow(systemName: "folder", title: "分组", subtitle: "组织任务") {
+                Picker("", selection: $category) {
+                    ForEach(TodoCategory.allCases, id: \.self) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 132)
+            }
+
+            sectionDivider
+
+            sheetRow(
+                systemName: "exclamationmark.circle",
+                title: "优先级",
+                subtitle: "设置处理顺序"
+            ) {
+                Picker("", selection: $priority) {
+                    ForEach(TodoPriority.allCases, id: \.self) { value in
+                        Text(value.title).tag(value)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 132)
+            }
+        }
+    }
+
     private var scheduleSection: some View {
         sheetSection {
-            HStack(alignment: .top, spacing: 10) {
-                compactSchedulePanel(
-                    systemName: "calendar",
-                    title: "日期",
-                    subtitle: "选择年月日"
-                ) {
-                    dateSelectionControl
-                }
+            sheetRow(
+                systemName: "calendar",
+                title: "日期",
+                subtitle: "选择年月日"
+            ) {
+                dateSelectionControl
+            }
 
-                compactSchedulePanel(
-                    systemName: "clock",
-                    title: "时间",
-                    subtitle: "选择时分"
-                ) {
-                    timeSelectionControl
-                }
+            sectionDivider
+
+            sheetRow(
+                systemName: "clock",
+                title: "时间",
+                subtitle: "选择时分"
+            ) {
+                inlineTimeOptions
             }
 
             if dateValidationMessage != nil || timeValidationMessage != nil {
@@ -937,18 +996,6 @@ struct NewTodoSheetView: View {
                     if let timeValidationMessage {
                         validationMessage(timeValidationMessage)
                     }
-                }
-            }
-
-            sectionDivider
-
-            Text("快捷时间")
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(AppColor.textTertiary)
-
-            HStack(spacing: 6) {
-                ForEach(TimeOption.allCases) { option in
-                    timeOptionButton(option)
                 }
             }
         }
@@ -1012,7 +1059,9 @@ struct NewTodoSheetView: View {
                         date: date,
                         dueTime: resolvedDueTime,
                         hasAlarm: hasAlarm,
-                        location: location
+                        location: location,
+                        category: category,
+                        priority: priority
                     )
                 )
             } label: {
@@ -1099,40 +1148,6 @@ struct NewTodoSheetView: View {
         .frame(minHeight: 46)
     }
 
-    private func compactSchedulePanel<Content: View>(
-        systemName: String,
-        title: String,
-        subtitle: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
-                Image(systemName: systemName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(TodoStyle.blue)
-                    .frame(width: 30, height: 30)
-                    .background {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(AppColor.accentSoft)
-                    }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(TodoStyle.primaryText)
-                    Text(subtitle)
-                        .font(.system(size: 10.5, weight: .regular))
-                        .foregroundStyle(TodoStyle.secondaryText)
-                }
-            }
-
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
     private var sectionDivider: some View {
         Rectangle()
             .fill(AppColor.divider)
@@ -1142,152 +1157,42 @@ struct NewTodoSheetView: View {
 
     private var dateSelectionControl: some View {
         HStack(spacing: 6) {
-            selectionMenu(
-                selection: Int(yearText) ?? Calendar.current.component(.year, from: date),
-                options: yearOptions,
-                width: 78,
-                formatter: String.init,
-                onSelect: { selectDate(year: $0) }
-            )
-
-            selectionMenu(
-                selection: Int(monthText) ?? Calendar.current.component(.month, from: date),
-                options: Array(1...12),
-                width: 58,
-                formatter: { "\($0)月" },
-                onSelect: { selectDate(month: $0) }
-            )
-
-            selectionMenu(
-                selection: Int(dayText) ?? Calendar.current.component(.day, from: date),
-                options: dayOptions,
-                width: 58,
-                formatter: { "\($0)日" },
-                onSelect: { selectDate(day: $0) }
-            )
+            numericInputField(.year, suffix: "年", width: 82)
+            numericInputField(.month, suffix: "月", width: 56)
+            numericInputField(.day, suffix: "日", width: 56)
         }
     }
 
-    private var timeSelectionControl: some View {
-        HStack(spacing: 6) {
-            selectionMenu(
-                selection: Int(hourText) ?? 9,
-                options: Array(0...23),
-                width: 60,
-                formatter: { String(format: "%02d", $0) },
-                onSelect: selectHour
-            )
-
-            Text(":")
-                .font(.system(size: 16, weight: .semibold).monospacedDigit())
-                .foregroundStyle(TodoStyle.secondaryText)
-
-            selectionMenu(
-                selection: Int(minuteText) ?? 0,
-                options: Array(0...59),
-                width: 60,
-                formatter: { String(format: "%02d", $0) },
-                onSelect: selectMinute
-            )
-        }
-    }
-
-    private func selectionMenu(
-        selection: Int,
-        options: [Int],
-        width: CGFloat,
-        formatter: @escaping (Int) -> String,
-        onSelect: @escaping (Int) -> Void
+    private func numericInputField(
+        _ field: NumericInputField,
+        suffix: String,
+        width: CGFloat
     ) -> some View {
-        Menu {
-            ForEach(options, id: \.self) { option in
-                Button {
-                    onSelect(option)
-                } label: {
-                    HStack {
-                        Text(formatter(option))
-                        if option == selection {
-                            Image(systemName: "checkmark")
-                        }
-                    }
+        HStack(spacing: 3) {
+            TextField("", text: numericBinding(for: field))
+                .textFieldStyle(.plain)
+                .font(.system(size: 14.5, weight: .semibold).monospacedDigit())
+                .foregroundStyle(TodoStyle.primaryText)
+                .multilineTextAlignment(.trailing)
+                .focused($focusedNumericInput, equals: field)
+
+            Text(suffix)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(TodoStyle.secondaryText)
+        }
+        .padding(.horizontal, 9)
+        .frame(width: width, height: 36)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(AppColor.controlFill.opacity(0.72))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(
+                            focusedNumericInput == field ? AppColor.accentBorder : AppColor.border,
+                            lineWidth: 1
+                        )
                 }
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Text(formatter(selection))
-                    .font(.system(size: 14.5, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(TodoStyle.primaryText)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(TodoStyle.secondaryText)
-            }
-            .padding(.horizontal, 10)
-            .frame(width: width, height: 36)
-            .contentShape(Rectangle())
-            .background {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(AppColor.controlFill.opacity(0.72))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .stroke(AppColor.border, lineWidth: 1)
-                    }
-            }
         }
-        .buttonStyle(.plain)
-        .menuStyle(.borderlessButton)
-        .focusable(false)
-    }
-
-    private var yearOptions: [Int] {
-        let currentYear = Calendar.current.component(.year, from: Date())
-        let selectedYear = Int(yearText) ?? currentYear
-        return Array(min(currentYear - 30, selectedYear)...max(currentYear + 30, selectedYear))
-    }
-
-    private var dayOptions: [Int] {
-        let components = Calendar.current.dateComponents([.year, .month], from: date)
-        let year = Int(yearText) ?? components.year ?? 2026
-        let month = Int(monthText) ?? components.month ?? 1
-        return Array(1...daysInMonth(year: year, month: month))
-    }
-
-    private func selectDate(year: Int? = nil, month: Int? = nil, day: Int? = nil) {
-        let current = Calendar.current.dateComponents([.year, .month, .day], from: date)
-        let selectedYear = year ?? Int(yearText) ?? current.year ?? 2026
-        let selectedMonth = month ?? Int(monthText) ?? current.month ?? 1
-        let selectedDay = min(
-            day ?? Int(dayText) ?? current.day ?? 1,
-            daysInMonth(year: selectedYear, month: selectedMonth)
-        )
-
-        yearText = String(selectedYear)
-        monthText = String(selectedMonth)
-        dayText = String(selectedDay)
-        updateDateFromSegments()
-    }
-
-    private func daysInMonth(year: Int, month: Int) -> Int {
-        let calendar = Calendar.current
-        let components = DateComponents(year: year, month: month, day: 1)
-        guard let firstDay = calendar.date(from: components),
-              let range = calendar.range(of: .day, in: .month, for: firstDay) else {
-            return 31
-        }
-        return range.count
-    }
-
-    private func selectHour(_ hour: Int) {
-        hourText = String(format: "%02d", hour)
-        updateTimeFromSegments()
-    }
-
-    private func selectMinute(_ minute: Int) {
-        minuteText = String(format: "%02d", minute)
-        updateTimeFromSegments()
     }
 
     private func validationMessage(_ message: String) -> some View {
@@ -1301,56 +1206,94 @@ struct NewTodoSheetView: View {
         .padding(.leading, 38)
     }
 
+    private var inlineTimeOptions: some View {
+        HStack(spacing: 0) {
+            ForEach(TimeOption.allCases.filter { $0 != .custom }) { option in
+                timeOptionButton(option)
+            }
+
+            customTimeControl
+        }
+        .padding(2)
+        .frame(width: 286, height: 42)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(AppColor.controlFill.opacity(0.72))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(AppColor.border, lineWidth: 1)
+                }
+        }
+    }
+
+    private var customTimeControl: some View {
+        VStack(spacing: 0) {
+            Text("自定义")
+                .font(.system(size: 10.5, weight: .semibold))
+
+            HStack(spacing: 1) {
+                customTimeInputField(.hour)
+
+                Text(":")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+
+                customTimeInputField(.minute)
+            }
+            .frame(height: 20)
+        }
+        .foregroundStyle(selectedTimeOption == .custom ? AppColor.accent : TodoStyle.primaryText)
+        .frame(width: 74, height: 38)
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                selectedTimeOption = .custom
+            }
+        )
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selectedTimeOption == .custom ? AppColor.accentSoft : Color.clear)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(
+                            selectedTimeOption == .custom ? AppColor.accentBorder : Color.clear,
+                            lineWidth: 1
+                        )
+                }
+        }
+    }
+
     private func timeOptionButton(_ option: TimeOption) -> some View {
         let isSelected = selectedTimeOption == option
 
         return Button {
+            focusedNumericInput = nil
             selectedTimeOption = option
             syncTimeText(for: option)
         } label: {
-            VStack(spacing: 3) {
-                Text(option.title)
-                    .font(.system(size: 11.5, weight: .semibold))
-                Text(timeTitle(for: option))
-                    .font(.system(size: 13.5, weight: .semibold).monospacedDigit())
-            }
-            .foregroundStyle(isSelected ? Color.white : TodoStyle.primaryText)
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? AppColor.accentGradient : LinearGradient(
-                        colors: [AppColor.controlFill, AppColor.controlFill],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    ))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(
-                                isSelected ? AppColor.accent.opacity(0.28) : AppColor.border,
-                                lineWidth: 1
-                            )
-                    }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 18, height: 18)
-                        .background(AppColor.accentViolet.opacity(0.58))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .padding(4)
+            Text(option.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isSelected ? AppColor.accent : TodoStyle.primaryText)
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
+                .contentShape(Rectangle())
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isSelected ? AppColor.accentSoft : Color.clear)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(
+                                    isSelected ? AppColor.accentBorder : Color.clear,
+                                    lineWidth: 1
+                                )
+                        }
                 }
-            }
-            .shadow(color: isSelected ? AppColor.accent.opacity(0.16) : .clear, radius: 7, y: 3)
         }
         .buttonStyle(.plain)
     }
 
     private var resolvedDueTime: Date {
         if selectedTimeOption == .custom {
-            return Self.time(on: date, from: customTime)
+            return Self.parseTime(hour: hourText, minute: minuteText, on: date) ?? customTime
         }
 
         guard let components = selectedTimeOption.timeComponents else {
@@ -1360,43 +1303,118 @@ struct NewTodoSheetView: View {
         return Self.time(on: date, hour: components.hour, minute: components.minute)
     }
 
-    private func timeTitle(for option: TimeOption) -> String {
-        guard let components = option.timeComponents else {
-            return Self.timeFormatter.string(from: customTime)
-        }
-        return String(format: "%02d:%02d", components.hour, components.minute)
-    }
-
     private func updateDateFromSegments() {
         guard let parsedDate = Self.parseDate(year: yearText, month: monthText, day: dayText) else { return }
         date = Calendar.current.startOfDay(for: parsedDate)
     }
 
-    private func updateTimeFromSegments() {
-        guard !isProgrammaticallyUpdatingTimeFields else { return }
-        guard let parsedTime = Self.parseTime(hour: hourText, minute: minuteText, on: date) else { return }
-
-        customTime = parsedTime
-        selectedTimeOption = .custom
-    }
-
     private func syncTimeText(for option: TimeOption) {
         if let components = option.timeComponents {
             customTime = Self.time(on: date, hour: components.hour, minute: components.minute)
-            syncTimeSegments(hour: components.hour, minute: components.minute)
-        } else {
-            let components = Calendar.current.dateComponents([.hour, .minute], from: customTime)
-            syncTimeSegments(hour: components.hour ?? 9, minute: components.minute ?? 0)
+            hourText = String(format: "%02d", components.hour)
+            minuteText = String(format: "%02d", components.minute)
         }
     }
 
-    private func syncTimeSegments(hour: Int, minute: Int) {
-        isProgrammaticallyUpdatingTimeFields = true
-        hourText = String(format: "%02d", hour)
-        minuteText = String(format: "%02d", minute)
-        DispatchQueue.main.async {
-            isProgrammaticallyUpdatingTimeFields = false
+    private func customTimeInputField(_ field: NumericInputField) -> some View {
+        TextField("", text: numericBinding(for: field))
+            .textFieldStyle(.plain)
+            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+            .foregroundStyle(selectedTimeOption == .custom ? AppColor.accent : TodoStyle.primaryText)
+            .multilineTextAlignment(.center)
+            .focused($focusedNumericInput, equals: field)
+            .frame(width: 18, height: 18)
+            .onTapGesture {
+                selectedTimeOption = .custom
+            }
+    }
+
+    private func numericBinding(for field: NumericInputField) -> Binding<String> {
+        Binding(
+            get: { numericText(for: field) },
+            set: { newValue in
+                let sanitized = TodoDateTimeInputParser.digitsOnly(
+                    newValue,
+                    maxLength: field.maxLength
+                )
+                setNumericText(sanitized, for: field)
+            }
+        )
+    }
+
+    private func numericText(for field: NumericInputField) -> String {
+        switch field {
+        case .year: yearText
+        case .month: monthText
+        case .day: dayText
+        case .hour: hourText
+        case .minute: minuteText
         }
+    }
+
+    private func setNumericText(_ text: String, for field: NumericInputField) {
+        switch field {
+        case .year:
+            yearText = text
+            clampDayToSelectedMonth()
+            updateDateFromSegments()
+        case .month:
+            monthText = TodoDateTimeInputParser.clampedDigits(
+                text,
+                maxLength: field.maxLength,
+                maximum: 12
+            )
+            clampDayToSelectedMonth()
+            updateDateFromSegments()
+        case .day:
+            let maximumDay = TodoDateTimeInputParser.maximumDay(
+                year: yearText,
+                month: monthText
+            ) ?? 31
+            dayText = TodoDateTimeInputParser.clampedDigits(
+                text,
+                maxLength: field.maxLength,
+                maximum: maximumDay
+            )
+            updateDateFromSegments()
+        case .hour:
+            hourText = TodoDateTimeInputParser.clampedDigits(
+                text,
+                maxLength: field.maxLength,
+                maximum: 23
+            )
+            selectedTimeOption = .custom
+            updateCustomTimeFromSegments()
+        case .minute:
+            minuteText = TodoDateTimeInputParser.clampedDigits(
+                text,
+                maxLength: field.maxLength,
+                maximum: 59
+            )
+            selectedTimeOption = .custom
+            updateCustomTimeFromSegments()
+        }
+    }
+
+    private func clampDayToSelectedMonth() {
+        guard let maximumDay = TodoDateTimeInputParser.maximumDay(
+            year: yearText,
+            month: monthText
+        ) else {
+            return
+        }
+        dayText = TodoDateTimeInputParser.clampedDigits(
+            dayText,
+            maxLength: NumericInputField.day.maxLength,
+            maximum: maximumDay
+        )
+    }
+
+    private func updateCustomTimeFromSegments() {
+        guard let parsedTime = Self.parseTime(hour: hourText, minute: minuteText, on: date) else {
+            return
+        }
+        customTime = parsedTime
     }
 
     private static func parseDate(year: String, month: String, day: String) -> Date? {
@@ -1405,10 +1423,6 @@ struct NewTodoSheetView: View {
 
     private static func parseTime(hour: String, minute: String, on date: Date) -> Date? {
         TodoDateTimeInputParser.parseTime(hour: hour, minute: minute, on: date)
-    }
-
-    private static func dateText(from date: Date) -> String {
-        dateTextFormatter.string(from: date)
     }
 
     private static func time(on date: Date, from time: Date) -> Date {
@@ -1427,26 +1441,15 @@ struct NewTodoSheetView: View {
         return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
     }
 
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
-
-    private static let dateTextFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy/M/d"
-        return formatter
-    }()
-
     private var dateValidationMessage: String? {
         Self.parseDate(year: yearText, month: monthText, day: dayText) == nil ? "请输入有效日期" : nil
     }
 
     private var timeValidationMessage: String? {
-        Self.parseTime(hour: hourText, minute: minuteText, on: date) == nil ? "请输入 00:00-23:59 的时间" : nil
+        guard selectedTimeOption == .custom else { return nil }
+        return Self.parseTime(hour: hourText, minute: minuteText, on: date) == nil
+            ? "请输入有效时间"
+            : nil
     }
 
     private var canSave: Bool {
@@ -1455,4 +1458,64 @@ struct NewTodoSheetView: View {
             && timeValidationMessage == nil
     }
 
+}
+
+private struct OutsideTextFieldFocusDismissal: NSViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.hostView = view
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.stopMonitoring()
+    }
+
+    final class Coordinator {
+        weak var hostView: NSView?
+        private var mouseMonitor: Any?
+
+        func attach(to view: NSView) {
+            hostView = view
+            guard mouseMonitor == nil else { return }
+
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let window = self?.hostView?.window,
+                      event.window === window,
+                      let editor = window.firstResponder as? NSTextView,
+                      let textField = editor.delegate as? NSTextField
+                else {
+                    return event
+                }
+
+                let location = textField.convert(event.locationInWindow, from: nil)
+                guard !textField.bounds.contains(location) else { return event }
+
+                DispatchQueue.main.async { [weak window, weak editor, weak textField] in
+                    guard let window,
+                          window.firstResponder === editor,
+                          editor?.delegate === textField
+                    else {
+                        return
+                    }
+                    window.makeFirstResponder(nil)
+                }
+                return event
+            }
+        }
+
+        func stopMonitoring() {
+            guard let mouseMonitor else { return }
+            NSEvent.removeMonitor(mouseMonitor)
+            self.mouseMonitor = nil
+        }
+    }
 }

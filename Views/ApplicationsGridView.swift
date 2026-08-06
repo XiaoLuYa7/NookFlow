@@ -406,6 +406,7 @@ struct ApplicationsGridView: View {
         VStack(spacing: 6) {
             Image(nsImage: item.icon)
                 .resizable()
+                .interpolation(.high)
                 .frame(width: 46, height: 46)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 

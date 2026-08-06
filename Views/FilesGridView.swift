@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct FilesGridView: View {
 
     @ObservedObject var provider: FileDataProvider
+    let onExternalDragStateChanged: (Bool, String?) -> Void
     @StateObject private var externalDragController = ExternalFileDragController()
     @StateObject private var autoScrollController = EdgeAutoScrollController()
     @StateObject private var revealScheduler = GridRevealScheduler()
@@ -75,6 +76,14 @@ struct FilesGridView: View {
     private static let autoScrollSlowVelocity: CGFloat = 180
     private static let autoScrollMediumVelocity: CGFloat = 420
     private static let autoScrollFastVelocity: CGFloat = 780
+
+    init(
+        provider: FileDataProvider,
+        onExternalDragStateChanged: @escaping (Bool, String?) -> Void = { _, _ in }
+    ) {
+        self.provider = provider
+        self.onExternalDragStateChanged = onExternalDragStateChanged
+    }
 
     var body: some View {
         Group {
@@ -150,6 +159,7 @@ struct FilesGridView: View {
             }
         }
         .onAppear {
+            externalDragController.onDragStateChanged = onExternalDragStateChanged
             if !provider.files.isEmpty {
                 hasShownFileContent = true
                 directoryContentOpacity = 1
@@ -1491,6 +1501,7 @@ private final class ExternalFileDragController: NSObject, ObservableObject, NSDr
     static let internalFileDragType = NSPasteboard.PasteboardType("com.personal.dynamicnook.folder-file-url")
 
     weak var hostView: NSView?
+    var onDragStateChanged: ((Bool, String?) -> Void)?
     @Published private(set) var isDragging = false
 
     @discardableResult
@@ -1524,6 +1535,7 @@ private final class ExternalFileDragController: NSObject, ObservableObject, NSDr
         draggingItem.setDraggingFrame(frame, contents: dragImage(for: file, size: iconSize))
 
         isDragging = true
+        onDragStateChanged?(true, file.name)
         let session = hostView.beginDraggingSession(with: [draggingItem], event: event, source: self)
         session.draggingFormation = NSDraggingFormation.none
         session.animatesToStartingPositionsOnCancelOrFail = false
@@ -1543,6 +1555,7 @@ private final class ExternalFileDragController: NSObject, ObservableObject, NSDr
         operation: NSDragOperation
     ) {
         isDragging = false
+        onDragStateChanged?(false, nil)
     }
 
     func ignoreModifierKeys(for session: NSDraggingSession) -> Bool {

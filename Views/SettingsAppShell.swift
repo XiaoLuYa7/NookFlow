@@ -21,9 +21,12 @@ struct AppShellView<Sidebar: View, Content: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            Rectangle()
-                .fill(AppColor.divider)
-                .frame(width: 1)
+                .zIndex(1)
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(AppColor.divider)
+                        .frame(width: 1)
+                }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -33,6 +36,7 @@ struct AppShellView<Sidebar: View, Content: View>: View {
 
 struct SidebarView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Binding var selection: SettingsPage
     @Binding var isCollapsed: Bool
     @State private var areLabelsVisible = true
@@ -50,7 +54,7 @@ struct SidebarView: View {
             brand
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: AppSpacing.lg) {
+                LazyVStack(alignment: .leading, spacing: AppSpacing.md) {
                     ForEach(navigationGroups) { group in
                         VStack(alignment: .leading, spacing: AppSpacing.xs) {
                             ForEach(group.pages) { page in
@@ -61,7 +65,7 @@ struct SidebarView: View {
                                     isCollapsed: isCollapsed,
                                     showsTitle: areLabelsVisible
                                 ) {
-                                    withAnimation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion)) {
+                                    withAnimation(AppMotion.resolved(AppMotion.settingsStandard, reduceMotion: reduceMotion)) {
                                         selection = page
                                     }
                                 }
@@ -79,10 +83,15 @@ struct SidebarView: View {
         }
         .frame(width: isCollapsed ? 60 : 184)
         .background {
-            AppColor.sidebarBackground
-                .overlay(Color.white.opacity(0.16))
+            if reduceTransparency {
+                AppColor.sidebarBackground
+            } else {
+                Rectangle()
+                    .fill(.regularMaterial)
+                    .overlay(AppColor.sidebarBackground.opacity(0.46))
+            }
         }
-        .animation(AppMotion.resolved(AppMotion.page, reduceMotion: reduceMotion), value: isCollapsed)
+        .animation(AppMotion.resolved(AppMotion.settingsPage, reduceMotion: reduceMotion), value: isCollapsed)
         .onAppear {
             requestedCollapsed = isCollapsed
             areLabelsVisible = !isCollapsed
@@ -100,7 +109,7 @@ struct SidebarView: View {
             if areLabelsVisible {
                 VStack(alignment: .leading, spacing: AppSpacing.xxs) {
                     Text("NookFlow")
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(AppColor.textPrimary)
                     Text("偏好设置")
                         .font(AppTypography.caption)
@@ -138,24 +147,24 @@ struct SidebarView: View {
         }
 
         if requestedCollapsed {
-            withAnimation(AppMotion.quick) {
+            withAnimation(AppMotion.settingsQuick) {
                 areLabelsVisible = false
             }
             collapseAnimationTask = Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(140))
                 guard !Task.isCancelled, requestedCollapsed else { return }
-                withAnimation(AppMotion.page) {
+                withAnimation(AppMotion.settingsPage) {
                     isCollapsed = true
                 }
             }
         } else {
-            withAnimation(AppMotion.page) {
+            withAnimation(AppMotion.settingsPage) {
                 isCollapsed = false
             }
             collapseAnimationTask = Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(200))
                 guard !Task.isCancelled, !requestedCollapsed else { return }
-                withAnimation(AppMotion.quick) {
+                withAnimation(AppMotion.settingsQuick) {
                     areLabelsVisible = true
                 }
             }
@@ -178,7 +187,7 @@ struct SidebarItemView: View {
         Button(action: action) {
             HStack(alignment: .center, spacing: 0) {
                 Image(systemName: systemName)
-                    .font(.system(size: AppIconStyle.sidebarSize, weight: .semibold))
+                    .font(.system(size: AppIconStyle.sidebarSize, weight: isSelected ? .semibold : .medium))
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 38, height: AppControlStyle.largeHeight, alignment: .center)
 
@@ -200,12 +209,6 @@ struct SidebarItemView: View {
             .background {
                 RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous)
                     .fill(background)
-                    .overlay {
-                        if isSelected {
-                            RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous)
-                                .stroke(AppColor.accentBorder.opacity(0.9), lineWidth: 1)
-                        }
-                    }
             }
             .overlay(alignment: .leading) {
                 if isSelected {
@@ -217,16 +220,30 @@ struct SidebarItemView: View {
             }
             .contentShape(RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SidebarPressButtonStyle())
         .help(isCollapsed ? title : "")
         .onHover { isHovering = $0 }
-        .animation(AppMotion.resolved(AppMotion.quick, reduceMotion: reduceMotion), value: isHovering)
-        .animation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion), value: isSelected)
+        .animation(AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion), value: isHovering)
+        .animation(AppMotion.resolved(AppMotion.settingsStandard, reduceMotion: reduceMotion), value: isSelected)
     }
 
     private var background: Color {
         if isSelected { return AppColor.accentSoft }
         if isHovering { return AppColor.controlFillHover }
         return .clear
+    }
+}
+
+private struct SidebarPressButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(
+                AppMotion.resolved(AppMotion.settingsPress, reduceMotion: reduceMotion),
+                value: configuration.isPressed
+            )
     }
 }

@@ -201,7 +201,6 @@ enum SettingsWidget: String, CaseIterable, Identifiable {
     case pomodoro
     case weather
     case music
-    case calendar
     case quickApps
     case shortcuts
     case imageCard
@@ -218,7 +217,6 @@ enum SettingsWidget: String, CaseIterable, Identifiable {
         case .pomodoro: "番茄钟"
         case .weather: "天气"
         case .music: "音乐"
-        case .calendar: "日历"
         case .quickApps: "快捷应用"
         case .shortcuts: "快捷指令"
         case .imageCard: "图片卡片"
@@ -231,11 +229,10 @@ enum SettingsWidget: String, CaseIterable, Identifiable {
         case .command: "快速执行常用命令"
         case .todo: "管理轻量待办任务"
         case .note: "随手记录灵感"
-        case .mirror: "查看仪容仪表"
+        case .mirror: "摄像头仅在卡片可见时开启"
         case .pomodoro: "专注计时提醒"
         case .weather: "查看天气与体感"
         case .music: "播放信息与歌词"
-        case .calendar: "日程与农历信息"
         case .quickApps: "常用应用启动"
         case .shortcuts: "运行系统快捷指令"
         case .imageCard: "展示一张灵动岛图片"
@@ -252,7 +249,6 @@ enum SettingsWidget: String, CaseIterable, Identifiable {
         case .pomodoro: "timer"
         case .weather: "cloud.sun"
         case .music: "music.note"
-        case .calendar: "calendar"
         case .quickApps: "square.grid.2x2"
         case .shortcuts: "bolt"
         case .imageCard: "photo"
@@ -290,11 +286,18 @@ final class SettingsEditorModel: ObservableObject {
     @Published var leftStatusItems: [SettingsStatusItem] = [] { didSet { syncSelectedItems() } }
     @Published var rightStatusItems: [SettingsStatusItem] = [] { didSet { syncSelectedItems() } }
     @Published var enabledWidgets: Set<SettingsWidget> = [] { didSet { markChanged() } }
-    @Published var showMusicTrackName = true { didSet { markChanged() } }
-    @Published var showMusicLyrics = true { didSet { markChanged() } }
     @Published var showDesktopLyrics = true { didSet { markChanged() } }
+    @Published var lyricsPresentationMode: LyricsPresentationMode = .desktop {
+        didSet { markChanged() }
+    }
+    @Published var menuBarLyricsWidth = 220.0 { didSet { markChanged() } }
+    @Published var menuBarLyricsShowsPlaybackControls = true {
+        didSet { markChanged() }
+    }
     @Published var allowAppleMusicAccess = true { didSet { markChanged() } }
     @Published var allowSpotifyAccess = false { didSet { markChanged() } }
+    @Published var allowQQMusicAccess = false { didSet { markChanged() } }
+    @Published var allowNetEaseMusicAccess = false { didSet { markChanged() } }
     @Published var showFeedbackSheet = false
     @Published var leftSideIcon: SettingsHomeSideIcon = .weather {
         didSet {
@@ -349,11 +352,14 @@ final class SettingsEditorModel: ObservableObject {
         leftStatusItems = [.network, .lunar, .battery, .temperature]
         rightStatusItems = [.calendar, .clock, .humidity, .weather]
         enabledWidgets = defaultEnabledWidgets(from: settings)
-        showMusicTrackName = settings.showMusicTrackName
-        showMusicLyrics = settings.showMusicLyrics
         showDesktopLyrics = settings.showDesktopLyrics
+        lyricsPresentationMode = settings.lyricsPresentationMode
+        menuBarLyricsWidth = settings.menuBarLyricsWidth
+        menuBarLyricsShowsPlaybackControls = settings.menuBarLyricsShowsPlaybackControls
         allowAppleMusicAccess = settings.allowAppleMusicAccess
         allowSpotifyAccess = settings.allowSpotifyAccess
+        allowQQMusicAccess = settings.allowQQMusicAccess
+        allowNetEaseMusicAccess = settings.allowNetEaseMusicAccess
         syncSelectedItems()
         showFeedbackSheet = false
         limitNotice = nil
@@ -362,19 +368,25 @@ final class SettingsEditorModel: ObservableObject {
 
     private func persistSettings() {
         update(\.showWeatherModule, to: enabledWidgets.contains(.weather))
-        update(\.showCalendarModule, to: enabledWidgets.contains(.calendar))
         update(\.showMediaModule, to: enabledWidgets.contains(.music))
         update(\.showTodoModule, to: enabledWidgets.contains(.todo))
         update(\.showQuickAppsModule, to: enabledWidgets.contains(.quickApps))
         update(\.showShortcutsModule, to: enabledWidgets.contains(.shortcuts))
         update(\.showImageCardModule, to: enabledWidgets.contains(.imageCard))
         update(\.showDeviceInfoModule, to: enabledWidgets.contains(.deviceInfo))
+        update(\.showMirrorModule, to: enabledWidgets.contains(.mirror))
         update(\.imageCardPath, to: imageCardPath)
-        update(\.showMusicTrackName, to: showMusicTrackName)
-        update(\.showMusicLyrics, to: showMusicLyrics)
         update(\.showDesktopLyrics, to: showDesktopLyrics)
+        update(\.lyricsPresentationMode, to: lyricsPresentationMode)
+        update(\.menuBarLyricsWidth, to: menuBarLyricsWidth)
+        update(
+            \.menuBarLyricsShowsPlaybackControls,
+            to: menuBarLyricsShowsPlaybackControls
+        )
         update(\.allowAppleMusicAccess, to: allowAppleMusicAccess)
         update(\.allowSpotifyAccess, to: allowSpotifyAccess)
+        update(\.allowQQMusicAccess, to: allowQQMusicAccess)
+        update(\.allowNetEaseMusicAccess, to: allowNetEaseMusicAccess)
         update(\.compactLeftSideIcon, to: supportedSideIcon(leftSideIcon, fallback: .weather))
         update(\.compactRightSideIcon, to: supportedSideIcon(rightSideIcon, fallback: .battery))
         if leftSideIcon != .none || rightSideIcon != .none {
@@ -466,11 +478,11 @@ final class SettingsEditorModel: ObservableObject {
         if settings.showTodoModule { result.insert(.todo) }
         if settings.showWeatherModule { result.insert(.weather) }
         if settings.showMediaModule { result.insert(.music) }
-        if settings.showCalendarModule { result.insert(.calendar) }
         if settings.showQuickAppsModule { result.insert(.quickApps) }
         if settings.showShortcutsModule { result.insert(.shortcuts) }
         if settings.showImageCardModule { result.insert(.imageCard) }
         if settings.showDeviceInfoModule { result.insert(.deviceInfo) }
+        if settings.showMirrorModule { result.insert(.mirror) }
         return result
     }
 
@@ -489,7 +501,6 @@ struct SettingsRootView: View {
     @ObservedObject var settings: IslandSettings
     @StateObject private var model: SettingsEditorModel
     @State private var isSidebarCollapsed = false
-    @State private var showsHomeCustomization = false
     @State private var previewImageCardImage: NSImage?
     @State private var previewImageCardImagePath = ""
     @State private var previewImageCardLoadTask: Task<Void, Never>?
@@ -557,9 +568,13 @@ struct SettingsRootView: View {
     private var content: some View {
         selectedPageContent
             .id(model.selectedSettingsPage)
-            .transition(.opacity)
+            .transition(
+                .opacity.combined(
+                    with: .scale(scale: reduceMotion ? 1 : 0.995, anchor: .top)
+                )
+            )
             .animation(
-                AppMotion.resolved(AppMotion.page, reduceMotion: reduceMotion),
+                AppMotion.resolved(AppMotion.settingsPage, reduceMotion: reduceMotion),
                 value: model.selectedSettingsPage
             )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -576,7 +591,7 @@ struct SettingsRootView: View {
         case .music:
             musicPage
         case .quickApps:
-            QuickAppsSettingsView()
+            QuickAppsSettingsView(settings: settings)
         case .shortcuts:
             ShortcutsSettingsView()
         case .notifications:
@@ -594,180 +609,14 @@ struct SettingsRootView: View {
         SettingsPageScaffold(contentMaxWidth: 1120) {
             PageHeaderView(
                 title: "首页",
-                subtitle: "你的效率工作空间，一切尽在掌控。",
+                subtitle: "预览并选择要在灵动岛中显示的内容。",
                 icon: "house.fill"
-            ) {
-                Button {
-                    withAnimation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion)) {
-                        showsHomeCustomization.toggle()
-                    }
-                } label: {
-                    Label(
-                        showsHomeCustomization ? "完成自定义" : "自定义首页",
-                        systemImage: showsHomeCustomization ? "checkmark" : "slider.horizontal.3"
-                    )
-                }
-                .buttonStyle(
-                    AppButtonStyle(
-                        role: showsHomeCustomization ? .primary : .secondary,
-                        isSelected: showsHomeCustomization
-                    )
-                )
-            }
+            )
         } content: {
-            if showsHomeCustomization {
-                previewArea
-                    .transition(.opacity.combined(with: .offset(y: -6)))
-                sideIconConfigurationCard
-                    .transition(.opacity)
-                widgetsCard
-                    .transition(.opacity)
-            } else {
-                homeOverviewSection
-                homeOperationsSection
-            }
+            previewArea
+            sideIconConfigurationCard
+            widgetsCard
         }
-    }
-
-    private var homeOverviewSection: some View {
-        SettingsSectionCard(title: "今日概览") {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 150), spacing: 0)],
-                spacing: AppSpacing.md
-            ) {
-                DashboardMetricCell(
-                    icon: "capsule",
-                    title: "灵动岛",
-                    value: settings.isIslandEnabled ? "运行中" : "已关闭",
-                    detail: settings.isIslandEnabled ? "状态显示正常" : "可在快速控制中开启",
-                    tone: settings.isIslandEnabled ? .positive : .neutral
-                )
-                DashboardMetricCell(
-                    icon: "music.note",
-                    title: "播放来源",
-                    value: enabledMusicSourceTitle,
-                    detail: "微光乐境",
-                    tone: enabledMusicSourceTitle == "未启用" ? .neutral : .accent
-                )
-                DashboardMetricCell(
-                    icon: "checkmark.circle",
-                    title: "待办",
-                    value: settings.showTodoModule ? "显示中" : "未显示",
-                    detail: "系统提醒事项同步",
-                    tone: settings.showTodoModule ? .positive : .neutral
-                )
-                DashboardMetricCell(
-                    icon: "command",
-                    title: "快捷操作",
-                    value: "\(enabledQuickActionCount) 项",
-                    detail: "应用与快捷指令",
-                    tone: enabledQuickActionCount > 0 ? .accent : .neutral
-                )
-            }
-        }
-    }
-
-    private var homeOperationsSection: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: AppSpacing.lg) {
-                homeQuickControls
-                    .frame(maxWidth: .infinity, alignment: .top)
-                homeSystemPulse
-                    .frame(width: 310, alignment: .top)
-            }
-
-            VStack(spacing: AppSpacing.lg) {
-                homeQuickControls
-                homeSystemPulse
-            }
-        }
-    }
-
-    private var homeQuickControls: some View {
-        SettingsSectionCard(
-            title: "快速控制",
-            subtitle: "常用功能与设置入口"
-        ) {
-            AppSettingsToggleRow(
-                icon: "capsule",
-                title: "灵动岛",
-                subtitle: "在屏幕顶部显示状态与快捷操作",
-                isOn: $settings.isIslandEnabled
-            )
-            SettingsActionRow(
-                icon: "bell",
-                title: "通知中心",
-                subtitle: "管理通知类别与提醒策略",
-                actionTitle: "管理"
-            ) {
-                model.selectedSettingsPage = .notifications
-            }
-            SettingsActionRow(
-                icon: "checklist",
-                title: "待办同步",
-                subtitle: "管理任务、日期与提醒事项",
-                actionTitle: settings.showTodoModule ? "已启用" : "设置"
-            ) {
-                model.selectedSettingsPage = .todo
-            }
-            SettingsActionRow(
-                icon: "bolt",
-                title: "快捷指令",
-                subtitle: "管理灵动岛中的系统快捷指令",
-                actionTitle: settings.showShortcutsModule ? "已启用" : "设置",
-                showsDivider: false
-            ) {
-                model.selectedSettingsPage = .shortcuts
-            }
-        }
-    }
-
-    private var homeSystemPulse: some View {
-        SettingsSectionCard(
-            title: "系统脉搏",
-            subtitle: "当前配置状态"
-        ) {
-            DashboardPulseRow(
-                icon: "cloud.sun",
-                title: "天气模块",
-                value: settings.showWeatherModule ? "正常显示" : "已关闭",
-                isActive: settings.showWeatherModule
-            )
-            DashboardPulseRow(
-                icon: "rectangle.stack",
-                title: "主页模块",
-                value: "已启用 \(model.enabledWidgets.count) 项",
-                isActive: !model.enabledWidgets.isEmpty
-            )
-            DashboardPulseRow(
-                icon: "square.grid.2x2",
-                title: "快捷应用",
-                value: settings.showQuickAppsModule ? "已启用" : "已关闭",
-                isActive: settings.showQuickAppsModule
-            )
-            DashboardPulseRow(
-                icon: "bell.badge",
-                title: "通知服务",
-                value: "可用",
-                isActive: true,
-                showsDivider: false
-            )
-        }
-    }
-
-    private var enabledMusicSourceTitle: String {
-        switch (settings.allowAppleMusicAccess, settings.allowSpotifyAccess) {
-        case (true, true): "Apple Music + Spotify"
-        case (true, false): "Apple Music"
-        case (false, true): "Spotify"
-        case (false, false): "未启用"
-        }
-    }
-
-    private var enabledQuickActionCount: Int {
-        [settings.showQuickAppsModule, settings.showShortcutsModule]
-            .filter { $0 }
-            .count
     }
 
     private var musicPage: some View {
@@ -789,87 +638,248 @@ struct SettingsRootView: View {
     }
 
     private var previewCard: some View {
-        SettingsCard(spacing: 10) {
-            SectionTitle(title: "主页预览", systemName: nil)
+        SettingsCard(spacing: 14) {
+            HStack(spacing: AppSpacing.lg) {
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                    SectionTitle(title: "灵动岛预览", systemName: "sparkles.rectangle.stack")
+                    Text("切换状态，即时查看当前组合的实际布局。")
+                        .font(AppTypography.supporting)
+                        .foregroundStyle(AppColor.textSecondary)
+                }
+
+                Spacer(minLength: AppSpacing.lg)
+
+                PillSegmentedControl(
+                    options: [SettingsPreviewMode.normal, .expanded],
+                    selection: $model.selectedPreviewMode,
+                    title: { $0.title }
+                )
+                .frame(width: 190)
+            }
 
             islandPreview
-                .frame(height: 184)
-
-            PillSegmentedControl(
-                options: [SettingsPreviewMode.normal, .expanded],
-                selection: $model.selectedPreviewMode,
-                title: { $0.title }
-            )
-            .frame(maxWidth: .infinity)
+                .frame(height: 254)
+                .padding(8)
+                .background {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    AppColor.accentSoft.opacity(0.52),
+                                    AppColor.controlFill.opacity(0.72)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.88), lineWidth: 1)
+                }
         }
     }
 
     private var islandPreview: some View {
         GeometryReader { proxy in
-            let spacing = 8 + model.spacingValue * 12
-            let previewWidth = min(proxy.size.width - 8, 940)
-            let screenTopInset = min(32, max(22, previewWidth * (66 / 1972)))
+            let previewWidth = max(320, proxy.size.width - 12)
+            let computerHeight = min(
+                max(180, previewWidth * 0.34),
+                max(180, proxy.size.height - 10)
+            )
+            let screenTopInset = max(20, previewWidth * (70 / 1972))
+            let screenHorizontalInset = max(18, previewWidth * (74 / 1972))
+            let screenWidth = max(280, previewWidth - (screenHorizontalInset * 2))
             let usesSideStatus = model.leftSideIcon != .none || model.rightSideIcon != .none
+            let expandedSize = IslandShellLayout.contentSize(
+                settings: settings,
+                selectedTopTab: .home
+            )
+            let availableIslandHeight = max(80, computerHeight - screenTopInset - 20)
+            let expandedScale = min(
+                1,
+                min(
+                    (screenWidth - 16) / max(1, expandedSize.width),
+                    availableIslandHeight / max(1, expandedSize.height)
+                )
+            )
             let islandWidth: CGFloat = {
                 switch model.selectedPreviewMode {
                 case .normal:
                     return usesSideStatus
-                        ? min(previewWidth * 0.56, 520)
-                        : min(previewWidth * 0.36, 340)
+                        ? min(screenWidth * 0.56, 520)
+                        : min(screenWidth * 0.36, 340)
                 case .playing:
-                    return min(previewWidth * 0.56, 520)
+                    return min(screenWidth * 0.56, 520)
                 case .expanded:
-                    return min(previewWidth - 44, 860)
+                    return expandedSize.width * expandedScale
                 }
             }()
-            let islandHeight: CGFloat = model.selectedPreviewMode == .expanded ? 126 : 62
+            let islandHeight = model.selectedPreviewMode == .expanded
+                ? expandedSize.height * expandedScale
+                : 62
 
             ZStack(alignment: .top) {
-                cameraStripPreview(width: previewWidth)
+                cameraStripPreview(width: previewWidth, height: computerHeight)
 
-                previewIsland(width: islandWidth, height: islandHeight, spacing: spacing)
+                previewIsland(
+                    width: islandWidth,
+                    height: islandHeight,
+                    expandedScale: expandedScale
+                )
                     .padding(.top, screenTopInset)
                     .animation(AppMotion.page, value: model.selectedPreviewMode)
-                    .animation(AppMotion.quick, value: model.spacingValue)
                     .animation(AppMotion.standard, value: model.leftSideIcon)
                     .animation(AppMotion.standard, value: model.rightSideIcon)
+                    .animation(AppMotion.standard, value: settings.moduleOrder)
+
+                computerScreenGlassOverlay(
+                    width: previewWidth,
+                    height: computerHeight,
+                    screenTopInset: screenTopInset,
+                    screenHorizontalInset: screenHorizontalInset
+                )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
-    private func cameraStripPreview(width: CGFloat) -> some View {
-        let sourceAspectHeight = width * (CGFloat(798) / CGFloat(1972))
+    private func cameraStripPreview(width: CGFloat, height: CGFloat) -> some View {
+        let displayHeight = max(1, height - 12)
 
-        return ZStack(alignment: .top) {
-            Image("ComputerPreviewBackground")
-                .resizable()
-                .interpolation(.high)
-                .frame(width: width, height: sourceAspectHeight)
+        return VStack(spacing: 0) {
+            ZStack(alignment: .top) {
+                Color(red: 0.018, green: 0.026, blue: 0.038)
 
+                Image("ComputerPreviewBackground")
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: width, height: displayHeight, alignment: .top)
+                    .clipped()
+
+                LinearGradient(
+                    stops: [
+                        .init(color: Color.white.opacity(0.14), location: 0),
+                        .init(color: Color.white.opacity(0.025), location: 0.28),
+                        .init(color: Color.clear, location: 0.62),
+                        .init(color: Color.black.opacity(0.24), location: 1)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .blendMode(.screen)
+
+                LinearGradient(
+                    colors: [Color.clear, Color.black.opacity(0.34)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+            }
+            .frame(width: width, height: displayHeight, alignment: .top)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.58),
+                                Color.white.opacity(0.12),
+                                Color.black.opacity(0.38)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .inset(by: 3)
+                            .stroke(Color.black.opacity(0.68), lineWidth: 2)
+                    }
+            }
+
+            ZStack(alignment: .top) {
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.88),
+                                Color(red: 0.54, green: 0.57, blue: 0.62),
+                                Color(red: 0.20, green: 0.22, blue: 0.26)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: width * 0.91, height: 9)
+
+                Capsule(style: .continuous)
+                    .fill(Color.black.opacity(0.42))
+                    .frame(width: width * 0.16, height: 2)
+                    .padding(.top, 1)
+            }
+            .frame(width: width, height: 12, alignment: .top)
+        }
+        .frame(width: width, height: height, alignment: .top)
+        .shadow(color: Color.black.opacity(0.17), radius: 18, y: 9)
+    }
+
+    private func computerScreenGlassOverlay(
+        width: CGFloat,
+        height: CGFloat,
+        screenTopInset: CGFloat,
+        screenHorizontalInset: CGFloat
+    ) -> some View {
+        let screenWidth = max(1, width - (screenHorizontalInset * 2))
+        let screenHeight = max(1, height - screenTopInset - 18)
+
+        return ZStack {
             LinearGradient(
-                colors: [
-                    Color.white.opacity(0.08),
-                    Color.clear,
-                    Color.black.opacity(0.10)
+                stops: [
+                    .init(color: Color.white.opacity(0.09), location: 0),
+                    .init(color: Color.white.opacity(0.018), location: 0.24),
+                    .init(color: Color.clear, location: 0.58),
+                    .init(color: Color.black.opacity(0.08), location: 1)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .blendMode(.screen)
+
+            LinearGradient(
+                colors: [Color.black.opacity(0.22), Color.clear],
+                startPoint: .top,
+                endPoint: UnitPoint(x: 0.5, y: 0.16)
+            )
         }
-        .frame(width: width, height: 184, alignment: .top)
-        .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(width: screenWidth, height: screenHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.46), Color.white.opacity(0.08)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1.2
+                )
         }
-        .shadow(color: Color.black.opacity(0.12), radius: 14, y: 6)
+        .padding(.top, screenTopInset)
+        .allowsHitTesting(false)
     }
 
-    private func previewIsland(width: CGFloat, height: CGFloat, spacing: CGFloat) -> some View {
-        previewIslandContent(width: width, height: height, spacing: spacing)
+    private func previewIsland(
+        width: CGFloat,
+        height: CGFloat,
+        expandedScale: CGFloat
+    ) -> some View {
+        previewIslandContent(
+            width: width,
+            height: height,
+            expandedScale: expandedScale
+        )
         .frame(width: width, height: height)
         .background(Color.black)
         .clipShape(previewIslandShape(width: width, height: height))
@@ -878,9 +888,27 @@ struct SettingsRootView: View {
     }
 
     @ViewBuilder
-    private func previewIslandContent(width: CGFloat, height: CGFloat, spacing: CGFloat) -> some View {
+    private func previewIslandContent(
+        width: CGFloat,
+        height: CGFloat,
+        expandedScale: CGFloat
+    ) -> some View {
         if model.selectedPreviewMode == .expanded {
-            previewExpandedContent(width: width, height: height, spacing: spacing)
+            let actualSize = IslandShellLayout.contentSize(
+                settings: settings,
+                selectedTopTab: .home
+            )
+
+            previewExpandedContent(
+                width: actualSize.width,
+                height: actualSize.height,
+                scale: 1
+            )
+            .frame(width: actualSize.width, height: actualSize.height, alignment: .topLeading)
+            .compositingGroup()
+            .scaleEffect(expandedScale, anchor: .topLeading)
+            .frame(width: width, height: height, alignment: .topLeading)
+            .clipped()
         } else {
             let cameraZoneWidth = min(width * 0.44, 230)
             let sideZoneWidth = max(62, (width - cameraZoneWidth) / 2)
@@ -898,8 +926,7 @@ struct SettingsRootView: View {
                 snapshot: .idle,
                 currentLyricText: nil,
                 nextLyricText: nil,
-                currentLyricStartTimeMS: nil,
-                nextLyricStartTimeMS: nil,
+                currentLyricTiming: nil,
                 showsTrackName: false,
                 showsLyrics: false,
                 leftSideIcon: model.leftSideIcon,
@@ -953,127 +980,144 @@ struct SettingsRootView: View {
     }
 
     private func previewIslandShape(width: CGFloat, height: CGFloat) -> DynamicIslandShape {
-        DynamicIslandShape(
+        if model.selectedPreviewMode == .expanded {
+            let actualSize = IslandShellLayout.contentSize(
+                settings: settings,
+                selectedTopTab: .home
+            )
+            let scale = width / max(1, actualSize.width)
+            let metrics = IslandShellLayout.shellShapeMetrics(
+                shellSize: actualSize,
+                compactSize: IslandDesignTokens.defaultCompactCapsuleSize,
+                morphProgress: 1
+            )
+            return DynamicIslandShape(
+                shoulderWidth: metrics.shoulderWidth * scale,
+                shoulderDepth: metrics.shoulderDepth * scale,
+                sideInset: metrics.sideInset * scale,
+                bottomCornerRadius: metrics.bottomCornerRadius * scale,
+                visibleSize: CGSize(width: width, height: height)
+            )
+        }
+
+        return DynamicIslandShape(
             shoulderWidth: min(54, width * 0.14),
             shoulderDepth: min(28, height * 0.46),
             sideInset: min(10, width * 0.04),
-            bottomCornerRadius: model.selectedPreviewMode == .expanded ? 20 : 10,
+            bottomCornerRadius: 10,
             visibleSize: CGSize(width: width, height: height)
         )
     }
 
-    private func previewExpandedContent(width: CGFloat, height: CGFloat, spacing: CGFloat) -> some View {
-        let widgets = expandedPreviewWidgets
-        let cardHeight = max(74, height - 32)
-        let itemSpacing = max(6, spacing * 0.42)
-        let horizontalPadding: CGFloat = 20
-        let contentWidth = widgets.reduce(CGFloat(0)) { $0 + previewWidgetWidth($1) }
-            + itemSpacing * CGFloat(max(0, widgets.count - 1))
-        let scale = min(1, max(0.2, (width - horizontalPadding * 2) / max(1, contentWidth)))
+    private func previewExpandedContent(
+        width: CGFloat,
+        height: CGFloat,
+        scale: CGFloat
+    ) -> some View {
+        let modules = IslandShellLayout.visibleModules(settings: settings)
+        let actualHeight = IslandShellLayout.effectiveIslandHeight(settings: settings)
+        let cardHeight = max(104, actualHeight - 38) * scale
+        let itemSpacing = IslandShellLayout.moduleCardLayoutSpacing * scale
+        let horizontalPadding = IslandDesignTokens.expandedPadding * scale
 
-        return HStack(spacing: itemSpacing) {
-            ForEach(widgets) { widget in
-                previewWidgetCard(widget, height: cardHeight)
-                    .frame(width: previewWidgetWidth(widget), height: cardHeight)
+        return VStack(spacing: 0) {
+            previewExpandedTopBar(scale: scale)
+
+            if modules.isEmpty {
+                HStack(spacing: 7) {
+                    Image(systemName: "square.grid.2x2")
+                    Text("尚未启用卡片")
+                }
+                .font(.system(size: max(8, 12 * scale), weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.58))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HStack(spacing: itemSpacing) {
+                    ForEach(modules) { module in
+                        previewWidgetCard(module, height: cardHeight)
+                            .frame(
+                                width: previewWidgetWidth(module, scale: scale),
+                                height: cardHeight
+                            )
+                    }
+                }
+                .padding(.horizontal, horizontalPadding)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .scaleEffect(scale, anchor: .center)
-        .frame(
-            width: max(1, contentWidth * scale),
-            height: cardHeight * scale,
-            alignment: .center
-        )
-        .frame(width: width, height: height, alignment: .center)
-        .padding(.horizontal, horizontalPadding)
+        .frame(width: width, height: height, alignment: .top)
     }
 
-    private var expandedPreviewWidgets: [SettingsWidget] {
-        let savedOrder = settings.moduleOrder.compactMap { moduleRawValue -> SettingsWidget? in
-            switch moduleRawValue {
-            case IslandPanelModule.weather.rawValue:
-                return .weather
-            case IslandPanelModule.calendar.rawValue:
-                return .calendar
-            case IslandPanelModule.todo.rawValue:
-                return .todo
-            case IslandPanelModule.media.rawValue:
-                return .music
-            case IslandPanelModule.quickApps.rawValue:
-                return .quickApps
-            case IslandPanelModule.shortcuts.rawValue:
-                return .shortcuts
-            case IslandPanelModule.imageCard.rawValue:
-                return .imageCard
-            case IslandPanelModule.deviceInfo.rawValue:
-                return .deviceInfo
-            default:
-                return nil
-            }
+    private func previewExpandedTopBar(scale: CGFloat) -> some View {
+        HStack(spacing: max(5, 14 * scale)) {
+            Text("NookFlow")
+                .font(.system(size: max(8, 15 * scale), weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.94))
+
+            Image(systemName: "appstore")
+            Image(systemName: "folder")
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "gearshape.fill")
         }
-
-        let order = savedOrder.isEmpty
-            ? homeWidgets
-            : savedOrder + homeWidgets.filter { !savedOrder.contains($0) }
-
-        return order.filter { model.enabledWidgets.contains($0) && $0 != .todo }
+        .font(.system(size: max(7, 12 * scale), weight: .semibold))
+        .foregroundStyle(Color.white.opacity(0.54))
+        .padding(.horizontal, max(10, 22 * scale))
+        .frame(height: IslandDesignTokens.expandedTopBarControlHeight * scale)
     }
 
-    private func previewWidgetWidth(_ widget: SettingsWidget) -> CGFloat {
-        switch widget {
-        case .imageCard:
-            return 82
-        case .deviceInfo:
-            return 128
-        case .music:
-            return 150
-        case .shortcuts:
-            return 116
-        case .quickApps:
-            return 104
-        case .calendar:
-            return 116
-        case .weather:
-            return 100
-        default:
-            return 92
-        }
+    private func previewWidgetWidth(_ module: IslandPanelModule, scale: CGFloat) -> CGFloat {
+        IslandShellLayout.moduleFixedWidth(
+            module,
+            quickAppsColumnCount: settings.quickAppsColumnCount
+        ) * scale
     }
 
     @ViewBuilder
-    private func previewWidgetCard(_ widget: SettingsWidget, height: CGFloat) -> some View {
+    private func previewWidgetCard(_ module: IslandPanelModule, height: CGFloat) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.02))
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.035, green: 0.036, blue: 0.040).opacity(0.96),
+                            Color.black.opacity(0.92),
+                            Color(red: 0.015, green: 0.016, blue: 0.019).opacity(0.98)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.20), Color.white.opacity(0.055)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 0.8
+                        )
                 }
 
-            switch widget {
+            switch module {
             case .imageCard:
                 previewImageCardThumbnail
             case .deviceInfo:
                 previewDeviceInfoThumbnail
-            case .music:
+            case .mirror:
+                previewMirrorThumbnail
+            case .media:
                 previewMusicThumbnail
-            case .calendar:
-                previewCalendarThumbnail
             case .weather:
                 previewWeatherThumbnail
             case .quickApps:
                 previewQuickAppsThumbnail
             case .shortcuts:
                 previewShortcutsThumbnail
-            default:
-                VStack(spacing: 7) {
-                    Image(systemName: widget.icon)
-                        .font(.system(size: 18, weight: .semibold))
-                    Text(widget.title)
-                        .font(.system(size: 10, weight: .semibold))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(Color.white.opacity(0.76))
-                .padding(10)
+            case .todo:
+                previewTodoThumbnail
             }
         }
     }
@@ -1081,7 +1125,31 @@ struct SettingsRootView: View {
     private var previewImageCardThumbnail: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.15))
+                .fill(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.04),
+                            .init(color: Color(red: 0.43, green: 0.96, blue: 0.78).opacity(0.38), location: 0.34),
+                            .init(color: AppColor.accent.opacity(0.28), location: 0.68),
+                            .init(color: .clear, location: 0.96)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 52, height: 52)
+                .rotationEffect(.degrees(-10), anchor: .bottomLeading)
+                .blur(radius: 7)
+                .offset(x: 8, y: 11)
+
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.18), Color.black.opacity(0.38)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .frame(width: 48, height: 48)
                 .offset(x: 13, y: 16)
 
@@ -1091,21 +1159,111 @@ struct SettingsRootView: View {
                         .resizable()
                         .scaledToFill()
                 } else {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.18))
-                        .overlay {
-                            Image(systemName: "photo")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.58))
-                        }
+                    Image("ImageCardDefault")
+                        .resizable()
+                        .scaledToFill()
                 }
             }
             .frame(width: 52, height: 52)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 0.7)
+            }
             .rotationEffect(.degrees(-10), anchor: .bottomLeading)
+            .shadow(color: AppColor.accent.opacity(0.16), radius: 5, x: -1, y: 1)
+            .shadow(color: .black.opacity(0.30), radius: 6, x: 3, y: 4)
             .offset(x: 9, y: 9)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var previewMirrorThumbnail: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: "person.crop.square")
+                    .font(.system(size: 8, weight: .semibold))
+                    .frame(width: 18, height: 18)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("镜子")
+                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                    Text("• 未开启")
+                        .font(.system(size: 6.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.48))
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .frame(width: 19, height: 19)
+                    .background(Color(red: 0.20, green: 0.62, blue: 0.61), in: Circle())
+            }
+            .foregroundStyle(Color.white.opacity(0.88))
+
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.16, green: 0.32, blue: 0.35).opacity(0.72),
+                            Color(red: 0.035, green: 0.055, blue: 0.065)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay {
+                    VStack(spacing: 4) {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("点击开启镜子")
+                            .font(.system(size: 6.8, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(Color.white.opacity(0.76))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.white.opacity(0.13), lineWidth: 0.7)
+                }
+        }
+        .padding(6)
+    }
+
+    private var previewTodoThumbnail: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("8月")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+
+                ForEach([("周日", "2"), ("周一", "3"), ("周二", "4")], id: \.1) { day in
+                    VStack(spacing: 1) {
+                        Text(day.0)
+                            .font(.system(size: 5.8, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.42))
+                        Text(day.1)
+                            .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(day.1 == "3" ? AppColor.accent : Color.white.opacity(0.58))
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 7, weight: .bold))
+                    .frame(width: 18, height: 18)
+                    .overlay { Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.7) }
+            }
+
+            Text("暂无已安排待办")
+                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.40))
+
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Color.white.opacity(0.90))
+        .padding(9)
     }
 
     private var previewDeviceInfoThumbnail: some View {
@@ -1224,30 +1382,6 @@ struct SettingsRootView: View {
         .padding(10)
     }
 
-    private var previewCalendarThumbnail: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("6月17日")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Color.red.opacity(0.92))
-            ForEach(0..<3, id: \.self) { row in
-                HStack(spacing: 5) {
-                    ForEach(0..<5, id: \.self) { col in
-                        Text(row == 1 && col == 2 ? "17" : "\(row * 5 + col + 8)")
-                            .font(.system(size: 7.5, weight: .semibold))
-                            .frame(width: 10, height: 10)
-                            .background {
-                                if row == 1 && col == 2 {
-                                    Circle().fill(Color.red)
-                                }
-                            }
-                    }
-                }
-            }
-        }
-        .foregroundStyle(Color.white.opacity(0.76))
-        .padding(10)
-    }
-
     private var previewWeatherThumbnail: some View {
         VStack(spacing: 5) {
             Image(systemName: "cloud.sun.fill")
@@ -1324,32 +1458,68 @@ struct SettingsRootView: View {
     private var musicDisplaySection: some View {
         SettingsSectionCard(
             title: "显示内容",
-            subtitle: "控制紧凑模式和歌词弹幕里要展示哪些内容"
+            subtitle: "控制歌词的显示位置"
         ) {
             SettingsToggleRow(
-                title: "显示歌名",
-                subtitle: "在紧凑模式下显示当前歌曲名称",
-                isOn: $model.showMusicTrackName
+                title: "开启歌词展示",
+                subtitle: "在胶囊、桌面或 macOS 菜单栏显示当前歌词",
+                isOn: $model.showDesktopLyrics
             )
-            SettingsToggleRow(
-                title: "显示歌词",
-                subtitle: "在紧凑模式下显示当前歌词内容",
-                isOn: $model.showMusicLyrics
+            SettingsSegmentedRow(
+                icon: nil,
+                title: "展示位置",
+                subtitle: "桌面展示使用独立歌词窗口；菜单栏展示会占用菜单栏空间",
+                options: LyricsPresentationMode.allCases,
+                optionTitle: { $0.title(language: settings.language) },
+                isEnabled: model.showDesktopLyrics,
+                selection: $model.lyricsPresentationMode
             )
-            SettingsToggleRow(
-                title: "歌词弹幕",
-                subtitle: "在桌面上显示独立的歌词弹幕窗口",
-                isOn: $model.showDesktopLyrics,
-                showsDivider: false
-            )
+            if model.lyricsPresentationMode == .menuBar {
+                SettingsSliderRow(
+                    icon: nil,
+                    title: "歌词显示宽度",
+                    subtitle: "菜单栏空间不足时，系统可能隐藏部分状态项目",
+                    value: menuBarLyricsDisplayedWidth,
+                    in: MenuBarLyricsLayout.displayedWidthRange(
+                        showsPlaybackControls: model.menuBarLyricsShowsPlaybackControls
+                    ),
+                    step: 1,
+                    isEnabled: model.showDesktopLyrics,
+                    valueText: { "\(Int($0)) pt" }
+                )
+                SettingsToggleRow(
+                    title: "菜单栏常驻播控",
+                    subtitle: "显示上一首、播放或暂停、下一首",
+                    isOn: $model.menuBarLyricsShowsPlaybackControls,
+                    isEnabled: model.showDesktopLyrics,
+                    showsDivider: false
+                )
+            }
         }
+    }
+
+    private var menuBarLyricsDisplayedWidth: Binding<Double> {
+        Binding(
+            get: {
+                Double(MenuBarLyricsLayout.displayedWidth(
+                    lyricsWidth: model.menuBarLyricsWidth,
+                    showsPlaybackControls: model.menuBarLyricsShowsPlaybackControls
+                ))
+            },
+            set: { displayedWidth in
+                model.menuBarLyricsWidth = MenuBarLyricsLayout.preferredLyricsWidth(
+                    fromDisplayedWidth: displayedWidth,
+                    showsPlaybackControls: model.menuBarLyricsShowsPlaybackControls
+                )
+            }
+        )
     }
 
     private var musicAccessSection: some View {
         SettingsSectionCard(
             title: "应用访问",
             subtitle: "按需开启微光乐境可访问的应用来源",
-            footer: "默认仅开启 Apple Music。若需处理相关权限，请前往“关于 - 权限管理”。"
+            footer: "QQ 音乐与网易云音乐通过 macOS 系统媒体中心读取；播放器需先出现在系统控制中心的“正在播放”中。"
         ) {
             SettingsToggleRow(
                 title: "Apple Music",
@@ -1359,7 +1529,17 @@ struct SettingsRootView: View {
             SettingsToggleRow(
                 title: "Spotify",
                 subtitle: "允许读取 Spotify 的播放状态与歌曲信息",
-                isOn: $model.allowSpotifyAccess,
+                isOn: $model.allowSpotifyAccess
+            )
+            SettingsToggleRow(
+                title: "QQ音乐",
+                subtitle: "通过系统媒体中心读取 QQ 音乐播放信息",
+                isOn: $model.allowQQMusicAccess
+            )
+            SettingsToggleRow(
+                title: "网易云音乐",
+                subtitle: "通过系统媒体中心读取网易云音乐播放信息",
+                isOn: $model.allowNetEaseMusicAccess,
                 showsDivider: false
             )
         }
@@ -1409,15 +1589,26 @@ struct SettingsRootView: View {
 
     private var widgetsCard: some View {
         SettingsCard(spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                SectionTitle(title: "小组件与卡片", systemName: nil)
-                Text("启用你常用的高效功能，打造专属工作流。")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(SettingsColors.secondaryText)
+            HStack(alignment: .center, spacing: AppSpacing.lg) {
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                    SectionTitle(title: "小组件与卡片", systemName: "rectangle.3.group")
+                    Text("选择真正需要的内容，灵动岛会按固定尺寸从左向右排列。")
+                        .font(AppTypography.supporting)
+                        .foregroundStyle(AppColor.textSecondary)
+                }
+
+                Spacer(minLength: AppSpacing.lg)
+
+                Text("已启用 \(model.enabledWidgets.intersection(Set(homeWidgets)).count) / \(homeWidgets.count)")
+                    .font(AppTypography.control)
+                    .foregroundStyle(AppColor.accent)
+                    .padding(.horizontal, AppSpacing.md)
+                    .frame(height: 28)
+                    .background(AppColor.accentSoft, in: Capsule(style: .continuous))
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
+                HStack(alignment: .top, spacing: AppSpacing.md) {
                     ForEach(homeWidgets) { widget in
                         WidgetOptionCard(
                             widget: widget,
@@ -1437,17 +1628,17 @@ struct SettingsRootView: View {
                                 }
                             }
                         )
-                        .frame(width: 218, height: 130)
+                        .frame(width: 204, height: 148)
                     }
                 }
-                .padding(.vertical, 2)
-                .padding(.trailing, 2)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 2)
             }
         }
     }
 
     private var homeWidgets: [SettingsWidget] {
-        [.imageCard, .todo, .deviceInfo, .weather, .music, .calendar, .quickApps, .shortcuts]
+        [.mirror, .imageCard, .todo, .deviceInfo, .weather, .music, .quickApps, .shortcuts]
     }
 
     private func chooseImageCardFile() {
@@ -1464,98 +1655,6 @@ struct SettingsRootView: View {
         }
     }
 
-}
-
-private struct DashboardMetricCell: View {
-    let icon: String
-    let title: String
-    let value: String
-    let detail: String
-    let tone: SettingsStatusTone
-
-    var body: some View {
-        HStack(spacing: AppSpacing.md) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(tone.foreground)
-                .frame(width: 38, height: 38)
-                .background(tone.background, in: RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous))
-
-            VStack(alignment: .leading, spacing: AppSpacing.xxs) {
-                Text(title)
-                    .font(AppTypography.caption)
-                    .foregroundStyle(AppColor.textTertiary)
-                Text(value)
-                    .font(AppTypography.sectionTitle)
-                    .foregroundStyle(AppColor.textPrimary)
-                    .lineLimit(1)
-                Text(detail)
-                    .font(AppTypography.caption)
-                    .foregroundStyle(AppColor.textSecondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, AppSpacing.md)
-        .frame(minHeight: 76)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(AppColor.divider)
-                .frame(width: 1, height: 42)
-        }
-    }
-}
-
-private struct DashboardPulseRow: View {
-    let icon: String
-    let title: String
-    let value: String
-    let isActive: Bool
-    var showsDivider = true
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: AppSpacing.md) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isActive ? AppColor.accent : AppColor.textTertiary)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        isActive ? AppColor.accentSoft : AppColor.controlFill,
-                        in: RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    )
-
-                VStack(alignment: .leading, spacing: AppSpacing.xxs) {
-                    Text(title)
-                        .font(AppTypography.rowTitle)
-                        .foregroundStyle(AppColor.textPrimary)
-                    Text(value)
-                        .font(AppTypography.supporting)
-                        .foregroundStyle(AppColor.textSecondary)
-                }
-
-                Spacer(minLength: 0)
-
-                Circle()
-                    .fill(isActive ? AppColor.positive : AppColor.textDisabled)
-                    .frame(width: 7, height: 7)
-                    .accessibilityHidden(true)
-            }
-            .padding(.horizontal, AppSpacing.rowHorizontal)
-            .frame(minHeight: 58)
-
-            if showsDivider {
-                Rectangle()
-                    .fill(AppColor.divider)
-                    .frame(height: 1)
-                    .padding(.leading, 56)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title)，\(value)")
-    }
 }
 
 private struct FeedbackMailSheet: View {
@@ -1623,7 +1722,7 @@ private struct FeedbackMailSheet: View {
                 Spacer()
 
                 Button("关闭窗口", action: onClose)
-                    .buttonStyle(SettingsSecondaryButtonStyle())
+                    .buttonStyle(AppButtonStyle(role: .secondary))
                     .frame(width: 128)
 
                 Button {
@@ -1632,7 +1731,7 @@ private struct FeedbackMailSheet: View {
                 } label: {
                     Label("发送邮件", systemImage: "paperplane.fill")
                 }
-                .buttonStyle(SettingsPrimaryButtonStyle())
+                .buttonStyle(AppButtonStyle(role: .primary))
                 .frame(width: 158)
 
                 Spacer()
@@ -1694,15 +1793,7 @@ private struct SettingsCard<Content: View>: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
-                .fill(SettingsColors.cardBackground)
-                .overlay {
-                    RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
-                        .stroke(AppColor.border, lineWidth: 1)
-                }
-                .appShadow(AppShadowStyle.card)
-        }
+        .appSurface(.elevated, radius: AppRadius.largeCard)
     }
 }
 
@@ -2006,29 +2097,33 @@ private struct ClockCapsuleDial: View {
 }
 
 private struct WidgetOptionCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
     let widget: SettingsWidget
     let isEnabled: Bool
     let onToggle: () -> Void
     let onSettings: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
             HStack(alignment: .top) {
                 Image(systemName: widget.icon)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(SettingsColors.secondaryText)
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 18, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isEnabled ? accent : AppColor.textTertiary)
+                    .frame(width: 36, height: 36)
                     .background {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.black.opacity(0.035))
+                        RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                            .fill(isEnabled ? accent.opacity(0.12) : AppColor.controlFill)
                     }
 
                 Spacer()
 
                 Text(widget.tag)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(AppTypography.badge)
                     .foregroundStyle(widget.tag == "Pro" ? .orange : .green)
-                    .padding(.horizontal, 7)
+                    .padding(.horizontal, AppSpacing.sm)
                     .frame(height: 22)
                     .background {
                         Capsule()
@@ -2038,40 +2133,92 @@ private struct WidgetOptionCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(widget.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(SettingsColors.primaryText)
+                    .font(AppTypography.rowTitle)
+                    .foregroundStyle(AppColor.textPrimary)
                 Text(widget.subtitle)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(SettingsColors.secondaryText)
-                    .lineLimit(1)
+                    .font(AppTypography.supporting)
+                    .foregroundStyle(AppColor.textSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 0)
 
             HStack {
                 if widget.settingsPage != nil || widget == .imageCard {
-                    Button(widget == .imageCard ? "选择图片" : "设置", action: onSettings)
+                    Button(action: onSettings) {
+                        HStack(spacing: AppSpacing.xs) {
+                            Text(widget == .imageCard ? "选择图片" : "设置")
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                    }
                         .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .font(AppTypography.supporting)
+                        .foregroundStyle(AppColor.accent)
                 }
 
                 Spacer()
 
                 Toggle("", isOn: Binding(get: { isEnabled }, set: { _ in onToggle() }))
-                    .toggleStyle(SettingsSwitchToggleStyle())
+                    .toggleStyle(AppSwitchToggleStyle())
                     .labelsHidden()
             }
         }
-        .padding(14)
-        .opacity(isEnabled ? 1 : 0.52)
+        .padding(AppSpacing.md)
+        .contentShape(RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous))
         .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white)
+            RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
+                .fill(
+                    isEnabled
+                        ? LinearGradient(
+                            colors: [accent.opacity(0.075), Color.white.opacity(0.98)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        : LinearGradient(
+                            colors: [Color.white.opacity(0.84), Color.white.opacity(0.92)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(SettingsColors.divider, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
+                        .stroke(
+                            isEnabled ? accent.opacity(0.22) : AppColor.border,
+                            lineWidth: isEnabled ? 1 : 0.7
+                        )
                 }
+                .shadow(
+                    color: Color.black.opacity(isHovering ? 0.085 : 0.035),
+                    radius: isHovering ? 12 : 7,
+                    y: isHovering ? 6 : 3
+                )
+        }
+        .offset(y: isHovering && !reduceMotion ? -2 : 0)
+        .onHover { isHovering = $0 }
+        .animation(
+            AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion),
+            value: isHovering
+        )
+        .animation(
+            AppMotion.resolved(AppMotion.settingsStandard, reduceMotion: reduceMotion),
+            value: isEnabled
+        )
+        .accessibilityElement(children: .contain)
+    }
+
+    private var accent: Color {
+        switch widget {
+        case .mirror: Color(red: 0.18, green: 0.68, blue: 0.66)
+        case .imageCard: Color(red: 0.49, green: 0.36, blue: 0.92)
+        case .todo: Color(red: 0.93, green: 0.48, blue: 0.22)
+        case .deviceInfo: Color(red: 0.16, green: 0.58, blue: 0.86)
+        case .weather: Color(red: 0.18, green: 0.54, blue: 0.94)
+        case .music: Color(red: 0.94, green: 0.25, blue: 0.43)
+        case .quickApps: Color(red: 0.20, green: 0.64, blue: 0.43)
+        case .shortcuts: AppColor.accent
+        default: AppColor.accent
         }
     }
 }
@@ -2079,6 +2226,8 @@ private struct WidgetOptionCard: View {
 private enum SettingsMusicSupportedApp: CaseIterable, Identifiable {
     case appleMusic
     case spotify
+    case qqMusic
+    case netEaseMusic
 
     var id: String { bundleIdentifier }
 
@@ -2086,6 +2235,8 @@ private enum SettingsMusicSupportedApp: CaseIterable, Identifiable {
         switch self {
         case .appleMusic: "Apple Music"
         case .spotify: "Spotify"
+        case .qqMusic: "QQ音乐"
+        case .netEaseMusic: "网易云音乐"
         }
     }
 
@@ -2097,6 +2248,8 @@ private enum SettingsMusicSupportedApp: CaseIterable, Identifiable {
         switch self {
         case .appleMusic: ["com.apple.Music"]
         case .spotify: ["com.spotify.client"]
+        case .qqMusic: ["com.tencent.QQMusicMac"]
+        case .netEaseMusic: ["com.netease.163music", "com.netease.163music.mac", "com.netease.cloudmusic"]
         }
     }
 
@@ -2104,6 +2257,7 @@ private enum SettingsMusicSupportedApp: CaseIterable, Identifiable {
         switch self {
         case .appleMusic: ("music", "png")
         case .spotify: ("spotify", "png")
+        case .qqMusic, .netEaseMusic: nil
         }
     }
 
@@ -2111,6 +2265,8 @@ private enum SettingsMusicSupportedApp: CaseIterable, Identifiable {
         switch self {
         case .appleMusic: "music.note"
         case .spotify: "dot.radiowaves.left.and.right"
+        case .qqMusic: "q.circle.fill"
+        case .netEaseMusic: "waveform.circle.fill"
         }
     }
 
@@ -2118,6 +2274,8 @@ private enum SettingsMusicSupportedApp: CaseIterable, Identifiable {
         switch self {
         case .appleMusic: Color(red: 0.98, green: 0.22, blue: 0.36)
         case .spotify: Color(red: 0.11, green: 0.72, blue: 0.28)
+        case .qqMusic: Color(red: 0.98, green: 0.78, blue: 0.10)
+        case .netEaseMusic: Color(red: 0.90, green: 0.10, blue: 0.12)
         }
     }
 
@@ -2209,106 +2367,18 @@ private struct SettingsToggleRow: View {
     let title: String
     let subtitle: String
     @Binding var isOn: Bool
+    var isEnabled = true
     var showsDivider = true
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 18) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(title)
-                        .font(AppTypography.rowTitle)
-                        .foregroundStyle(SettingsColors.primaryText)
-                    Text(subtitle)
-                        .font(AppTypography.supporting)
-                        .foregroundStyle(SettingsColors.secondaryText)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 20)
-
-                Toggle("", isOn: $isOn)
-                    .toggleStyle(SettingsSwitchToggleStyle())
-                    .labelsHidden()
-            }
-            .frame(minHeight: 58)
-            .padding(.horizontal, AppSpacing.rowHorizontal)
-            .padding(.vertical, AppSpacing.rowVertical)
-
-            if showsDivider {
-                Rectangle()
-                    .fill(SettingsColors.divider)
-                    .frame(height: 1)
-                    .padding(.leading, AppSpacing.rowHorizontal)
-            }
-        }
-    }
-}
-
-private struct SettingsSwitchToggleStyle: ToggleStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.22, dampingFraction: 0.82)) {
-                configuration.isOn.toggle()
-            }
-        } label: {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(trackColor(isOn: configuration.isOn))
-                .frame(width: 52, height: 30)
-                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 24, height: 24)
-                        .padding(3)
-                        .shadow(color: Color.black.opacity(0.18), radius: 4, y: 1)
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .opacity(isEnabled ? 1 : 0.55)
-    }
-
-    private func trackColor(isOn: Bool) -> Color {
-        guard isEnabled else {
-            return Color.black.opacity(0.14)
-        }
-
-        return isOn ? Color.accentColor : Color.black.opacity(0.14)
-    }
-}
-
-private struct SettingsPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 22)
-            .frame(height: 38)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(configuration.isPressed ? Color.accentColor.opacity(0.82) : Color.accentColor)
-            }
-            .opacity(configuration.isPressed ? 0.88 : 1)
-    }
-}
-
-private struct SettingsSecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(SettingsColors.primaryText)
-            .padding(.horizontal, 18)
-            .frame(height: 36)
-            .background {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color.white)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .stroke(SettingsColors.divider, lineWidth: 1)
-                    }
-            }
-            .opacity(configuration.isPressed ? 0.76 : 1)
+        AppSettingsToggleRow(
+            icon: nil,
+            title: title,
+            subtitle: subtitle,
+            isEnabled: isEnabled,
+            showsDivider: showsDivider,
+            isOn: $isOn
+        )
     }
 }
 

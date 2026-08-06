@@ -19,11 +19,14 @@ struct IslandRootView: View {
     @StateObject private var batteryProvider = BatteryProvider()
     @StateObject private var systemStatusProvider = SystemStatusProvider()
     @StateObject private var foregroundAppProvider = ForegroundAppProvider()
+    @StateObject private var applicationsProvider = ApplicationsProvider()
+    @StateObject private var fileProvider = FileDataProvider()
+    @StateObject private var moduleDragController = ModuleDragController()
+    @StateObject private var reminderProvider = ReminderProvider()
     @State private var currentSnapshot: PlaybackSnapshot = .idle
     @State private var currentLyricText: String?
     @State private var nextLyricText: String?
-    @State private var currentLyricStartTimeMS: TimeInterval?
-    @State private var nextLyricStartTimeMS: TimeInterval?
+    @State private var currentLyricTiming: EstimatedLyricLine?
     @State private var compactLyricKey = 0
     @State private var compactLyricLoadingDotCount = 1
     @State private var compactLyricLoadingTask: Task<Void, Never>?
@@ -67,12 +70,11 @@ struct IslandRootView: View {
             updateCompactCapsuleMode()
             configureCompactLyricLoadingTask()
         }
-        .onReceive(viewModel.lyricsProvider.$statusText) { _ in
+        .onReceive(viewModel.lyricsProvider.$estimatedTimeline) { _ in
             updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
-            updateCompactCapsuleMode()
         }
-        .onReceive(viewModel.lyricsProvider.$isLoading) { isLoading in
-            if !isLoading {
+        .onReceive(viewModel.lyricsProvider.$displayState) { state in
+            if !state.isLoading {
                 compactLyricLoadingDotCount = 1
             }
             updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
@@ -81,24 +83,28 @@ struct IslandRootView: View {
         }
         .onChange(of: settings.compactLeftSideIcon) { oldValue, newValue in
             handleSystemSideSelectionChange(oldValue: oldValue, newValue: newValue)
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
             refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.compactRightSideIcon) { oldValue, newValue in
             handleSystemSideSelectionChange(oldValue: oldValue, newValue: newValue)
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
             refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.showCustomCompactIcons) { _, _ in
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
             refreshRuntimeProviders()
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.showMusicLyrics) { _, _ in
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
             refreshRuntimeProviders()
             updateCompactCapsuleMode()
+            configureCompactLyricLoadingTask()
         }
-        .onChange(of: settings.showMusicTrackName) { _, _ in
-            refreshRuntimeProviders()
+        .onChange(of: settings.lyricsPresentationMode) { _, _ in
             updateCompactCapsuleMode()
         }
         .onChange(of: settings.foregroundAppLinkEnabled) { _, enabled in
@@ -126,6 +132,12 @@ struct IslandRootView: View {
         .onChange(of: settings.allowSpotifyAccess) { _, _ in
             viewModel.playbackProvider.updateAccessConfiguration(from: settings)
         }
+        .onChange(of: settings.allowQQMusicAccess) { _, _ in
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
+        }
+        .onChange(of: settings.allowNetEaseMusicAccess) { _, _ in
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
+        }
         .onChange(of: settings.showWeatherModule) { _, _ in
             refreshRuntimeProviders()
         }
@@ -133,7 +145,13 @@ struct IslandRootView: View {
             refreshRuntimeProviders()
         }
         .onChange(of: settings.showMediaModule) { _, _ in
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
             refreshRuntimeProviders()
+        }
+        .onChange(of: settings.showDesktopLyrics) { _, _ in
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
+            refreshRuntimeProviders()
+            updateCompactCapsuleMode()
         }
         .onDisappear {
             viewModel.playbackProvider.stop()
@@ -150,115 +168,110 @@ struct IslandRootView: View {
     }
 
     private var animatedIslandShell: some View {
-        let timing = IslandDesignTokens.shellOpenTiming(setting: settings.openSpeed)
-        let bounce = settings.bounceLevel
-        let expandedSize = IslandShellLayout.contentSize(
-            settings: settings,
-            selectedTopTab: viewModel.selectedTopTab
-        )
-        let undershootWidthProgress = IslandShellLayout.progressForExpandedScale(
-            compact: viewModel.compactCapsuleSize.width,
-            expanded: expandedSize.width,
-            scale: bounce.undershootScale
-        )
-        let undershootHeightProgress = IslandShellLayout.progressForExpandedScale(
-            compact: viewModel.compactCapsuleSize.height,
-            expanded: expandedSize.height,
-            scale: bounce.undershootScale
-        )
-        let widthPassThroughVelocity = (
-            bounce.widthOvershoot - 1
-        ) / timing.overshoot * 0.62
-        let heightPassThroughVelocity = (
-            bounce.heightOvershoot - 1
-        ) / timing.overshoot * 0.62
-        let widthSettleVelocity = max(
-            0,
-            (1 - undershootWidthProgress)
-                / timing.settle
-        ) * 0.46
-        let heightSettleVelocity = max(
-            0,
-            (1 - undershootHeightProgress)
-                / timing.settle
-        ) * 0.46
+        ZStack(alignment: .top) {
+            animatedFileDropChooserSurface
+            .opacity(viewModel.isFileDropChooserVisible ? 1 : 0)
+            .allowsHitTesting(viewModel.isFileDropChooserVisible)
 
-        return KeyframeAnimator(
+            standardAnimatedIslandShell(
+                rendersShellChrome: !viewModel.isFileDropChooserVisible
+            )
+            .opacity(
+                viewModel.isFileDropChooserVisible
+                    ? viewModel.fileDropSourceShellOpacity
+                    : 1
+            )
+            .allowsHitTesting(!viewModel.isFileDropChooserVisible)
+        }
+    }
+
+    private var animatedFileDropChooserSurface: some View {
+        let canvasSize = viewModel.fileDropShellCanvasSize
+        let fillColor = settings.islandBackgroundStyle == .solid
+            ? IslandDesignTokens.panelColor
+            : Color.black.opacity(0.78)
+
+        return ZStack(alignment: .top) {
+            IslandOpeningKeyframeAnimator(
+                initialValue: .collapsed,
+                trigger: viewModel.fileDropOpeningAnimationTrigger,
+                timing: IslandDesignTokens.fileDropShellOpenTiming(
+                    setting: settings.openSpeed
+                ),
+                bounce: settings.bounceLevel
+            ) { keyframeState in
+                let shellSize = viewModel.usesFileDropOpeningKeyframes
+                    ? fileDropShellSize(animationState: keyframeState)
+                    : viewModel.fileDropShellSize
+                let morphProgress = viewModel.usesFileDropOpeningKeyframes
+                    ? fileDropShellMorphProgress(animationState: keyframeState)
+                    : viewModel.fileDropShellMorphProgress
+
+                FileDropShellSurface(
+                    compactCapsuleSize: viewModel.compactCapsuleSize,
+                    shellSize: shellSize,
+                    canvasSize: canvasSize,
+                    shellMorphProgress: morphProgress,
+                    fillColor: fillColor
+                )
+            }
+
+            FileDropChooserContentSurface(
+                hoverTarget: viewModel.fileDropHoverTarget,
+                previewName: viewModel.fileDropPreviewName,
+                canvasSize: canvasSize,
+                contentOpacity: viewModel.fileDropContentOpacity,
+                visibleItemCount: viewModel.fileDropVisibleItemCount,
+                reduceMotion: viewModel.reduceMotionEnabled,
+                selectedTopTab: viewModel.selectedTopTab,
+                isPinned: viewModel.isPinned,
+                onSelectTab: viewModel.selectTopTab,
+                onTogglePin: viewModel.togglePin
+            )
+        }
+        .frame(
+            width: IslandFileDropLayout.windowSize(for: canvasSize).width,
+            height: IslandFileDropLayout.windowSize(for: canvasSize).height,
+            alignment: .top
+        )
+    }
+
+    private func standardAnimatedIslandShell(rendersShellChrome: Bool) -> some View {
+        IslandOpeningKeyframeAnimator(
             initialValue: viewModel.openingKeyframeStartState,
-            trigger: viewModel.openingAnimationTrigger
+            trigger: viewModel.openingAnimationTrigger,
+            timing: IslandDesignTokens.shellOpenTiming(setting: settings.openSpeed),
+            bounce: settings.bounceLevel
         ) { keyframeState in
             islandShell(
                 animationState: viewModel.usesOpeningKeyframes
                     ? keyframeState
-                    : viewModel.shellAnimationState
+                    : viewModel.shellAnimationState,
+                rendersShellChrome: rendersShellChrome
             )
-        } keyframes: { _ in
-            KeyframeTrack(\.widthProgress) {
-                CubicKeyframe(
-                    1,
-                    duration: timing.toExpanded,
-                    startVelocity: 0,
-                    endVelocity: widthPassThroughVelocity
-                )
-                CubicKeyframe(
-                    bounce.widthOvershoot,
-                    duration: timing.overshoot,
-                    startVelocity: widthPassThroughVelocity,
-                    endVelocity: 0
-                )
-                CubicKeyframe(
-                    undershootWidthProgress,
-                    duration: timing.undershoot,
-                    startVelocity: 0,
-                    endVelocity: widthSettleVelocity
-                )
-                CubicKeyframe(
-                    1,
-                    duration: timing.settle,
-                    startVelocity: widthSettleVelocity,
-                    endVelocity: 0
-                )
-            }
-            KeyframeTrack(\.heightProgress) {
-                CubicKeyframe(
-                    1,
-                    duration: timing.toExpanded,
-                    startVelocity: 0,
-                    endVelocity: heightPassThroughVelocity
-                )
-                CubicKeyframe(
-                    bounce.heightOvershoot,
-                    duration: timing.overshoot,
-                    startVelocity: heightPassThroughVelocity,
-                    endVelocity: 0
-                )
-                CubicKeyframe(
-                    undershootHeightProgress,
-                    duration: timing.undershoot,
-                    startVelocity: 0,
-                    endVelocity: heightSettleVelocity
-                )
-                CubicKeyframe(
-                    1,
-                    duration: timing.settle,
-                    startVelocity: heightSettleVelocity,
-                    endVelocity: 0
-                )
-            }
-            KeyframeTrack(\.morphProgress) {
-                CubicKeyframe(
-                    1,
-                    duration: timing.toExpanded
-                )
-                LinearKeyframe(
-                    1,
-                    duration: timing.total - timing.toExpanded
-                )
-            }
         }
     }
 
-    private func islandShell(animationState: IslandShellAnimationState) -> some View {
+    private func fileDropShellSize(animationState: IslandShellAnimationState) -> CGSize {
+        let source = viewModel.fileDropOpeningSourceSize
+        let target = IslandFileDropLayout.size
+        return CGSize(
+            width: source.width + (target.width - source.width) * animationState.widthProgress,
+            height: source.height + (target.height - source.height) * animationState.heightProgress
+        )
+    }
+
+    private func fileDropShellMorphProgress(
+        animationState: IslandShellAnimationState
+    ) -> CGFloat {
+        let source = viewModel.fileDropOpeningSourceMorphProgress
+        return source + (1 - source) * animationState.morphProgress
+    }
+
+    private func islandShell(
+        animationState: IslandShellAnimationState,
+        rendersShellChrome: Bool
+    ) -> some View {
         let size = shellSize(animationState: animationState)
         let canvasSize = shellCanvasSize
         let overflowHeight = viewModel.expandedContentOverflowHeight
@@ -276,7 +289,9 @@ struct IslandRootView: View {
         )
 
         return ZStack(alignment: .top) {
-            compactHoverLeakGuard
+            if rendersShellChrome {
+                compactHoverLeakGuard
+            }
 
             ZStack(alignment: .top) {
                 CompactCapsuleContentView(
@@ -285,15 +300,16 @@ struct IslandRootView: View {
                     snapshot: currentSnapshot,
                     currentLyricText: currentLyricText,
                     nextLyricText: nextLyricText,
-                    currentLyricStartTimeMS: currentLyricStartTimeMS,
-                    nextLyricStartTimeMS: nextLyricStartTimeMS,
-                    showsTrackName: settings.showMusicTrackName,
+                    currentLyricTiming: currentLyricTiming,
+                    showsTrackName: false,
                     showsLyrics: settings.showMusicLyrics,
                     leftSideIcon: settings.showCustomCompactIcons ? settings.compactLeftSideIcon : .none,
                     rightSideIcon: settings.showCustomCompactIcons ? settings.compactRightSideIcon : .none,
                     sideStatusContext: sideStatusContext,
                     foregroundPromptDisplayMode: settings.foregroundAppPromptDisplayMode,
-                    foregroundPrompt: foregroundPrompt
+                    foregroundPrompt: foregroundPrompt,
+                    isContentVisible: viewModel.presentationPhase == .collapsed
+                        && compactContentOpacity > 0.01
                 )
                 .frame(
                     width: viewModel.compactCapsuleSize.width,
@@ -312,13 +328,20 @@ struct IslandRootView: View {
                         settings: settings,
                         weatherProvider: weatherProvider,
                         deviceInfoProvider: deviceInfoProvider,
+                        applicationsProvider: applicationsProvider,
+                        fileProvider: fileProvider,
+                        dragController: moduleDragController,
+                        reminderProvider: reminderProvider,
                         onOpenSettings: onOpenSettings,
                         onOpenTodoSettings: onOpenTodoSettings,
                         onOpenFeedback: onOpenFeedback
                     )
                     .environmentObject(settings)
                     .opacity(expandedContentOpacity)
-                    .allowsHitTesting(viewModel.presentationPhase == .expanded)
+                    .allowsHitTesting(
+                        viewModel.presentationPhase == .loadingContent
+                            || viewModel.presentationPhase == .expanded
+                    )
                 }
             }
             .frame(
@@ -327,21 +350,25 @@ struct IslandRootView: View {
                 alignment: .top
             )
             .background {
-                shape.fill(shellFillColor)
+                shape.fill(rendersShellChrome ? shellFillColor : Color.clear)
             }
             .overlay(alignment: .top) {
                 Rectangle()
-                    .fill(shellFillColor)
+                    .fill(rendersShellChrome ? shellFillColor : Color.clear)
                     .frame(height: 1)
                     .allowsHitTesting(false)
             }
             .islandShellBounds(shape, clipsToShape: !allowsContentOverflow)
             .shadow(
-                color: viewModel.presentationPhase == .collapsingShell
+                color: !rendersShellChrome || viewModel.presentationPhase == .collapsingShell
                     ? .clear
                     : .black.opacity(0.18),
-                radius: viewModel.presentationPhase == .collapsingShell ? 0 : 8,
-                y: viewModel.presentationPhase == .collapsingShell ? 0 : 3
+                radius: !rendersShellChrome || viewModel.presentationPhase == .collapsingShell
+                    ? 0
+                    : 8,
+                y: !rendersShellChrome || viewModel.presentationPhase == .collapsingShell
+                    ? 0
+                    : 3
             )
             .contextMenu {
                 islandContextMenu
@@ -368,13 +395,21 @@ struct IslandRootView: View {
     @ViewBuilder
     private func externalPinButtonOverlay(canvasSize: CGSize) -> some View {
         if settings.showPinButton && viewModel.presentationPhase != .collapsed {
+            let anchorSize = IslandShellLayout.contentSize(
+                settings: settings,
+                selectedTopTab: viewModel.selectedTopTab
+            )
+
             PinButton(isPinned: viewModel.isPinned) {
                 viewModel.togglePin()
             }
             .opacity(viewModel.secondaryContentRevealProgress)
             .position(
-                x: 20 + canvasSize.width - IslandDesignTokens.externalPinButtonTrailingOverlap,
-                y: canvasSize.height - IslandDesignTokens.externalPinButtonBottomOverlap
+                x: 20
+                    + canvasSize.width / 2
+                    + anchorSize.width / 2
+                    - IslandDesignTokens.externalPinButtonTrailingOverlap,
+                y: anchorSize.height - IslandDesignTokens.externalPinButtonBottomOverlap
             )
             .transition(.scale(scale: 0.92).combined(with: .opacity))
             .zIndex(45)
@@ -433,7 +468,7 @@ struct IslandRootView: View {
 
         let needsPlayback = settings.showMediaModule && isExpanded
             || settings.showMusicLyrics
-            || settings.showMusicTrackName
+            || settings.showDesktopLyrics
             || compactIcons.contains(.music)
         if needsPlayback {
             viewModel.playbackProvider.start()
@@ -541,7 +576,8 @@ struct IslandRootView: View {
             return CGSize(
                 width: max(
                     size.width,
-                    viewModel.compactCapsuleSize.width * IslandDesignTokens.compactHoverWidthScale
+                    viewModel.compactCapsuleSize.width
+                        * IslandDesignTokens.compactHoverWidthScale
                 ),
                 height: max(
                     size.height,
@@ -551,7 +587,7 @@ struct IslandRootView: View {
         }
 
         if viewModel.presentationPhase == .expandingShell
-            || viewModel.presentationPhase == .revealingContent {
+            || viewModel.presentationPhase == .loadingContent {
             return IslandShellLayout.openingEnvelopeSize(
                 settings: settings,
                 selectedTopTab: viewModel.selectedTopTab
@@ -617,10 +653,10 @@ struct IslandRootView: View {
             return
         }
         let line = lyrics[index]
+        let timing = viewModel.lyricsProvider.estimatedLine(at: index)
         let words = line.words.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = words.isEmpty ? (line.translation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") : words
 
-        let nextStart = lyrics.indices.contains(index + 1) ? lyrics[index + 1].startTimeMS : nil
         let nextText: String?
         if lyrics.indices.contains(index + 1) {
             let nextLine = lyrics[index + 1]
@@ -634,12 +670,10 @@ struct IslandRootView: View {
 
         if text != currentLyricText
             || nextText != nextLyricText
-            || line.startTimeMS != currentLyricStartTimeMS
-            || nextStart != nextLyricStartTimeMS {
+            || timing != currentLyricTiming {
             currentLyricText = text
             nextLyricText = nextText
-            currentLyricStartTimeMS = line.startTimeMS
-            nextLyricStartTimeMS = nextStart
+            currentLyricTiming = timing
             compactLyricKey += 1
         }
     }
@@ -659,29 +693,27 @@ struct IslandRootView: View {
     }
 
     private func updateCompactLyricStatusText() {
-        let statusText = viewModel.lyricsProvider.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
         let text: String?
-        if viewModel.lyricsProvider.isLoading {
+        if viewModel.lyricsProvider.displayState.isLoading {
             text = compactLyricLoadingText
         } else {
-            text = statusText == "未找到歌词" ? statusText : nil
+            text = viewModel.lyricsProvider.displayState.placeholderText
         }
 
         if text != currentLyricText
             || nextLyricText != nil
-            || currentLyricStartTimeMS != nil
-            || nextLyricStartTimeMS != nil {
+            || currentLyricTiming != nil {
             currentLyricText = text
             nextLyricText = nil
-            currentLyricStartTimeMS = nil
-            nextLyricStartTimeMS = nil
+            currentLyricTiming = nil
             compactLyricKey += 1
         }
     }
 
     private func updateCompactLyricLoadingStatusIfNeeded() {
-        guard currentSnapshot.isLive,
-              viewModel.lyricsProvider.isLoading,
+        guard settings.showMusicLyrics,
+              currentSnapshot.isLive,
+              viewModel.lyricsProvider.displayState.isLoading,
               viewModel.lyricsProvider.lyrics.isEmpty else {
             compactLyricLoadingTask?.cancel()
             compactLyricLoadingTask = nil
@@ -696,8 +728,9 @@ struct IslandRootView: View {
     }
 
     private func configureCompactLyricLoadingTask() {
-        let shouldRun = currentSnapshot.isLive
-            && viewModel.lyricsProvider.isLoading
+        let shouldRun = settings.showMusicLyrics
+            && currentSnapshot.isLive
+            && viewModel.lyricsProvider.displayState.isLoading
             && viewModel.lyricsProvider.lyrics.isEmpty
 
         guard shouldRun else {
@@ -723,19 +756,17 @@ struct IslandRootView: View {
     private func clearCompactLyric() {
         if currentLyricText != nil
             || nextLyricText != nil
-            || currentLyricStartTimeMS != nil
-            || nextLyricStartTimeMS != nil {
+            || currentLyricTiming != nil {
             currentLyricText = nil
             nextLyricText = nil
-            currentLyricStartTimeMS = nil
-            nextLyricStartTimeMS = nil
+            currentLyricTiming = nil
             compactLyricKey += 1
         }
     }
 
     private func updateCompactCapsuleMode() {
         let presentation = CompactMusicPresentation.resolve(
-            showsTrackName: settings.showMusicTrackName,
+            showsTrackName: false,
             showsLyrics: settings.showMusicLyrics,
             track: CompactMusicTrackSnapshot(
                 isLive: currentSnapshot.isLive,
@@ -747,14 +778,15 @@ struct IslandRootView: View {
         )
         let mode: CompactCapsuleContentMode
 
-        if presentation != nil {
+        if settings.showDesktopLyrics,
+           settings.lyricsPresentationMode == .menuBar {
+            mode = .camera
+        } else if presentation != nil {
             mode = .lyrics
         } else if foregroundPrompt != nil {
             mode = .status
         } else if settings.showCustomCompactIcons
             && (settings.compactLeftSideIcon != .none || settings.compactRightSideIcon != .none) {
-            mode = .status
-        } else if currentSnapshot.isLive {
             mode = .status
         } else {
             mode = .camera
@@ -774,7 +806,7 @@ struct IslandRootView: View {
         foregroundPromptTask?.cancel()
         guard foregroundPrompt != nil else { return }
 
-        let delay = max(0.3, settings.foregroundHoldDuration)
+        let delay = min(max(settings.foregroundHoldDuration, 0.5), 2.0)
         foregroundPromptTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
@@ -814,5 +846,331 @@ private extension View {
         clipsToShape: Bool
     ) -> some View {
         modifier(IslandShellBoundsModifier(shellShape: shellShape, clipsToShape: clipsToShape))
+    }
+}
+
+/// One shared physical timeline for both the normal island and the file-drop
+/// chooser. Keeping the keyframes in one place prevents the two openings from
+/// drifting apart as motion settings evolve.
+private struct IslandOpeningKeyframeAnimator<Content: View>: View {
+    let initialValue: IslandShellAnimationState
+    let trigger: Int
+    let timing: IslandDesignTokens.ShellOpenTiming
+    let bounce: IslandBounceLevel
+    let content: (IslandShellAnimationState) -> Content
+
+    init(
+        initialValue: IslandShellAnimationState,
+        trigger: Int,
+        timing: IslandDesignTokens.ShellOpenTiming,
+        bounce: IslandBounceLevel,
+        @ViewBuilder content: @escaping (IslandShellAnimationState) -> Content
+    ) {
+        self.initialValue = initialValue
+        self.trigger = trigger
+        self.timing = timing
+        self.bounce = bounce
+        self.content = content
+    }
+
+    var body: some View {
+        let widthLaunchVelocity = max(
+            0,
+            (1 - initialValue.widthProgress) / timing.widthMotionResponse
+        ) * 0.10
+        let heightLaunchVelocity = max(
+            0,
+            (1 - initialValue.heightProgress) / timing.motionResponse
+        ) * 0.08
+
+        // A single under-damped spring owns each axis from launch to rest.
+        // The damping ratio is derived from the configured peak overshoot, so
+        // the shell crosses its final size with continuous velocity and loses
+        // energy naturally instead of stopping at stitched keyframe boundaries.
+        let widthSpring = Spring(
+            response: timing.widthMotionResponse,
+            dampingRatio: springDampingRatio(
+                forConfiguredOvershoot: bounce.widthOvershoot
+            )
+        )
+        let heightSpring = Spring(
+            response: timing.motionResponse,
+            dampingRatio: springDampingRatio(
+                forConfiguredOvershoot: bounce.heightOvershoot
+            )
+        )
+        let morphSpring = Spring(
+            settlingDuration: timing.morphDuration,
+            dampingRatio: 1
+        )
+
+        KeyframeAnimator(
+            initialValue: initialValue,
+            trigger: trigger
+        ) { keyframeState in
+            content(keyframeState)
+        } keyframes: { _ in
+            KeyframeTrack(\.widthProgress) {
+                SpringKeyframe(
+                    1,
+                    duration: timing.total,
+                    spring: widthSpring,
+                    startVelocity: widthLaunchVelocity
+                )
+            }
+            KeyframeTrack(\.heightProgress) {
+                SpringKeyframe(
+                    1,
+                    duration: timing.total,
+                    spring: heightSpring,
+                    startVelocity: heightLaunchVelocity
+                )
+            }
+            KeyframeTrack(\.morphProgress) {
+                SpringKeyframe(
+                    1,
+                    duration: timing.morphDuration,
+                    spring: morphSpring
+                )
+                LinearKeyframe(
+                    1,
+                    duration: timing.total - timing.morphDuration
+                )
+            }
+        }
+    }
+
+    private func springDampingRatio(
+        forConfiguredOvershoot overshoot: CGFloat
+    ) -> Double {
+        let amplitude = Double(max(0, overshoot - 1))
+        guard amplitude > 0.0001 else { return 1 }
+
+        // Invert the standard second-order step-response overshoot equation:
+        // Mₚ = exp(-ζπ / √(1-ζ²)). This preserves the user-facing bounce
+        // levels while letting one physical spring generate the full motion.
+        let logarithm = log(min(amplitude, 0.20))
+        return -logarithm / sqrt(Double.pi * Double.pi + logarithm * logarithm)
+    }
+}
+
+/// A purpose-built drag destination. It is intentionally independent of the
+/// Files page so external drags do not wake its grid, providers, or layout.
+private struct FileDropShellSurface: View {
+    let compactCapsuleSize: CGSize
+    let shellSize: CGSize
+    let canvasSize: CGSize
+    let shellMorphProgress: CGFloat
+    let fillColor: Color
+
+    var body: some View {
+        let metrics = IslandShellLayout.shellShapeMetrics(
+            shellSize: shellSize,
+            compactSize: compactCapsuleSize,
+            morphProgress: shellMorphProgress
+        )
+        let shellShape = DynamicIslandShape(
+            shoulderWidth: metrics.shoulderWidth,
+            shoulderDepth: metrics.shoulderDepth,
+            sideInset: metrics.sideInset,
+            bottomCornerRadius: metrics.bottomCornerRadius,
+            visibleSize: shellSize
+        )
+
+        let windowCanvasSize = IslandFileDropLayout.windowSize(for: canvasSize)
+
+        shellShape
+            .fill(fillColor)
+            .frame(width: shellSize.width, height: shellSize.height)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(fillColor)
+                    .frame(height: 1)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+            .frame(
+                width: windowCanvasSize.width,
+                height: windowCanvasSize.height,
+                alignment: .top
+            )
+    }
+}
+
+private struct FileDropChooserContentSurface: View {
+    let hoverTarget: IslandFileDropTarget?
+    let previewName: String?
+    let canvasSize: CGSize
+    let contentOpacity: Double
+    let visibleItemCount: Int
+    let reduceMotion: Bool
+    let selectedTopTab: IslandTopTab
+    let isPinned: Bool
+    let onSelectTab: (IslandTopTab) -> Void
+    let onTogglePin: () -> Void
+
+    var body: some View {
+        let windowCanvasSize = IslandFileDropLayout.windowSize(for: canvasSize)
+        let finalShellShape = DynamicIslandShape(
+            shoulderWidth: IslandDesignTokens.expandedShoulderWidth,
+            shoulderDepth: IslandDesignTokens.expandedShoulderDepth,
+            sideInset: IslandDesignTokens.expandedSideInset,
+            bottomCornerRadius: IslandDesignTokens.expandedBottomCornerRadius,
+            visibleSize: IslandFileDropLayout.size
+        )
+
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    ForEach(IslandTopTab.allCases) { tab in
+                        TopTabButton(
+                            tab: tab,
+                            isSelected: selectedTopTab == tab,
+                            action: { onSelectTab(tab) }
+                        )
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(height: IslandDesignTokens.expandedTopBarControlHeight)
+                .padding(.leading, IslandFileDropLayout.topBarLeadingPadding)
+                .padding(.trailing, IslandFileDropLayout.topBarTrailingPadding)
+                .islandContentMaterialized(
+                    isVisible: visibleItemCount > 0,
+                    reduceMotion: reduceMotion
+                )
+                .allowsHitTesting(visibleItemCount > 0)
+
+                HStack(spacing: IslandFileDropLayout.spacing) {
+                    destination(
+                        target: .staging,
+                        symbol: "tray.and.arrow.down",
+                        title: "存入文稿",
+                        visualIndex: 1
+                    )
+
+                    destination(
+                        target: .airDrop,
+                        symbol: "airdrop",
+                        title: "隔空投送",
+                        visualIndex: 2
+                    )
+                }
+                .padding(.horizontal, IslandFileDropLayout.horizontalPadding)
+                .padding(.top, IslandFileDropLayout.destinationsTopInset
+                    - IslandDesignTokens.expandedTopBarControlHeight)
+
+                Spacer(minLength: 0)
+            }
+            .frame(
+                width: IslandFileDropLayout.size.width,
+                height: IslandFileDropLayout.size.height,
+                alignment: .top
+            )
+            .clipShape(finalShellShape)
+
+            PinButton(isPinned: isPinned, action: onTogglePin)
+                .position(
+                    x: windowCanvasSize.width / 2
+                        + IslandFileDropLayout.size.width / 2
+                        - IslandDesignTokens.externalPinButtonTrailingOverlap,
+                    y: IslandFileDropLayout.size.height
+                        - IslandDesignTokens.externalPinButtonBottomOverlap
+                )
+                .islandContentMaterialized(
+                    isVisible: visibleItemCount > 0,
+                    reduceMotion: reduceMotion
+                )
+                .allowsHitTesting(visibleItemCount > 0)
+                .zIndex(2)
+        }
+        .frame(
+            width: windowCanvasSize.width,
+            height: windowCanvasSize.height,
+            alignment: .top
+        )
+        .opacity(contentOpacity)
+    }
+
+    private func destination(
+        target: IslandFileDropTarget,
+        symbol: String,
+        title: String,
+        visualIndex: Int
+    ) -> some View {
+        let isActive = hoverTarget == target
+
+        return VStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: target == .staging ? 27 : 25, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isActive ? Color.white : Color.white.opacity(0.58))
+                .shadow(color: Color.white.opacity(isActive ? 0.16 : 0), radius: 6)
+
+            Text(title)
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundStyle(isActive ? Color.white : Color.white.opacity(0.76))
+
+            if let previewName, isActive {
+                Text(previewName)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.88)))
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: IslandFileDropLayout.destinationHeight)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(isActive ? 0.13 : 0.05))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(
+                    isActive ? Color.white.opacity(0.92) : Color.white.opacity(0.34),
+                    style: StrokeStyle(lineWidth: isActive ? 3 : 2, dash: [9, 7])
+                )
+        }
+        .scaleEffect(isActive ? 1.018 : 1)
+        .animation(.spring(response: 0.20, dampingFraction: 0.82), value: isActive)
+        .islandContentMaterialized(
+            isVisible: visualIndex < visibleItemCount,
+            reduceMotion: reduceMotion
+        )
+        .allowsHitTesting(visualIndex < visibleItemCount)
+    }
+}
+
+struct IslandContentMaterializationModifier: ViewModifier {
+    let isVisible: Bool
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0.11)
+            .blur(radius: reduceMotion || isVisible ? 0 : 3)
+            .scaleEffect(
+                reduceMotion || isVisible ? 1 : 0.985,
+                anchor: .center
+            )
+            .offset(y: reduceMotion || isVisible ? 0 : 4)
+            .brightness(reduceMotion || isVisible ? 0 : -0.08)
+    }
+}
+
+extension View {
+    func islandContentMaterialized(
+        isVisible: Bool,
+        reduceMotion: Bool
+    ) -> some View {
+        modifier(
+            IslandContentMaterializationModifier(
+                isVisible: isVisible,
+                reduceMotion: reduceMotion
+            )
+        )
     }
 }

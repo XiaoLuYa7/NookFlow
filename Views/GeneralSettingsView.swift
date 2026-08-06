@@ -250,7 +250,7 @@ struct GeneralSettingsView: View {
                 title: "提示时长",
                 subtitle: "临时提示停留多久后恢复你自定义的左右状态",
                 value: $settings.foregroundHoldDuration,
-                in: 0.5...5.0,
+                in: 0.5...2.0,
                 step: 0.25,
                 isEnabled: settings.foregroundAppLinkEnabled,
                 showsDivider: false,

@@ -14,12 +14,14 @@ struct QuickAppsCardView: View {
     private let pageHeight: CGFloat = 94
     private let pageGap: CGFloat = 4
     private let pageHorizontalInset: CGFloat = 8
+    private var columnCount: Int { settings.quickAppsColumnCount.rawValue }
+    private var pageSize: Int { settings.quickAppsColumnCount.pageSize }
     private var pageCount: Int {
         let visibleSlotCount = min(
             QuickAppsStore.maxCount,
-            max(store.items.count + (store.items.count < QuickAppsStore.maxCount ? 1 : 0), QuickAppsStore.pageSize)
+            max(store.items.count + (store.items.count < QuickAppsStore.maxCount ? 1 : 0), pageSize)
         )
-        return max(1, Int(ceil(Double(visibleSlotCount) / Double(QuickAppsStore.pageSize))))
+        return max(1, Int(ceil(Double(visibleSlotCount) / Double(pageSize))))
     }
 
     var body: some View {
@@ -27,14 +29,21 @@ struct QuickAppsCardView: View {
             Spacer(minLength: 0)
 
             GeometryReader { proxy in
-                HStack(spacing: pageGap) {
-                    ForEach(0..<pageCount, id: \.self) { page in
-                        pageView(page)
-                            .frame(width: proxy.size.width, height: pageHeight)
+                ZStack(alignment: .leading) {
+                    HStack(spacing: pageGap) {
+                        ForEach(0..<pageCount, id: \.self) { page in
+                            pageView(page)
+                                .frame(width: proxy.size.width, height: pageHeight)
+                        }
                     }
+                    .offset(x: -CGFloat(currentPage) * (proxy.size.width + pageGap))
                 }
                 .frame(width: proxy.size.width, height: pageHeight, alignment: .leading)
-                .offset(x: -CGFloat(currentPage) * (proxy.size.width + pageGap))
+                .compositingGroup()
+                .mask {
+                    Rectangle()
+                        .frame(width: proxy.size.width, height: pageHeight)
+                }
             }
             .frame(maxWidth: .infinity)
             .frame(height: pageHeight)
@@ -68,6 +77,9 @@ struct QuickAppsCardView: View {
         .onChange(of: store.items.count) { _, _ in
             currentPage = min(currentPage, pageCount - 1)
         }
+        .onChange(of: settings.quickAppsColumnCount) { _, _ in
+            currentPage = min(currentPage, pageCount - 1)
+        }
         .alert(
             "应用不可用",
             isPresented: Binding(
@@ -84,20 +96,20 @@ struct QuickAppsCardView: View {
     }
 
     private func pageIndexes(for page: Int) -> [Int] {
-        let start = page * QuickAppsStore.pageSize
-        return Array(start..<(start + QuickAppsStore.pageSize))
+        let start = page * pageSize
+        return Array(start..<(start + pageSize))
     }
 
     private func pageView(_ page: Int) -> some View {
         GeometryReader { proxy in
             let contentWidth = max(1, proxy.size.width - pageHorizontalInset * 2)
-            let cellWidth = max(1, (contentWidth - columnSpacing * 2) / 3)
+            let totalColumnSpacing = columnSpacing * CGFloat(max(0, columnCount - 1))
+            let cellWidth = max(1, (contentWidth - totalColumnSpacing) / CGFloat(columnCount))
             let cellHeight = max(iconSize, (pageHeight - rowSpacing) / 2)
             let indexes = pageIndexes(for: page)
-            let rows = [
-                Array(indexes.prefix(3)),
-                Array(indexes.dropFirst(3).prefix(3))
-            ]
+            let rows = stride(from: 0, to: indexes.count, by: columnCount).map { start in
+                Array(indexes[start..<min(start + columnCount, indexes.count)])
+            }
 
             VStack(spacing: rowSpacing) {
                 ForEach(0..<rows.count, id: \.self) { row in
@@ -176,6 +188,7 @@ struct QuickAppsCardView: View {
                 if available {
                     Image(nsImage: store.icon(for: item))
                         .resizable()
+                        .interpolation(.high)
                         .aspectRatio(contentMode: .fit)
                         .frame(width: iconSize, height: iconSize)
                 } else {

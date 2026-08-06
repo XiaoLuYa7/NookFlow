@@ -602,7 +602,7 @@ private extension Comparable {
 enum IslandPresentationPhase: Equatable {
     case collapsed
     case expandingShell
-    case revealingContent
+    case loadingContent
     case expanded
     case hidingContent
     case collapsingShell
@@ -678,4 +678,50 @@ struct IslandShellAnimationState: Equatable {
 enum IslandFileDropTarget: Equatable {
     case staging
     case airDrop
+}
+
+/// Geometry shared by the AppKit drag hit-testing layer and the dedicated
+/// drop chooser surface. Keeping it fixed avoids opening the full Files page
+/// just to accept an external drag.
+enum IslandFileDropLayout {
+    static let size = CGSize(width: 560, height: 176)
+    static let horizontalPadding: CGFloat = 26
+    static let spacing: CGFloat = 12
+    static let destinationHeight: CGFloat = 92
+    static let destinationsTopInset: CGFloat = 42
+    static let exitContentHideDuration: TimeInterval = 0.08
+    static let exitDuration: TimeInterval = 0.26
+    static let restoreContentHideDuration: TimeInterval = 0.10
+    static let restoreDuration: TimeInterval = 0.32
+    static let compactActivationHorizontalPadding: CGFloat = 12
+    static let compactActivationBottomPadding: CGFloat = 24
+    static let transientExitGraceDuration: TimeInterval = 0.60
+    static let topBarLeadingPadding: CGFloat = 0
+    static let topBarTrailingPadding: CGFloat = 18
+    static let dragPreviewSafeTopInset: CGFloat = 46
+
+    static var windowSize: CGSize {
+        windowSize(for: size)
+    }
+
+    static func openingCanvasSize(
+        from sourceSize: CGSize,
+        bounce: IslandBounceLevel
+    ) -> CGSize {
+        let overshootWidth = sourceSize.width
+            + (size.width - sourceSize.width) * bounce.widthOvershoot
+        let overshootHeight = sourceSize.height
+            + (size.height - sourceSize.height) * bounce.heightOvershoot
+        return CGSize(
+            width: max(sourceSize.width, max(size.width, overshootWidth)),
+            height: max(sourceSize.height, max(size.height, overshootHeight))
+        )
+    }
+
+    static func windowSize(for shellSize: CGSize) -> CGSize {
+        CGSize(
+            width: shellSize.width + 40,
+            height: shellSize.height + IslandDesignTokens.applicationsWindowVerticalPadding
+        )
+    }
 }

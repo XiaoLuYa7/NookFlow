@@ -210,11 +210,43 @@ struct TodoTaskDraft: Equatable, Sendable {
     var dueTime: Date?
     var hasAlarm: Bool
     var location: String
+    var category: TodoCategory = .none
+    var priority: TodoPriority = .normal
 }
 
 enum TodoDateTimeInputParser {
     static func digitsOnly(_ text: String, maxLength: Int) -> String {
         String(text.filter(\.isNumber).prefix(maxLength))
+    }
+
+    static func clampedDigits(_ text: String, maxLength: Int, maximum: Int) -> String {
+        let digits = digitsOnly(text, maxLength: maxLength)
+        guard let value = Int(digits), value > maximum else { return digits }
+        return String(maximum)
+    }
+
+    static func maximumDay(
+        year: String,
+        month: String,
+        calendar: Calendar = .current
+    ) -> Int? {
+        let yearText = digitsOnly(year, maxLength: 4)
+        let monthText = digitsOnly(month, maxLength: 2)
+        guard yearText.count == 4,
+              let yearValue = Int(yearText),
+              let monthValue = Int(monthText),
+              (1...12).contains(monthValue)
+        else {
+            return nil
+        }
+
+        let components = DateComponents(year: yearValue, month: monthValue, day: 1)
+        guard let firstDay = calendar.date(from: components),
+              let range = calendar.range(of: .day, in: .month, for: firstDay)
+        else {
+            return nil
+        }
+        return range.count
     }
 
     static func parseDate(_ text: String, calendar: Calendar = .current) -> Date? {
@@ -552,6 +584,8 @@ final class TodoViewModel: ObservableObject {
             dueTime: draft.dueTime,
             hasAlarm: draft.hasAlarm,
             location: trimmedLocation,
+            category: draft.category,
+            priority: draft.priority,
             createdAt: Date()
         )
 

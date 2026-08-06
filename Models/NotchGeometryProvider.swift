@@ -14,48 +14,63 @@ enum NotchGeometryProvider {
     private static let fallbackCameraRegionWidth: CGFloat = 185
 
     static func cameraSafeRegionCenterX(for screen: NSScreen?) -> CGFloat? {
-        guard let screen else { return nil }
-
-        if #available(macOS 12.0, *),
-           let leftArea = screen.auxiliaryTopLeftArea,
-           let rightArea = screen.auxiliaryTopRightArea {
-            let notchWidth = screen.frame.width - leftArea.width - rightArea.width + 4
-
-            guard notchWidth > 1 else { return nil }
-            return screen.frame.minX + leftArea.width + notchWidth / 2
-        }
-
-        return nil
+        cameraSafeRegionRect(for: screen)?.midX
     }
 
     static func cameraSafeRegionSize(for screen: NSScreen?) -> CGSize? {
+        cameraSafeRegionRect(for: screen)?.size
+    }
+
+    static func cameraSafeRegionRect(for screen: NSScreen?) -> CGRect? {
         guard let screen else { return nil }
 
         if #available(macOS 12.0, *),
            let leftArea = screen.auxiliaryTopLeftArea,
            let rightArea = screen.auxiliaryTopRightArea {
-            let notchWidth = screen.frame.width - leftArea.width - rightArea.width + 4
-            let menuBarHeight = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
-            let notchHeight = max(
-                screen.safeAreaInsets.top,
-                menuBarHeight,
-                IslandDesignTokens.defaultCameraCapsuleSize.height
+            return measuredCameraSafeRegion(
+                leftArea: leftArea,
+                rightArea: rightArea,
+                safeAreaTopInset: screen.safeAreaInsets.top,
+                menuBarHeight: max(0, screen.frame.maxY - screen.visibleFrame.maxY),
+                backingScaleFactor: screen.backingScaleFactor
             )
-
-            guard notchWidth > 1 else { return nil }
-            return CGSize(width: ceil(notchWidth), height: ceil(notchHeight))
         }
 
         return nil
     }
 
-    static func cameraRegionSize(for screen: NSScreen?) -> CGSize? {
-        guard let safeRegion = cameraSafeRegionSize(for: screen) else { return nil }
+    static func measuredCameraSafeRegion(
+        leftArea: CGRect,
+        rightArea: CGRect,
+        safeAreaTopInset: CGFloat,
+        menuBarHeight: CGFloat,
+        backingScaleFactor: CGFloat
+    ) -> CGRect? {
+        let scale = max(1, backingScaleFactor)
+        let leftEdge = round(leftArea.maxX * scale) / scale
+        let rightEdge = round(rightArea.minX * scale) / scale
+        let notchWidth = rightEdge - leftEdge
+        guard notchWidth > 1 else { return nil }
 
-        return CGSize(
-            width: safeRegion.width + IslandDesignTokens.cameraSafeRegionVisualWidthCompensation,
-            height: safeRegion.height
+        let measuredHeight = max(
+            max(safeAreaTopInset, menuBarHeight),
+            max(
+                leftArea.height,
+                max(rightArea.height, IslandDesignTokens.defaultCameraCapsuleSize.height)
+            )
         )
+        let notchHeight = ceil(measuredHeight * scale) / scale
+
+        return CGRect(
+            x: leftEdge,
+            y: 0,
+            width: notchWidth,
+            height: notchHeight
+        )
+    }
+
+    static func cameraRegionSize(for screen: NSScreen?) -> CGSize? {
+        cameraSafeRegionSize(for: screen)
     }
 
     static func cameraCapsuleSize(for screen: NSScreen?) -> CGSize? {

@@ -76,7 +76,7 @@ final class ApplicationsProvider: ObservableObject {
     private var loadGeneration = 0
     private var sizeGeneration = 0
     private static let customOrderKey = "ApplicationsCustomOrder"
-    nonisolated private static let iconImageSize = NSSize(width: 52, height: 52)
+    nonisolated private static let iconImageSize = NSSize(width: 64, height: 64)
 
     deinit {
         loadTask?.cancel()

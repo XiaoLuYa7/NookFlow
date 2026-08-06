@@ -16,6 +16,7 @@ final class IslandViewModel: ObservableObject {
 
     @Published var contentRevealProgress: Double = 0
     @Published var secondaryContentRevealProgress: Double = 0
+    @Published private(set) var visibleCardCount = 0
     @Published var compactContentRevealProgress: Double = 1
     @Published var shellAnimationState: IslandShellAnimationState = .collapsed
     @Published var compactCapsuleSize = IslandDesignTokens.defaultCompactCapsuleSize
@@ -36,6 +37,17 @@ final class IslandViewModel: ObservableObject {
     @Published var isFileDropChooserVisible = false
     @Published var fileDropHoverTarget: IslandFileDropTarget?
     @Published var fileDropPreviewName: String?
+    @Published private(set) var fileDropShellSize = IslandFileDropLayout.size
+    @Published private(set) var fileDropShellMorphProgress: CGFloat = 1
+    @Published private(set) var fileDropOpeningSourceSize = IslandFileDropLayout.size
+    @Published private(set) var fileDropOpeningSourceMorphProgress: CGFloat = 1
+    @Published private(set) var fileDropShellCanvasSize = IslandFileDropLayout.size
+    @Published private(set) var fileDropOpeningAnimationTrigger = 0
+    @Published private(set) var usesFileDropOpeningKeyframes = false
+    @Published private(set) var fileDropContentOpacity: Double = 1
+    @Published private(set) var fileDropVisibleItemCount = 0
+    @Published private(set) var fileDropSourceShellOpacity: Double = 0
+    @Published private(set) var fileDropRestorationTarget: IslandTopTab?
     @Published private(set) var fileDataRefreshToken = 0
     @Published private(set) var reduceMotionEnabled = false
     @Published private(set) var expandedContentOverflowHeight: CGFloat = 0
@@ -50,6 +62,9 @@ final class IslandViewModel: ObservableObject {
     private var capsuleExpandTask: Task<Void, Never>?
     private var presentationTask: Task<Void, Never>?
     private var runtimeActivationTask: Task<Void, Never>?
+    private var fileDropTransitionTask: Task<Void, Never>?
+    private var isFileDropDismissing = false
+    private var pendingFileDropDismissal = false
     private var presentationGeneration = 0
     private var tabCanvasTask: Task<Void, Never>?
     private var isCameraHoverActive = false
@@ -75,6 +90,7 @@ final class IslandViewModel: ObservableObject {
         capsuleExpandTask?.cancel()
         presentationTask?.cancel()
         runtimeActivationTask?.cancel()
+        fileDropTransitionTask?.cancel()
         tabCanvasTask?.cancel()
         playbackProvider.stop()
     }
@@ -82,9 +98,10 @@ final class IslandViewModel: ObservableObject {
     // MARK: - Actions
 
     func expand() {
+        guard !isFileDropChooserVisible else { return }
         cancelCollapse()
         switch presentationPhase {
-        case .expanded, .expandingShell, .revealingContent:
+        case .expanded, .expandingShell, .loadingContent:
             return
         case .hidingContent:
             reverseContentReveal()
@@ -113,7 +130,8 @@ final class IslandViewModel: ObservableObject {
     }
 
     func collapse() {
-        guard presentationPhase != .collapsed,
+        guard !isFileDropChooserVisible,
+              presentationPhase != .collapsed,
               presentationPhase != .hidingContent,
               presentationPhase != .collapsingShell,
               !isPinned
@@ -124,7 +142,7 @@ final class IslandViewModel: ObservableObject {
         setExpandedContentOverflowHeight(0)
         cancelPendingCapsuleExpand()
         hoverPhase = .collapsing
-        let wasShellExpanded = presentationPhase == .expanded || presentationPhase == .revealingContent
+        let wasShellExpanded = presentationPhase == .expanded || presentationPhase == .loadingContent
         let generation = cancelPresentationTask()
         tabCanvasTask?.cancel()
         tabCanvasTask = nil
@@ -147,7 +165,12 @@ final class IslandViewModel: ObservableObject {
                   self.presentationPhase == .hidingContent
             else { return }
 
-            self.presentationPhase = .collapsingShell
+            var hiddenTransaction = Transaction()
+            hiddenTransaction.disablesAnimations = true
+            withTransaction(hiddenTransaction) {
+                self.visibleCardCount = 0
+                self.presentationPhase = .collapsingShell
+            }
 
             // Closing must have one owner for the shell geometry. The previous reverse
             // sequence started a second animation before the first one had finished,
@@ -180,6 +203,7 @@ final class IslandViewModel: ObservableObject {
                 self.shellAnimationState = .collapsed
                 self.contentRevealProgress = 0
                 self.secondaryContentRevealProgress = 0
+                self.visibleCardCount = 0
                 self.tabTransitionCanvasSize = nil
                 self.openingMotionPhase = .collapsed
                 self.openingKeyframeStartState = .collapsed
@@ -190,6 +214,7 @@ final class IslandViewModel: ObservableObject {
     }
 
     func toggleExpandedByClick() {
+        guard !isFileDropChooserVisible else { return }
         if presentationPhase == .collapsed || presentationPhase.isCollapsing {
             expand()
         } else {
@@ -199,7 +224,7 @@ final class IslandViewModel: ObservableObject {
     }
 
     func collapseFromOutsideInteraction() {
-        guard !isPinned else { return }
+        guard !isFileDropChooserVisible, !isPinned else { return }
         collapse()
     }
 
@@ -209,6 +234,10 @@ final class IslandViewModel: ObservableObject {
             isPinned.toggle()
         }
         if isPinned {
+            if isFileDropChooserVisible {
+                cancelCollapse()
+                return
+            }
             let generation = cancelPresentationTask()
             var transaction = Transaction()
             transaction.disablesAnimations = true
@@ -218,6 +247,7 @@ final class IslandViewModel: ObservableObject {
                 usesOpeningKeyframes = false
                 contentRevealProgress = 1
                 secondaryContentRevealProgress = 1
+                visibleCardCount = expandedVisualItemCount
                 compactContentRevealProgress = 0
                 shellAnimationState = .expanded
                 compactCapsuleScaleX = 1
@@ -226,12 +256,18 @@ final class IslandViewModel: ObservableObject {
             }
             scheduleExpandedRuntimeActivation(generation: generation)
             cancelCollapse()
+        } else if isFileDropChooserVisible {
+            dismissFileDropChooser()
         } else {
             scheduleCollapse()
         }
     }
 
     func selectTopTab(_ tab: IslandTopTab) {
+        if isFileDropChooserVisible {
+            restoreIslandFromFileDrop(to: tab)
+            return
+        }
         guard selectedTopTab != tab else { return }
         performTrackpadFeedback()
         tabCanvasTask?.cancel()
@@ -274,6 +310,8 @@ final class IslandViewModel: ObservableObject {
             guard self.mode == .expanded, !self.isCollapsing else { return }
             withAnimation(.easeOut(duration: 0.18)) {
                 self.contentRevealProgress = 1
+                self.secondaryContentRevealProgress = 1
+                self.visibleCardCount = self.expandedVisualItemCount
             }
         }
     }
@@ -327,6 +365,10 @@ final class IslandViewModel: ObservableObject {
     }
 
     func updateCameraHover(_ isHovering: Bool) {
+        guard !isFileDropChooserVisible else {
+            cancelPendingCapsuleExpand()
+            return
+        }
         guard isCameraHoverActive != isHovering else { return }
         isCameraHoverActive = isHovering
 
@@ -359,11 +401,7 @@ final class IslandViewModel: ObservableObject {
 
         capsuleExpandTask?.cancel()
         hoverPhase = .preview
-        let previewAnimation = Animation.smooth(
-            duration: IslandDesignTokens.compactHoverPreviewDuration,
-            extraBounce: 0
-        )
-        withAnimation(previewAnimation) {
+        withAnimation(IslandDesignTokens.compactHoverPreviewAnimation) {
             compactCapsuleScaleX = IslandDesignTokens.compactHoverWidthScale
             compactCapsuleScaleY = IslandDesignTokens.compactHoverHeightScale
         }
@@ -401,11 +439,7 @@ final class IslandViewModel: ObservableObject {
         guard hoverPhase != .idle else { return }
 
         hoverPhase = .collapsing
-        let restoreAnimation = Animation.smooth(
-            duration: IslandDesignTokens.compactHoverRestoreDuration,
-            extraBounce: 0
-        )
-        withAnimation(restoreAnimation) {
+        withAnimation(IslandDesignTokens.compactHoverRestoreAnimation) {
             compactCapsuleScaleX = 1
             compactCapsuleScaleY = 1
         }
@@ -425,36 +459,177 @@ final class IslandViewModel: ObservableObject {
 
     func beginFileDrop(previewName: String?) {
         cancelCollapse()
-        cancelPendingCapsuleExpand()
+        cancelCapsuleHoverForFileDrop()
+        fileDropPreviewName = previewName
 
-        if mode == .expanded, !isCollapsing {
-            let isChangingTab = selectedTopTab != .files
-            selectTopTab(.files)
-            fileDropPreviewName = previewName
-            if !isChangingTab {
-                contentRevealProgress = 1
-                secondaryContentRevealProgress = 1
-            }
-
-            withAnimation(.spring(response: 0.24, dampingFraction: 0.86, blendDuration: 0.04)) {
-                isFileDropChooserVisible = true
+        if isFileDropChooserVisible {
+            pendingFileDropDismissal = false
+            if isFileDropDismissing {
+                resumeFileDropChooser()
             }
             return
         }
+        guard fileDropTransitionTask == nil else { return }
 
-        var resetTransaction = Transaction()
-        resetTransaction.disablesAnimations = true
-        withTransaction(resetTransaction) {
-            selectedTopTab = .files
-            fileDropPreviewName = previewName
+        let startsExpanded = (
+            presentationPhase == .expanded || presentationPhase == .loadingContent
+        ) && !isCollapsing
+        let compactSourceSize = CGSize(
+            width: compactCapsuleSize.width * compactCapsuleScaleX,
+            height: compactCapsuleSize.height * compactCapsuleScaleY
+        )
+        let sourceSize = startsExpanded
+            ? tabTransitionCanvasSize
+                ?? IslandShellLayout.contentSize(settings: settings, selectedTopTab: selectedTopTab)
+            : compactSourceSize
+        let sourceMorphProgress: CGFloat = startsExpanded ? 1 : 0
+        let generation = cancelPresentationTask()
+        tabCanvasTask?.cancel()
+        tabCanvasTask = nil
+        deactivateExpandedRuntime()
+        setExpandedContentOverflowHeight(0)
+        isFileDropDismissing = false
+
+        // Take ownership in the same AppKit drag callback. Deferring this setup to
+        // a Task allowed the regular hover expansion to render before the chooser.
+        let preservesExpandedShell = startsExpanded && shouldMountExpandedContent
+        var setupTransaction = Transaction()
+        setupTransaction.disablesAnimations = true
+        withTransaction(setupTransaction) {
+            fileDropOpeningSourceSize = sourceSize
+            fileDropOpeningSourceMorphProgress = sourceMorphProgress
+            fileDropShellCanvasSize = IslandFileDropLayout.openingCanvasSize(
+                from: sourceSize,
+                bounce: settings.bounceLevel
+            )
+            fileDropShellSize = reduceMotionEnabled ? sourceSize : IslandFileDropLayout.size
+            fileDropShellMorphProgress = reduceMotionEnabled ? sourceMorphProgress : 1
+            fileDropContentOpacity = 0
+            fileDropVisibleItemCount = 0
+            fileDropSourceShellOpacity = preservesExpandedShell ? 1 : 0
+            usesFileDropOpeningKeyframes = !reduceMotionEnabled
+            if usesFileDropOpeningKeyframes {
+                fileDropOpeningAnimationTrigger &+= 1
+            }
+
+            // Publish chooser ownership before changing presentationPhase. The
+            // AppKit observer then grows only the chooser host, never the normal
+            // expanded-island host for an intermediate frame.
             isFileDropChooserVisible = true
-            contentRevealProgress = 0
-            secondaryContentRevealProgress = 0
+            presentationPhase = .expanded
+            hoverPhase = .expanded
             compactCapsuleScaleX = 1
             compactCapsuleScaleY = 1
+            compactContentRevealProgress = 0
+            shellAnimationState = .expanded
+            openingMotionPhase = .expanded
+            openingKeyframeStartState = .expanded
+            usesOpeningKeyframes = false
+            if !preservesExpandedShell {
+                shouldMountExpandedContent = false
+            }
         }
 
-        beginShellExpansion(isReversing: presentationPhase.isCollapsing)
+        fileDropTransitionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            await Task.yield()
+            guard !Task.isCancelled, self.isPresentationCurrent(generation) else { return }
+
+            withAnimation(.easeOut(duration: 0.12)) {
+                self.fileDropSourceShellOpacity = 0
+            }
+
+            let shellDuration = self.reduceMotionEnabled
+                ? IslandDesignTokens.reduceMotionOpenDuration
+                : IslandDesignTokens.fileDropShellOpenDuration(
+                    setting: self.settings.openSpeed
+                )
+            if self.reduceMotionEnabled {
+                withAnimation(.easeOut(duration: shellDuration)) {
+                    self.fileDropShellSize = IslandFileDropLayout.size
+                    self.fileDropShellMorphProgress = 1
+                }
+            }
+            await Self.sleep(seconds: shellDuration)
+            guard !Task.isCancelled, self.isPresentationCurrent(generation) else { return }
+
+            var completionTransaction = Transaction()
+            completionTransaction.disablesAnimations = true
+            withTransaction(completionTransaction) {
+                self.usesFileDropOpeningKeyframes = false
+                self.fileDropShellSize = IslandFileDropLayout.size
+                self.fileDropShellMorphProgress = 1
+                self.shouldMountExpandedContent = false
+                self.fileDropSourceShellOpacity = 0
+            }
+
+            if self.pendingFileDropDismissal {
+                self.pendingFileDropDismissal = false
+                self.fileDropTransitionTask = nil
+                self.dismissFileDropChooser()
+                return
+            }
+
+            guard await self.loadFileDropContent(generation: generation) else { return }
+            self.fileDropTransitionTask = nil
+        }
+    }
+
+    private func loadFileDropContent(generation: Int) async -> Bool {
+        guard isPresentationCurrent(generation), isFileDropChooserVisible else {
+            return false
+        }
+
+        var placeholderTransaction = Transaction()
+        placeholderTransaction.disablesAnimations = true
+        withTransaction(placeholderTransaction) {
+            fileDropContentOpacity = 1
+            fileDropVisibleItemCount = 0
+        }
+
+        await Self.sleep(
+            seconds: reduceMotionEnabled ? 0.02 : IslandDesignTokens.contentLoadingDelay
+        )
+        guard isPresentationCurrent(generation), isFileDropChooserVisible else {
+            return false
+        }
+
+        let itemCount = 3
+        if reduceMotionEnabled {
+            let duration = 0.12
+            withAnimation(.easeOut(duration: duration)) {
+                fileDropVisibleItemCount = itemCount
+            }
+            await Self.sleep(seconds: duration)
+        } else {
+            for item in 1...itemCount {
+                guard isPresentationCurrent(generation), isFileDropChooserVisible else {
+                    return false
+                }
+                withAnimation(
+                    .spring(
+                        response: 0.34,
+                        dampingFraction: 0.88,
+                        blendDuration: 0
+                    )
+                ) {
+                    fileDropVisibleItemCount = item
+                }
+                if item < itemCount {
+                    await Self.sleep(seconds: IslandDesignTokens.cardRevealInterval)
+                }
+            }
+            await Self.sleep(seconds: IslandDesignTokens.cardRevealDuration)
+        }
+
+        return isPresentationCurrent(generation) && isFileDropChooserVisible
+    }
+
+    private func cancelCapsuleHoverForFileDrop() {
+        isCameraHoverActive = false
+        capsuleExpandTask?.cancel()
+        capsuleExpandTask = nil
     }
 
     func updateFileDropTarget(_ target: IslandFileDropTarget?) {
@@ -464,11 +639,224 @@ final class IslandViewModel: ObservableObject {
         }
     }
 
-    func endFileDrop() {
-        withAnimation(.easeOut(duration: 0.16)) {
-            isFileDropChooserVisible = false
+    func finishFileDropInteraction() {
+        guard isFileDropChooserVisible || fileDropTransitionTask != nil else { return }
+        cancelCollapse()
+        withAnimation(.easeOut(duration: 0.12)) {
             fileDropHoverTarget = nil
             fileDropPreviewName = nil
+        }
+        guard !isPinned else { return }
+        if usesFileDropOpeningKeyframes {
+            // Do not switch a running KeyframeAnimator back to its logical target.
+            // Let the fixed-canvas shell reach the resting frame, then collapse;
+            // otherwise SwiftUI visibly jumps between two rectangular layouts.
+            pendingFileDropDismissal = true
+            return
+        }
+        dismissFileDropChooser()
+    }
+
+    private func dismissFileDropChooser() {
+        guard !isFileDropDismissing else { return }
+
+        if !isFileDropChooserVisible {
+            fileDropTransitionTask?.cancel()
+            fileDropTransitionTask = nil
+            isFileDropDismissing = false
+            pendingFileDropDismissal = false
+            _ = cancelPresentationTask()
+            return
+        }
+
+        fileDropTransitionTask?.cancel()
+        fileDropTransitionTask = nil
+        isFileDropDismissing = true
+        pendingFileDropDismissal = false
+        let generation = cancelPresentationTask()
+        deactivateExpandedRuntime()
+        setExpandedContentOverflowHeight(0)
+        usesFileDropOpeningKeyframes = false
+
+        fileDropTransitionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            withAnimation(.easeOut(duration: IslandFileDropLayout.exitContentHideDuration)) {
+                self.fileDropContentOpacity = 0
+            }
+            await Self.sleep(seconds: IslandFileDropLayout.exitContentHideDuration)
+            guard !Task.isCancelled, self.isPresentationCurrent(generation) else { return }
+
+            var hiddenContentTransaction = Transaction()
+            hiddenContentTransaction.disablesAnimations = true
+            withTransaction(hiddenContentTransaction) {
+                self.fileDropVisibleItemCount = 0
+            }
+
+            let animation = self.reduceMotionEnabled
+                ? Animation.easeOut(duration: 0.16)
+                : Animation.smooth(duration: IslandFileDropLayout.exitDuration, extraBounce: 0)
+            withAnimation(animation) {
+                self.fileDropShellSize = self.compactCapsuleSize
+                self.fileDropShellMorphProgress = 0
+            }
+            await Self.sleep(
+                seconds: self.reduceMotionEnabled ? 0.16 : IslandFileDropLayout.exitDuration
+            )
+            guard !Task.isCancelled, self.isPresentationCurrent(generation) else { return }
+
+            var completionTransaction = Transaction()
+            completionTransaction.disablesAnimations = true
+            withTransaction(completionTransaction) {
+                self.presentationPhase = .collapsed
+                self.hoverPhase = .idle
+                self.compactContentRevealProgress = 1
+                self.shellAnimationState = .collapsed
+                self.openingMotionPhase = .collapsed
+                self.openingKeyframeStartState = .collapsed
+                self.usesOpeningKeyframes = false
+                self.shouldMountExpandedContent = false
+                self.contentRevealProgress = 0
+                self.secondaryContentRevealProgress = 0
+                self.visibleCardCount = 0
+                self.tabTransitionCanvasSize = nil
+                self.fileDropRestorationTarget = nil
+                self.fileDropHoverTarget = nil
+                self.fileDropPreviewName = nil
+                self.fileDropVisibleItemCount = 0
+                self.fileDropSourceShellOpacity = 0
+                self.isFileDropChooserVisible = false
+                self.pendingFileDropDismissal = false
+            }
+
+            self.isFileDropDismissing = false
+            self.fileDropTransitionTask = nil
+        }
+    }
+
+    private func resumeFileDropChooser() {
+        guard isFileDropChooserVisible, isFileDropDismissing else { return }
+
+        fileDropTransitionTask?.cancel()
+        fileDropTransitionTask = nil
+        isFileDropDismissing = false
+        let generation = cancelPresentationTask()
+
+        var resumeTransaction = Transaction()
+        resumeTransaction.disablesAnimations = true
+        withTransaction(resumeTransaction) {
+            presentationPhase = .expanded
+            hoverPhase = .expanded
+            compactContentRevealProgress = 0
+            shellAnimationState = .expanded
+            openingMotionPhase = .expanded
+            fileDropContentOpacity = 0
+            fileDropVisibleItemCount = 0
+            usesFileDropOpeningKeyframes = false
+        }
+
+        fileDropTransitionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            // Retarget the same animatable values from their current presentation
+            // state. Restarting the keyframe trigger here reset geometry to zero
+            // and caused the intermittent block-to-block jump on re-entry.
+            let shellDuration = self.reduceMotionEnabled
+                ? IslandDesignTokens.reduceMotionOpenDuration
+                : IslandDesignTokens.shellOpenDuration(setting: self.settings.openSpeed)
+            let shellAnimation = self.reduceMotionEnabled
+                ? Animation.easeOut(duration: shellDuration)
+                : Animation.smooth(duration: shellDuration, extraBounce: 0)
+            withAnimation(shellAnimation) {
+                self.fileDropShellSize = IslandFileDropLayout.size
+                self.fileDropShellMorphProgress = 1
+            }
+            await Self.sleep(seconds: shellDuration)
+            guard !Task.isCancelled, self.isPresentationCurrent(generation) else { return }
+            var completionTransaction = Transaction()
+            completionTransaction.disablesAnimations = true
+            withTransaction(completionTransaction) {
+                self.usesFileDropOpeningKeyframes = false
+                self.shouldMountExpandedContent = false
+            }
+
+            guard await self.loadFileDropContent(generation: generation) else { return }
+            self.fileDropTransitionTask = nil
+        }
+    }
+
+    private func restoreIslandFromFileDrop(to tab: IslandTopTab) {
+        guard isFileDropChooserVisible else { return }
+
+        performTrackpadFeedback()
+        cancelCollapse()
+        fileDropTransitionTask?.cancel()
+        fileDropTransitionTask = nil
+        isFileDropDismissing = false
+        pendingFileDropDismissal = false
+        usesFileDropOpeningKeyframes = false
+        let generation = cancelPresentationTask()
+        let targetSize = IslandShellLayout.contentSize(settings: settings, selectedTopTab: tab)
+
+        var selectionTransaction = Transaction()
+        selectionTransaction.disablesAnimations = true
+        withTransaction(selectionTransaction) {
+            selectedTopTab = tab
+            fileDropHoverTarget = nil
+            fileDropPreviewName = nil
+            fileDropRestorationTarget = tab
+        }
+
+        fileDropTransitionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            withAnimation(.easeOut(duration: IslandFileDropLayout.restoreContentHideDuration)) {
+                self.fileDropContentOpacity = 0
+            }
+            await Self.sleep(seconds: IslandFileDropLayout.restoreContentHideDuration)
+            guard !Task.isCancelled, self.isPresentationCurrent(generation) else { return }
+
+            var hiddenContentTransaction = Transaction()
+            hiddenContentTransaction.disablesAnimations = true
+            withTransaction(hiddenContentTransaction) {
+                self.fileDropVisibleItemCount = 0
+            }
+
+            let resizeAnimation = self.reduceMotionEnabled
+                ? Animation.easeOut(duration: 0.18)
+                : Animation.smooth(duration: IslandFileDropLayout.restoreDuration, extraBounce: 0)
+            withAnimation(resizeAnimation) {
+                self.fileDropShellSize = targetSize
+                self.fileDropShellMorphProgress = 1
+            }
+            await Self.sleep(
+                seconds: self.reduceMotionEnabled ? 0.18 : IslandFileDropLayout.restoreDuration
+            )
+            guard !Task.isCancelled, self.isPresentationCurrent(generation) else { return }
+
+            var restoreTransaction = Transaction()
+            restoreTransaction.disablesAnimations = true
+            withTransaction(restoreTransaction) {
+                self.presentationPhase = .expandingShell
+                self.hoverPhase = .expanded
+                self.compactContentRevealProgress = 0
+                self.shellAnimationState = .expanded
+                self.openingMotionPhase = .expanded
+                self.openingKeyframeStartState = .expanded
+                self.usesOpeningKeyframes = false
+                self.shouldMountExpandedContent = true
+                self.contentRevealProgress = 0
+                self.secondaryContentRevealProgress = 0
+                self.visibleCardCount = 0
+                self.tabTransitionCanvasSize = nil
+                self.fileDropRestorationTarget = nil
+                self.fileDropSourceShellOpacity = 0
+                self.isFileDropChooserVisible = false
+            }
+
+            guard await self.loadExpandedContent(generation: generation) else { return }
+            self.finishExpandedPresentation(generation: generation)
+            self.fileDropTransitionTask = nil
         }
     }
 
@@ -495,7 +883,8 @@ final class IslandViewModel: ObservableObject {
     // MARK: - Hover-driven auto-collapse
 
     func scheduleCollapse(delay: TimeInterval? = nil) {
-        guard presentationPhase != .collapsed,
+        guard !isFileDropChooserVisible,
+              presentationPhase != .collapsed,
               !presentationPhase.isCollapsing,
               !isPinned
         else { return }
@@ -538,6 +927,7 @@ final class IslandViewModel: ObservableObject {
             openingMotionPhase = .opening
             contentRevealProgress = 0
             secondaryContentRevealProgress = 0
+            visibleCardCount = 0
             shouldMountExpandedContent = true
             compactCapsuleScaleX = 1
             compactCapsuleScaleY = 1
@@ -555,16 +945,12 @@ final class IslandViewModel: ObservableObject {
             compactContentRevealProgress = 0
         }
 
+        let shellTiming = IslandDesignTokens.shellOpenTiming(
+            setting: settings.openSpeed
+        )
         let shellDuration = reduceMotionEnabled
             ? IslandDesignTokens.reduceMotionOpenDuration
-            : IslandDesignTokens.shellOpenDuration(setting: settings.openSpeed)
-        let openTiming = IslandDesignTokens.shellOpenTiming(setting: settings.openSpeed)
-        let primaryRevealDuration = reduceMotionEnabled
-            ? 0.12
-            : openTiming.settle
-        let secondaryRevealDuration = reduceMotionEnabled
-            ? 0.10
-            : IslandDesignTokens.secondaryContentRevealDuration
+            : shellTiming.total
 
         presentationTask = Task { @MainActor [weak self] in
             guard let self,
@@ -573,13 +959,12 @@ final class IslandViewModel: ObservableObject {
             else { return }
 
             if self.reduceMotionEnabled || isReversing {
-                let directOpenDuration = self.reduceMotionEnabled
-                    ? shellDuration
-                    : min(shellDuration, 0.30)
-                withAnimation(.easeInOut(duration: directOpenDuration)) {
+                let directOpenDuration = shellDuration
+                withAnimation(.smooth(duration: directOpenDuration, extraBounce: 0)) {
                     self.shellAnimationState = .expanded
                 }
                 await Self.sleep(seconds: directOpenDuration)
+
                 guard self.isPresentationCurrent(generation),
                       self.presentationPhase == .expandingShell
                 else { return }
@@ -587,90 +972,107 @@ final class IslandViewModel: ObservableObject {
                 var settledTransaction = Transaction()
                 settledTransaction.disablesAnimations = true
                 withTransaction(settledTransaction) {
+                    self.usesOpeningKeyframes = false
                     self.shellAnimationState = .expanded
-                }
-                self.shouldMountExpandedContent = true
-                await Task.yield()
-                guard self.isPresentationCurrent(generation),
-                      self.presentationPhase == .expandingShell
-                else { return }
-
-                self.presentationPhase = .revealingContent
-                withAnimation(.easeOut(duration: primaryRevealDuration)) {
-                    self.contentRevealProgress = 1
+                    self.openingMotionPhase = .expanded
                 }
 
-                await Self.sleep(seconds: IslandDesignTokens.secondaryContentRevealDelay)
-                guard self.isPresentationCurrent(generation),
-                      self.presentationPhase == .revealingContent
-                else { return }
-
-                withAnimation(.easeOut(duration: secondaryRevealDuration)) {
-                    self.secondaryContentRevealProgress = 1
-                }
-
-                let elapsed = directOpenDuration + IslandDesignTokens.secondaryContentRevealDelay
-                let contentCompletionTime = max(
-                    directOpenDuration + primaryRevealDuration,
-                    directOpenDuration
-                        + IslandDesignTokens.secondaryContentRevealDelay
-                        + secondaryRevealDuration
-                )
-                let completionTime = max(directOpenDuration, contentCompletionTime)
-                await Self.sleep(seconds: max(0, completionTime - elapsed))
-                guard self.isPresentationCurrent(generation),
-                      self.presentationPhase == .revealingContent
-                else { return }
-
+                guard await self.loadExpandedContent(generation: generation) else { return }
                 self.finishExpandedPresentation(generation: generation)
                 return
             }
 
-            await Self.sleep(seconds: openTiming.contentRevealDelay)
+            // Mount the stable final card layout when the shell enters its slow
+            // recovery. The 80 ms content delay lets the first card materialize
+            // just before the tiny final spring begins.
+            await Self.sleep(seconds: shellTiming.expansion + shellTiming.rebound)
             guard self.isPresentationCurrent(generation),
                   self.presentationPhase == .expandingShell
             else { return }
 
-            // The cards start just before the final 97% -> 100% settle to avoid
-            // triggering all card work on the same frame as the shell's last turn.
-            self.shouldMountExpandedContent = true
-            await Task.yield()
-            guard self.isPresentationCurrent(generation),
-                  self.presentationPhase == .expandingShell
-            else { return }
+            async let contentLoaded = self.loadExpandedContent(generation: generation)
 
-            self.presentationPhase = .revealingContent
-            withAnimation(.easeOut(duration: primaryRevealDuration)) {
-                self.contentRevealProgress = 1
+            await Self.sleep(seconds: shellTiming.recovery + shellTiming.settle)
+            guard self.isPresentationCurrent(generation),
+                  self.presentationPhase == .loadingContent
+            else {
+                _ = await contentLoaded
+                return
             }
 
-            await Self.sleep(seconds: IslandDesignTokens.secondaryContentRevealDelay)
-            guard self.isPresentationCurrent(generation),
-                  self.presentationPhase == .revealingContent
-            else { return }
-
-            withAnimation(.easeOut(duration: secondaryRevealDuration)) {
-                self.secondaryContentRevealProgress = 1
+            var settledTransaction = Transaction()
+            settledTransaction.disablesAnimations = true
+            withTransaction(settledTransaction) {
+                self.usesOpeningKeyframes = false
+                self.shellAnimationState = .expanded
+                self.openingMotionPhase = .expanded
             }
-
-            let elapsed = openTiming.contentRevealDelay
-                + IslandDesignTokens.secondaryContentRevealDelay
-            let completionTime = max(
-                openTiming.total,
-                max(
-                    openTiming.contentRevealDelay + primaryRevealDuration,
-                    openTiming.contentRevealDelay
-                        + IslandDesignTokens.secondaryContentRevealDelay
-                        + secondaryRevealDuration
-                )
-            )
-            await Self.sleep(seconds: max(0, completionTime - elapsed))
-            guard self.isPresentationCurrent(generation),
-                  self.presentationPhase == .revealingContent
-            else { return }
-
+            guard await contentLoaded else { return }
             self.finishExpandedPresentation(generation: generation)
         }
+    }
+
+    private func loadExpandedContent(generation: Int) async -> Bool {
+        guard isPresentationCurrent(generation),
+              presentationPhase == .expandingShell
+                || presentationPhase == .loadingContent
+        else { return false }
+
+        var placeholderTransaction = Transaction()
+        placeholderTransaction.disablesAnimations = true
+        withTransaction(placeholderTransaction) {
+            presentationPhase = .loadingContent
+            shouldMountExpandedContent = true
+            contentRevealProgress = 1
+            secondaryContentRevealProgress = 0
+            visibleCardCount = 0
+        }
+        await Self.sleep(
+            seconds: reduceMotionEnabled ? 0.02 : IslandDesignTokens.contentLoadingDelay
+        )
+        guard isPresentationCurrent(generation),
+              presentationPhase == .loadingContent
+        else { return false }
+
+        let itemCount = expandedVisualItemCount
+        if reduceMotionEnabled {
+            let duration = 0.12
+            withAnimation(.easeOut(duration: duration)) {
+                secondaryContentRevealProgress = 1
+                visibleCardCount = itemCount
+            }
+            await Self.sleep(seconds: duration)
+        } else {
+            for item in 1...itemCount {
+                guard isPresentationCurrent(generation),
+                      presentationPhase == .loadingContent
+                else { return false }
+
+                withAnimation(.smooth(duration: 0.26, extraBounce: 0)) {
+                    visibleCardCount = item
+                    if item == 1 {
+                        secondaryContentRevealProgress = 1
+                    }
+                }
+                if item < itemCount {
+                    await Self.sleep(seconds: IslandDesignTokens.cardRevealInterval)
+                }
+            }
+            await Self.sleep(seconds: IslandDesignTokens.cardRevealDuration)
+        }
+
+        return isPresentationCurrent(generation)
+            && presentationPhase == .loadingContent
+    }
+
+    private var expandedVisualItemCount: Int {
+        if selectedTopTab == .home {
+            return 1 + max(
+                1,
+                IslandShellLayout.visibleModules(settings: settings).count
+            )
+        }
+        return 2
     }
 
     private func hoverPreviewOpeningState() -> IslandShellAnimationState {
@@ -696,19 +1098,26 @@ final class IslandViewModel: ObservableObject {
     private func reverseContentReveal() {
         let generation = cancelPresentationTask()
         shouldMountExpandedContent = true
-        presentationPhase = .revealingContent
+        presentationPhase = .loadingContent
         openingMotionPhase = .expanded
 
-        withAnimation(.easeOut(duration: IslandDesignTokens.primaryContentRevealDuration)) {
+        let animation = reduceMotionEnabled
+            ? Animation.easeOut(duration: IslandDesignTokens.primaryContentRevealDuration)
+            : Animation.smooth(
+                duration: IslandDesignTokens.primaryContentRevealDuration,
+                extraBounce: 0
+            )
+        withAnimation(animation) {
             contentRevealProgress = 1
             secondaryContentRevealProgress = 1
+            visibleCardCount = expandedVisualItemCount
         }
 
         presentationTask = Task { @MainActor [weak self] in
             await Self.sleep(seconds: IslandDesignTokens.primaryContentRevealDuration)
             guard let self,
                   self.isPresentationCurrent(generation),
-                  self.presentationPhase == .revealingContent
+                  self.presentationPhase == .loadingContent
             else { return }
             self.finishExpandedPresentation(generation: generation)
         }
@@ -738,7 +1147,8 @@ final class IslandViewModel: ObservableObject {
             guard let self,
                   !Task.isCancelled,
                   self.isPresentationCurrent(generation),
-                  self.presentationPhase == .expanded
+                  self.presentationPhase == .loadingContent
+                    || self.presentationPhase == .expanded
             else { return }
 
             self.isExpandedRuntimeActive = true

@@ -80,3 +80,24 @@ enum NotificationRuntimePolicy {
         )
     }
 }
+
+enum NotificationDeliveryPolicy {
+    static let maximumQueueAge: TimeInterval = 30
+    static let wakeRecoverySuppression: TimeInterval = 20
+
+    static func shouldDeliver(
+        createdAt: Date,
+        now: Date,
+        isSystemSleeping: Bool,
+        suppressedUntil: Date?,
+        maximumAge: TimeInterval = maximumQueueAge
+    ) -> Bool {
+        guard !isSystemSleeping else { return false }
+        if let suppressedUntil, now < suppressedUntil {
+            return false
+        }
+
+        let age = now.timeIntervalSince(createdAt)
+        return age >= -1 && age <= maximumAge
+    }
+}

@@ -2,6 +2,7 @@ import Foundation
 
 enum LyricsFormat {
     case netEase
+    case netEaseWord
     case qq
 }
 
@@ -18,15 +19,33 @@ final class LyricsParser {
         options: .anchorsMatchLines
     )
 
+    // NetEase YRC: [lineStart,lineDuration](wordStart,wordDuration,0)word...
+    private static let netEaseWordLineRegex = try! NSRegularExpression(
+        pattern: #"^\[(\d+),(\d+)\](.*)$"#
+    )
+
+    private static let netEaseWordUnitRegex = try! NSRegularExpression(
+        pattern: #"\((\d+),(\d+),\d+\)([^(]*)"#
+    )
+
+    private static let offsetRegex = try! NSRegularExpression(
+        pattern: #"^\[offset:\s*([+-]?\d+)\s*\]$"#,
+        options: [.anchorsMatchLines, .caseInsensitive]
+    )
+
     // MARK: - Public
 
     static func parse(_ lrc: String, format: LyricsFormat) -> [LyricLine] {
+        let lines: [LyricLine]
         switch format {
         case .netEase:
-            return parseNetEase(lrc)
+            lines = parseNetEase(lrc)
+        case .netEaseWord:
+            lines = parseNetEaseWord(lrc)
         case .qq:
-            return parseQQ(lrc)
+            lines = parseQQ(lrc)
         }
+        return applyingOffset(from: lrc, to: lines)
     }
 
     static func merge(original: [LyricLine], translation: [LyricLine], threshold: TimeInterval = 20) -> [LyricLine] {
@@ -86,6 +105,81 @@ final class LyricsParser {
             }
 
             results.append(contentsOf: parseLRCLine(trimmed))
+        }
+
+        return results.sorted { $0.startTimeMS < $1.startTimeMS }
+    }
+
+    // MARK: - NetEase Word Timing (YRC)
+
+    private static func parseNetEaseWord(_ yrc: String) -> [LyricLine] {
+        let rawLines = yrc
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines)
+
+        var results: [LyricLine] = []
+        results.reserveCapacity(rawLines.count)
+
+        for rawLine in rawLines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let nsLine = line as NSString
+            let fullRange = NSRange(location: 0, length: nsLine.length)
+            guard let lineMatch = netEaseWordLineRegex.firstMatch(
+                in: line,
+                range: fullRange
+            ),
+            let lineStartMS = doubleValue(
+                in: nsLine,
+                range: lineMatch.range(at: 1)
+            ) else {
+                continue
+            }
+
+            let payloadRange = lineMatch.range(at: 3)
+            guard payloadRange.location != NSNotFound else { continue }
+            let payload = nsLine.substring(with: payloadRange)
+            let nsPayload = payload as NSString
+            let unitMatches = netEaseWordUnitRegex.matches(
+                in: payload,
+                range: NSRange(location: 0, length: nsPayload.length)
+            )
+
+            let units = unitMatches.compactMap { match -> LyricTimedUnit? in
+                guard let start = doubleValue(
+                    in: nsPayload,
+                    range: match.range(at: 1)
+                ),
+                let duration = doubleValue(
+                    in: nsPayload,
+                    range: match.range(at: 2)
+                ) else {
+                    return nil
+                }
+
+                let textRange = match.range(at: 3)
+                guard textRange.location != NSNotFound else { return nil }
+                let text = nsPayload.substring(with: textRange)
+                guard !text.isEmpty else { return nil }
+
+                return LyricTimedUnit(
+                    text: text,
+                    startTimeMS: start,
+                    durationMS: max(0, duration)
+                )
+            }
+
+            guard !units.isEmpty else { continue }
+            let words = units.map(\.text).joined()
+            guard !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+
+            results.append(LyricLine(
+                startTimeMS: lineStartMS,
+                words: words,
+                timedUnits: units
+            ))
         }
 
         return results.sorted { $0.startTimeMS < $1.startTimeMS }
@@ -225,6 +319,43 @@ final class LyricsParser {
                   let sec = Double(str[secRange]) else { return nil }
             return min * 60 + sec
         }
+    }
+
+    private static func applyingOffset(
+        from lrc: String,
+        to lines: [LyricLine]
+    ) -> [LyricLine] {
+        let nsLyrics = lrc as NSString
+        let fullRange = NSRange(location: 0, length: nsLyrics.length)
+        guard let match = offsetRegex.firstMatch(in: lrc, range: fullRange),
+              let offsetMS = doubleValue(in: nsLyrics, range: match.range(at: 1)),
+              offsetMS != 0 else {
+            return lines
+        }
+
+        return lines.map { line in
+            LyricLine(
+                startTimeMS: max(0, line.startTimeMS + offsetMS),
+                words: line.words,
+                translation: line.translation,
+                source: line.source,
+                timedUnits: line.timedUnits?.map { unit in
+                    LyricTimedUnit(
+                        text: unit.text,
+                        startTimeMS: max(0, unit.startTimeMS + offsetMS),
+                        durationMS: unit.durationMS
+                    )
+                }
+            )
+        }
+    }
+
+    private static func doubleValue(
+        in string: NSString,
+        range: NSRange
+    ) -> Double? {
+        guard range.location != NSNotFound else { return nil }
+        return Double(string.substring(with: range))
     }
 }
 

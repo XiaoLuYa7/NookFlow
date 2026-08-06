@@ -19,7 +19,7 @@ struct PlaybackSnapshot: Equatable {
         title: "暂无播放",
         artist: "",
         album: "",
-        detail: "Apple Music / Spotify",
+        detail: "支持多平台音乐",
         artworkSource: nil,
         duration: 0,
         elapsed: 0,
@@ -61,10 +61,14 @@ struct PlaybackSnapshot: Equatable {
 struct PlaybackAccessConfiguration: Equatable {
     var appleMusic: Bool
     var spotify: Bool
+    var qqMusic: Bool
+    var netEaseMusic: Bool
 
     static let defaults = PlaybackAccessConfiguration(
         appleMusic: true,
-        spotify: false
+        spotify: false,
+        qqMusic: false,
+        netEaseMusic: false
     )
 
     static func persisted(
@@ -81,6 +85,16 @@ struct PlaybackAccessConfiguration: Equatable {
                 for: Keys.allowSpotifyAccess,
                 defaults: defaults,
                 fallback: fallback.spotify
+            ),
+            qqMusic: bool(
+                for: Keys.allowQQMusicAccess,
+                defaults: defaults,
+                fallback: fallback.qqMusic
+            ),
+            netEaseMusic: bool(
+                for: Keys.allowNetEaseMusicAccess,
+                defaults: defaults,
+                fallback: fallback.netEaseMusic
             )
         )
     }
@@ -96,11 +110,13 @@ struct PlaybackAccessConfiguration: Equatable {
     private enum Keys {
         static let allowAppleMusicAccess = "settings.allowAppleMusicAccess"
         static let allowSpotifyAccess = "settings.allowSpotifyAccess"
+        static let allowQQMusicAccess = "settings.allowQQMusicAccess"
+        static let allowNetEaseMusicAccess = "settings.allowNetEaseMusicAccess"
     }
 }
 
 enum PlaybackArtworkSource: Equatable {
-    case file(URL, version: TimeInterval)
+    case file(URL, id: String)
     case imageData(Data, id: String)
     case remote(URL)
 }
@@ -155,6 +171,7 @@ final class PlaybackProvider: ObservableObject {
     private var latestLiveSeekCommand: PlaybackCommand?
     private var isLiveSeekDraining = false
     private var notificationObserver: Any?
+    private var mediaRemoteObserver: Any?
     private var artworkLookupTask: Task<Void, Never>?
     private var lastArtworkLookupKey: String?
     private var fallbackArtworkDataByKey: [String: Data] = [:]
@@ -165,11 +182,13 @@ final class PlaybackProvider: ObservableObject {
     @MainActor
     init(settings: IslandSettings) {
         accessConfiguration = Self.accessConfiguration(from: settings)
+        configureMediaRemoteStream(from: settings)
     }
 
     @MainActor
     func updateAccessConfiguration(from settings: IslandSettings) {
         accessConfiguration = Self.accessConfiguration(from: settings)
+        configureMediaRemoteStream(from: settings)
         refresh()
     }
 
@@ -190,6 +209,16 @@ final class PlaybackProvider: ObservableObject {
                 self?.refresh()
             }
         }
+
+        if mediaRemoteObserver == nil {
+            mediaRemoteObserver = NotificationCenter.default.addObserver(
+                forName: .mediaRemoteStreamDidUpdate,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.applyMediaRemoteStreamUpdate()
+            }
+        }
     }
 
     func stop() {
@@ -205,6 +234,11 @@ final class PlaybackProvider: ObservableObject {
         if let observer = notificationObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
             notificationObserver = nil
+        }
+
+        if let observer = mediaRemoteObserver {
+            NotificationCenter.default.removeObserver(observer)
+            mediaRemoteObserver = nil
         }
     }
 
@@ -400,11 +434,44 @@ final class PlaybackProvider: ObservableObject {
         return access
     }
 
+    private func applyMediaRemoteStreamUpdate() {
+        let access = resolvedAccessConfiguration()
+        let allowedBundleIdentifiers = SystemNowPlayingMetadataParser.allowedBundleIdentifiers(
+            qqMusic: access.qqMusic,
+            netEaseMusic: access.netEaseMusic
+        )
+        if let systemSnapshot = MediaRemoteStreamBridge.shared.snapshot(
+            allowedBundleIdentifiers: allowedBundleIdentifiers
+        ) {
+            applySnapshot(systemSnapshot)
+            diagnosticText = "System stream \(systemSnapshot.appName) \(systemSnapshot.state)"
+        } else {
+            refresh()
+        }
+    }
+
+    @MainActor
+    private func configureMediaRemoteStream(from settings: IslandSettings) {
+        let allowedBundleIdentifiers = SystemNowPlayingMetadataParser.allowedBundleIdentifiers(
+            qqMusic: settings.allowQQMusicAccess,
+            netEaseMusic: settings.allowNetEaseMusicAccess
+        )
+        let mediaFeaturesEnabled = settings.showMediaModule
+            || settings.showMusicLyrics
+            || settings.showDesktopLyrics
+        MediaRemoteStreamBridge.shared.configure(
+            isEnabled: mediaFeaturesEnabled,
+            allowedBundleIdentifiers: allowedBundleIdentifiers
+        )
+    }
+
     @MainActor
     private static func accessConfiguration(from settings: IslandSettings) -> PlaybackAccessConfiguration {
         PlaybackAccessConfiguration(
             appleMusic: settings.allowAppleMusicAccess,
-            spotify: settings.allowSpotifyAccess
+            spotify: settings.allowSpotifyAccess,
+            qqMusic: settings.allowQQMusicAccess,
+            netEaseMusic: settings.allowNetEaseMusicAccess
         )
     }
 
@@ -503,7 +570,7 @@ final class PlaybackProvider: ObservableObject {
     ) {
         var snapshots: [PlaybackSnapshot] = []
         var diagnostics: [String] = [
-            "access A\(access.appleMusic ? 1 : 0) S\(access.spotify ? 1 : 0)"
+            "access A\(access.appleMusic ? 1 : 0) S\(access.spotify ? 1 : 0) Q\(access.qqMusic ? 1 : 0) N\(access.netEaseMusic ? 1 : 0)"
         ]
 
         let isMusicRunning = isApplicationRunning(bundleIdentifier: musicBundleIdentifier)
@@ -525,6 +592,21 @@ final class PlaybackProvider: ObservableObject {
                 diagnostics.append("Spotify snapshot \(spotify.state)")
             } else {
                 diagnostics.append("Spotify script nil")
+            }
+        }
+
+        let systemPlayerBundleIdentifiers = SystemNowPlayingMetadataParser.allowedBundleIdentifiers(
+            qqMusic: access.qqMusic,
+            netEaseMusic: access.netEaseMusic
+        )
+        if !systemPlayerBundleIdentifiers.isEmpty {
+            if let systemPlayer = MediaRemoteStreamBridge.shared.snapshot(
+                allowedBundleIdentifiers: systemPlayerBundleIdentifiers
+            ) {
+                snapshots.append(systemPlayer)
+                diagnostics.append("System snapshot \(systemPlayer.appName) \(systemPlayer.state)")
+            } else {
+                diagnostics.append("System snapshot nil")
             }
         }
 
@@ -552,6 +634,10 @@ final class PlaybackProvider: ObservableObject {
         switch command {
         case .script(let source):
             _ = runScript(source)
+        case .system(let command):
+            _ = MediaRemoteStreamBridge.shared.sendCommand(command)
+        case .systemSeek(let seconds):
+            _ = MediaRemoteStreamBridge.shared.seek(to: seconds)
         }
     }
 
@@ -577,6 +663,8 @@ final class PlaybackProvider: ObservableObject {
         case "Spotify":
             guard isApplicationRunning(bundleIdentifier: spotifyBundleIdentifier) else { return nil }
             return .script(spotifyTransportScript(command))
+        case "QQ音乐", "网易云音乐":
+            return .system(command.systemNowPlayingCommand)
         default:
             return nil
         }
@@ -596,6 +684,8 @@ final class PlaybackProvider: ObservableObject {
         case "Spotify":
             guard isApplicationRunning(bundleIdentifier: spotifyBundleIdentifier) else { return nil }
             return .script(spotifySeekScript(secondsText: secondsText))
+        case "QQ音乐", "网易云音乐":
+            return .systemSeek(max(seconds, 0))
         default:
             return nil
         }
@@ -624,7 +714,18 @@ final class PlaybackProvider: ObservableObject {
         let album = parts[4]
         let duration = seconds(from: parts[5])
         let elapsed = seconds(from: parts[6])
-        let artwork = parts.indices.contains(7) ? artworkSource(from: parts[7]) : nil
+        let artworkID = [
+            appName,
+            title,
+            artist,
+            album,
+            String(Int(duration.rounded()))
+        ]
+            .map { $0.normalized }
+            .joined(separator: "|")
+        let artwork = parts.indices.contains(7)
+            ? artworkSource(from: parts[7], id: artworkID)
+            : nil
 
         let detailParts = [artist, album]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -658,7 +759,7 @@ final class PlaybackProvider: ObservableObject {
         Double(value.replacingOccurrences(of: ",", with: ".")) ?? 0
     }
 
-    private static func artworkSource(from value: String) -> PlaybackArtworkSource? {
+    private static func artworkSource(from value: String, id: String) -> PlaybackArtworkSource? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -668,22 +769,10 @@ final class PlaybackProvider: ObservableObject {
 
         if trimmed.hasPrefix("/") {
             let url = URL(fileURLWithPath: trimmed)
-            return .file(url, version: artworkFileVersion(for: url))
+            return .file(url, id: id)
         }
 
         return nil
-    }
-
-    private static func artworkFileVersion(for url: URL) -> TimeInterval {
-        guard
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        else {
-            return Date().timeIntervalSince1970
-        }
-
-        let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
-        let size = TimeInterval(values.fileSize ?? 0) / 1_000_000
-        return modified + size
     }
 
     private static func shouldUseFallbackArtwork(for source: PlaybackArtworkSource?) -> Bool {
@@ -716,11 +805,15 @@ final class PlaybackProvider: ObservableObject {
         let query = [title, artist, album]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: " ")
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard
-            !query.isEmpty,
-            let searchURL = URL(string: "https://itunes.apple.com/search?term=\(query)&entity=musicTrack&media=music&limit=5&country=cn")
-        else {
+        var components = URLComponents(string: "https://itunes.apple.com/search")
+        components?.queryItems = [
+            URLQueryItem(name: "term", value: query),
+            URLQueryItem(name: "entity", value: "musicTrack"),
+            URLQueryItem(name: "media", value: "music"),
+            URLQueryItem(name: "limit", value: "5"),
+            URLQueryItem(name: "country", value: "cn")
+        ]
+        guard !query.isEmpty, let searchURL = components?.url else {
             return nil
         }
 
@@ -947,6 +1040,8 @@ final class PlaybackProvider: ObservableObject {
 
 private enum PlaybackCommand {
     case script(String)
+    case system(Int)
+    case systemSeek(TimeInterval)
 }
 
 private enum PlaybackTransportCommand: Equatable {
@@ -965,4 +1060,145 @@ private enum PlaybackTransportCommand: Equatable {
         }
     }
 
+    var systemNowPlayingCommand: Int {
+        switch self {
+        case .toggle:
+            return 2
+        case .previous:
+            return 5
+        case .next:
+            return 4
+        }
+    }
+
+}
+
+enum SystemNowPlayingMetadataParser {
+    static let qqMusicBundleIdentifiers: Set<String> = [
+        "com.tencent.QQMusicMac"
+    ]
+
+    static let netEaseMusicBundleIdentifiers: Set<String> = [
+        "com.netease.163music",
+        "com.netease.163music.mac",
+        "com.netease.cloudmusic"
+    ]
+
+    static func allowedBundleIdentifiers(qqMusic: Bool, netEaseMusic: Bool) -> Set<String> {
+        var identifiers: Set<String> = []
+        if qqMusic {
+            identifiers.formUnion(qqMusicBundleIdentifiers)
+        }
+        if netEaseMusic {
+            identifiers.formUnion(netEaseMusicBundleIdentifiers)
+        }
+        return identifiers
+    }
+
+    static func snapshot(
+        info: [String: Any],
+        bundleIdentifier: String,
+        isPlaying: Bool?,
+        now: Date = Date()
+    ) -> PlaybackSnapshot? {
+        guard let appName = appName(for: bundleIdentifier) else { return nil }
+
+        let title = stringValue(value(in: info, keys: Keys.title)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return nil }
+
+        let artist = stringValue(value(in: info, keys: Keys.artist)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let album = stringValue(value(in: info, keys: Keys.album)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let duration = max(0, numberValue(value(in: info, keys: Keys.duration)))
+        var elapsed = max(0, numberValue(value(in: info, keys: Keys.elapsedTime)))
+        let playbackRate = numberValue(value(in: info, keys: Keys.playbackRate))
+        let resolvedIsPlaying = isPlaying ?? (playbackRate > 0.001)
+
+        if resolvedIsPlaying,
+           let timestamp = dateValue(value(in: info, keys: Keys.timestamp)) {
+            elapsed += max(0, now.timeIntervalSince(timestamp)) * max(playbackRate, 0)
+        }
+        if duration > 0 {
+            elapsed = min(elapsed, duration)
+        }
+
+        let detailParts = [artist, album].filter { !$0.isEmpty }
+        let artworkSource: PlaybackArtworkSource?
+        if let artworkData = value(in: info, keys: Keys.artworkData) as? Data, !artworkData.isEmpty {
+            artworkSource = .imageData(
+                artworkData,
+                id: [bundleIdentifier, title, artist, album].joined(separator: "|")
+            )
+        } else {
+            artworkSource = nil
+        }
+
+        return PlaybackSnapshot(
+            appName: appName,
+            state: resolvedIsPlaying ? .playing : .paused,
+            title: title,
+            artist: artist,
+            album: album,
+            detail: detailParts.isEmpty ? (resolvedIsPlaying ? "正在播放" : "已暂停") : detailParts.joined(separator: " · "),
+            artworkSource: artworkSource,
+            duration: duration,
+            elapsed: elapsed,
+            isLive: true
+        )
+    }
+
+    private static func appName(for bundleIdentifier: String) -> String? {
+        if qqMusicBundleIdentifiers.contains(bundleIdentifier) {
+            return "QQ音乐"
+        }
+        if netEaseMusicBundleIdentifiers.contains(bundleIdentifier) {
+            return "网易云音乐"
+        }
+        return nil
+    }
+
+    private static func stringValue(_ value: Any?) -> String {
+        value as? String ?? ""
+    }
+
+    private static func numberValue(_ value: Any?) -> Double {
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let number = value as? Double {
+            return number
+        }
+        if let number = value as? String {
+            return Double(number) ?? 0
+        }
+        return 0
+    }
+
+    private static func value(in info: [String: Any], keys: [String]) -> Any? {
+        for key in keys where info[key] != nil {
+            return info[key]
+        }
+        return nil
+    }
+
+    private static func dateValue(_ value: Any?) -> Date? {
+        if let date = value as? Date {
+            return date
+        }
+        guard let text = value as? String else { return nil }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
+    private enum Keys {
+        static let title = ["title", "kMRMediaRemoteNowPlayingInfoTitle"]
+        static let artist = ["artist", "kMRMediaRemoteNowPlayingInfoArtist"]
+        static let album = ["album", "kMRMediaRemoteNowPlayingInfoAlbum"]
+        static let duration = ["duration", "kMRMediaRemoteNowPlayingInfoDuration"]
+        static let elapsedTime = ["elapsedTime", "kMRMediaRemoteNowPlayingInfoElapsedTime"]
+        static let playbackRate = ["playbackRate", "kMRMediaRemoteNowPlayingInfoPlaybackRate"]
+        static let artworkData = ["artworkData", "kMRMediaRemoteNowPlayingInfoArtworkData"]
+        static let timestamp = ["timestamp", "kMRMediaRemoteNowPlayingInfoTimestamp"]
+    }
 }

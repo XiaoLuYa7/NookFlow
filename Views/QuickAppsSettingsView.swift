@@ -4,6 +4,7 @@ import SwiftUI
 struct QuickAppsSettingsView: View {
 
     @ObservedObject private var store = QuickAppsStore.shared
+    @ObservedObject private var settings: IslandSettings
     @StateObject private var applicationsProvider = ApplicationsProvider()
     @State private var searchText = ""
     @State private var currentPage = 0
@@ -18,7 +19,6 @@ struct QuickAppsSettingsView: View {
     private let appColumns = [
         GridItem(.adaptive(minimum: 260, maximum: 360), spacing: AppSpacing.sm, alignment: .top)
     ]
-    private let previewColumns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.sm), count: 6)
     private let previewPageGap: CGFloat = 12
     private let previewPageHeight: CGFloat = 88
     private let previewCellHeight: CGFloat = 58
@@ -28,8 +28,13 @@ struct QuickAppsSettingsView: View {
     private static let dragPageTurnDelay: TimeInterval = 0.25
     private static let dragPageTurnCooldown: TimeInterval = 0.45
 
+    private var pageSize: Int { settings.quickAppsColumnCount.pageSize }
+    private var previewColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: AppSpacing.sm), count: pageSize)
+    }
+
     private var pageCount: Int {
-        max(1, Int(ceil(Double(store.items.count) / Double(QuickAppsStore.pageSize))))
+        max(1, Int(ceil(Double(store.items.count) / Double(pageSize))))
     }
 
     private var selectedPaths: Set<String> {
@@ -46,6 +51,10 @@ struct QuickAppsSettingsView: View {
     private var draggedItem: QuickAppItem? {
         guard let draggedItemID else { return nil }
         return store.items.first { $0.id == draggedItemID }
+    }
+
+    init(settings: IslandSettings) {
+        _settings = ObservedObject(wrappedValue: settings)
     }
 
     var body: some View {
@@ -66,6 +75,7 @@ struct QuickAppsSettingsView: View {
             }
         } content: {
             overviewCard
+            layoutCard
             selectedAppsCard
             appPickerCard
         }
@@ -75,12 +85,15 @@ struct QuickAppsSettingsView: View {
         .onChange(of: store.items.count) { _, _ in
             currentPage = min(currentPage, pageCount - 1)
         }
+        .onChange(of: settings.quickAppsColumnCount) { _, _ in
+            currentPage = min(currentPage, pageCount - 1)
+        }
     }
 
     private var overviewCard: some View {
         SettingsSectionCard(
             title: "添加概览",
-            subtitle: "最多添加 \(QuickAppsStore.maxCount) 个应用，每页显示 \(QuickAppsStore.pageSize) 个"
+            subtitle: "最多添加 \(QuickAppsStore.maxCount) 个应用，每页显示 \(pageSize) 个"
         ) {
             HStack(alignment: .center, spacing: AppSpacing.lg) {
                 VStack(alignment: .leading, spacing: AppSpacing.xs) {
@@ -124,6 +137,24 @@ struct QuickAppsSettingsView: View {
             .frame(maxWidth: .infinity, minHeight: 64)
             .appSurface(.inset, radius: AppRadius.row)
             .animation(AppMotion.standard, value: store.items.count)
+        }
+    }
+
+    private var layoutCard: some View {
+        SettingsSectionCard(
+            title: "卡片布局",
+            subtitle: "列数变化会同步调整快捷应用卡片的宽度"
+        ) {
+            SettingsSegmentedRow(
+                icon: "rectangle.grid.2x2",
+                title: "应用列数",
+                subtitle: "每页固定显示两行",
+                options: QuickAppsColumnCount.allCases,
+                optionTitle: \QuickAppsColumnCount.title,
+                showsDivider: false,
+                selection: $settings.quickAppsColumnCount
+            )
+            .appSurface(.inset, radius: AppRadius.row)
         }
     }
 
@@ -259,8 +290,8 @@ struct QuickAppsSettingsView: View {
 
     private func selectedPreviewPage(_ page: Int, pagerWidth: CGFloat) -> some View {
         LazyVGrid(columns: previewColumns, spacing: AppSpacing.sm) {
-            ForEach(0..<QuickAppsStore.pageSize, id: \.self) { index in
-                let globalIndex = page * QuickAppsStore.pageSize + index
+            ForEach(0..<pageSize, id: \.self) { index in
+                let globalIndex = page * pageSize + index
 
                 if globalIndex < store.items.count {
                     selectedPreviewCell(
@@ -336,6 +367,7 @@ struct QuickAppsSettingsView: View {
 
                 Image(nsImage: app.icon)
                     .resizable()
+                    .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 30, height: 30)
 
@@ -376,6 +408,7 @@ struct QuickAppsSettingsView: View {
         VStack(spacing: AppSpacing.xs) {
             Image(nsImage: store.icon(for: item))
                 .resizable()
+                .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: previewIconSize, height: previewIconSize)
             Text(item.name)
@@ -404,8 +437,8 @@ struct QuickAppsSettingsView: View {
     }
 
     private func previewCellWidth(for pagerWidth: CGFloat) -> CGFloat {
-        let totalColumnSpacing = AppSpacing.sm * CGFloat(max(0, QuickAppsStore.pageSize - 1))
-        return max(1, (pagerWidth - totalColumnSpacing) / CGFloat(QuickAppsStore.pageSize))
+        let totalColumnSpacing = AppSpacing.sm * CGFloat(max(0, pageSize - 1))
+        return max(1, (pagerWidth - totalColumnSpacing) / CGFloat(pageSize))
     }
 
     private func updateQuickAppDrag(
@@ -447,7 +480,7 @@ struct QuickAppsSettingsView: View {
 
         withAnimation(AppMotion.standard) {
             store.swapApp(id: draggedItemID, withIndex: targetIndex)
-            currentPage = min(pageCount - 1, max(0, targetIndex / QuickAppsStore.pageSize))
+            currentPage = min(pageCount - 1, max(0, targetIndex / pageSize))
         }
     }
 
@@ -469,10 +502,10 @@ struct QuickAppsSettingsView: View {
         let localX = x - CGFloat(rawSlot) * pitch
 
         guard rawSlot >= 0,
-              rawSlot < QuickAppsStore.pageSize,
+              rawSlot < pageSize,
               localX <= cellWidth else { return nil }
 
-        let pageStart = currentPage * QuickAppsStore.pageSize
+        let pageStart = currentPage * pageSize
         let targetIndex = pageStart + rawSlot
 
         guard store.items.indices.contains(targetIndex) else { return nil }

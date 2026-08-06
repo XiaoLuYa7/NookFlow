@@ -6,8 +6,7 @@ struct CompactCapsuleContentView: View {
     let snapshot: PlaybackSnapshot
     let currentLyricText: String?
     let nextLyricText: String?
-    let currentLyricStartTimeMS: TimeInterval?
-    let nextLyricStartTimeMS: TimeInterval?
+    let currentLyricTiming: EstimatedLyricLine?
     let showsTrackName: Bool
     let showsLyrics: Bool
     let leftSideIcon: SettingsHomeSideIcon
@@ -15,10 +14,13 @@ struct CompactCapsuleContentView: View {
     let sideStatusContext: SideStatusContext
     let foregroundPromptDisplayMode: ForegroundAppPromptDisplayMode
     let foregroundPrompt: ForegroundAppPrompt?
+    var isContentVisible: Bool = true
     var statusContentScale: CGFloat = 1
 
-    @State private var anchorDate = Date()
-    @State private var anchorElapsed: TimeInterval = 0
+    @State private var playbackAnchor = PlaybackTimeAnchor.anchored(
+        to: 0,
+        isPlaying: false
+    )
 
     var body: some View {
         Group {
@@ -51,11 +53,10 @@ struct CompactCapsuleContentView: View {
                 } right: {
                     SyncedCompactLyricText(
                         text: presentation?.rightText ?? "",
-                        anchorDate: anchorDate,
-                        anchorElapsed: anchorElapsed,
+                        playbackAnchor: playbackAnchor,
                         isPlaying: snapshot.state == .playing,
-                        lineStartTimeMS: syncedRightTextStartTimeMS,
-                        nextLineStartTimeMS: syncedRightTextNextStartTimeMS
+                        isVisible: isContentVisible,
+                        timing: currentLyricTiming
                     )
                 }
             }
@@ -174,19 +175,11 @@ struct CompactCapsuleContentView: View {
         )
     }
 
-    private var syncedRightTextStartTimeMS: TimeInterval? {
-        guard showsTrackName, showsLyrics else { return nil }
-        return currentLyricStartTimeMS
-    }
-
-    private var syncedRightTextNextStartTimeMS: TimeInterval? {
-        guard showsTrackName, showsLyrics else { return nil }
-        return nextLyricStartTimeMS
-    }
-
     private func resetTimelineAnchor() {
-        anchorDate = Date()
-        anchorElapsed = snapshot.elapsed
+        playbackAnchor = PlaybackTimeAnchor.anchored(
+            to: snapshot.elapsed,
+            isPlaying: snapshot.state == .playing
+        )
     }
 
     private func sideZoneLayout<Left: View, Right: View>(
@@ -585,38 +578,28 @@ private struct CompactPromptTextWidthKey: PreferenceKey {
 
 private struct SyncedCompactLyricText: View {
     let text: String
-    let anchorDate: Date
-    let anchorElapsed: TimeInterval
+    let playbackAnchor: PlaybackTimeAnchor
     let isPlaying: Bool
-    let lineStartTimeMS: TimeInterval?
-    let nextLineStartTimeMS: TimeInterval?
+    let isVisible: Bool
+    let timing: EstimatedLyricLine?
 
     var body: some View {
         GeometryReader { proxy in
             let viewWidth = max(1, proxy.size.width)
-            let textWidth = LyricTextMeasurer.width(of: text)
+            let textLayout = timingLayout
+            let textWidth = textLayout?.totalWidth ?? LyricTextMeasurer.width(of: text)
             let distance = max(0, textWidth - viewWidth)
             let endRevealInset = endRevealInset(viewWidth: viewWidth, textWidth: textWidth)
             let usesTimeline = needsContinuousTimeline(distance: distance)
 
-            Group {
-                if usesTimeline {
-                    TimelineView(.animation) { timeline in
-                        lyricContent(
-                            progress: scrollProgress(at: timeline.date),
-                            viewWidth: viewWidth,
-                            textWidth: textWidth,
-                            endRevealInset: endRevealInset
-                        )
-                    }
-                } else {
-                    lyricContent(
-                        progress: scrollProgress(at: Date()),
-                        viewWidth: viewWidth,
-                        textWidth: textWidth,
-                        endRevealInset: endRevealInset
-                    )
-                }
+            TimelineView(.animation(paused: !usesTimeline)) { _ in
+                lyricContent(
+                    playbackTime: effectivePlaybackTime,
+                    textLayout: textLayout,
+                    viewWidth: viewWidth,
+                    textWidth: textWidth,
+                    endRevealInset: endRevealInset
+                )
             }
             .frame(
                 width: viewWidth,
@@ -644,27 +627,38 @@ private struct SyncedCompactLyricText: View {
     }
 
     private func needsContinuousTimeline(distance: CGFloat) -> Bool {
-        let progress = scrollProgress(at: Date())
+        let progress = spatialProgress(
+            at: effectivePlaybackTime,
+            textLayout: timingLayout
+        )
 
         return TimelineRefreshPolicy.shouldUseContinuousLyricTimeline(
             LyricTimelineState(
-                isVisible: true,
+                isVisible: isVisible,
                 isPlaying: isPlaying,
-                hasContent: !text.isEmpty && lineStartTimeMS != nil,
+                hasContent: !text.isEmpty && timing != nil,
                 needsScrolling: distance > 0 && progress < 1,
-                needsProgressAnimation: progress < 1,
+                needsProgressAnimation: timing.map {
+                    effectivePlaybackTime < $0.vocalEndTime
+                } ?? false,
                 isTransitioning: false
             )
         )
     }
 
     private func lyricContent(
-        progress: Double,
+        playbackTime: TimeInterval,
+        textLayout: LyricTextLayout?,
         viewWidth: CGFloat,
         textWidth: CGFloat,
         endRevealInset: CGFloat
     ) -> some View {
-        progressCompactLyricText(progress: progress, textWidth: textWidth)
+        let progress = spatialProgress(at: playbackTime, textLayout: textLayout)
+        return progressCompactLyricText(
+            playbackTime: playbackTime,
+            textLayout: textLayout,
+            textWidth: textWidth
+        )
             .frame(width: textWidth, alignment: .leading)
             .offset(
                 x: lyricOffset(
@@ -676,8 +670,16 @@ private struct SyncedCompactLyricText: View {
             )
     }
 
-    private func progressCompactLyricText(progress: Double, textWidth: CGFloat) -> some View {
-        let revealedWidth = max(0, textWidth * CGFloat(progress))
+    private func progressCompactLyricText(
+        playbackTime: TimeInterval,
+        textLayout: LyricTextLayout?,
+        textWidth: CGFloat
+    ) -> some View {
+        let revealedWidth = revealedWidth(
+            at: playbackTime,
+            textLayout: textLayout,
+            fallbackWidth: textWidth
+        )
 
         return ZStack(alignment: .leading) {
             compactLyricText(color: Color.white.opacity(0.84))
@@ -717,30 +719,49 @@ private struct SyncedCompactLyricText: View {
         return -(overflow + endRevealInset) * CGFloat(progress)
     }
 
-    private func scrollProgress(at date: Date) -> Double {
-        guard !text.isEmpty, let lineStartTimeMS else {
-            return 0
-        }
-
-        let elapsed = isPlaying
-            ? anchorElapsed + date.timeIntervalSince(anchorDate)
-            : anchorElapsed
-        let elapsedMS = elapsed * 1000 + lyricProgressLeadTimeMS
-        let progress = (elapsedMS - lineStartTimeMS) / progressDurationMS(from: lineStartTimeMS)
-        return min(max(progress, 0), 1)
+    private var timingLayout: LyricTextLayout? {
+        guard let timing, timing.text == text else { return nil }
+        return LyricTextMeasurer.layout(
+            for: timing,
+            fontSize: 10.5,
+            weight: .semibold,
+            design: .rounded
+        )
     }
 
-    private var lyricProgressLeadTimeMS: TimeInterval {
-        300
+    private var effectivePlaybackTime: TimeInterval {
+        playbackAnchor.estimatedTime() + LyricPlaybackTiming.revealOffset
     }
 
-    private func progressDurationMS(from lineStartTimeMS: TimeInterval) -> TimeInterval {
-        let nextGap = max(1000, (nextLineStartTimeMS ?? lineStartTimeMS + 4500) - lineStartTimeMS)
-        let visibleCharacterCount = max(1, text.unicodeScalars.filter {
-            !CharacterSet.whitespacesAndNewlines.contains($0)
-        }.count)
-        let estimatedSingingDuration = max(TimeInterval(visibleCharacterCount) * 260 + 900, 1900)
-        let intervalAwareDuration = max(estimatedSingingDuration, nextGap * 0.55)
-        return min(nextGap, min(intervalAwareDuration, 6500))
+    private func revealedWidth(
+        at playbackTime: TimeInterval,
+        textLayout: LyricTextLayout?,
+        fallbackWidth: CGFloat
+    ) -> CGFloat {
+        guard let timing, let textLayout else { return 0 }
+        return min(
+            fallbackWidth,
+            textLayout.revealedWidth(at: playbackTime, for: timing)
+        )
+    }
+
+    private func spatialProgress(
+        at playbackTime: TimeInterval,
+        textLayout: LyricTextLayout?
+    ) -> Double {
+        guard let textLayout, textLayout.totalWidth > 0 else { return 0 }
+        return min(
+            max(
+                Double(
+                    revealedWidth(
+                        at: playbackTime,
+                        textLayout: textLayout,
+                        fallbackWidth: textLayout.totalWidth
+                    ) / textLayout.totalWidth
+                ),
+                0
+            ),
+            1
+        )
     }
 }
