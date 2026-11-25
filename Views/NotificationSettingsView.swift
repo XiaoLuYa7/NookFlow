@@ -217,7 +217,6 @@ struct NotificationSettingsView: View {
                 icon: "cloud.sun.fill",
                 title: "天气提醒设置",
                 subtitle: "当你所在地区出现你关心的天气情况时提醒你",
-                showsProBadge: true,
                 isOn: $model.weather.isEnabled
             )
 
@@ -289,7 +288,6 @@ struct NotificationSettingsView: View {
                 icon: "desktopcomputer",
                 title: "设备状态提醒",
                 subtitle: "统一管理电池、性能、存储空间和网络提醒",
-                showsProBadge: true,
                 isOn: $model.device.isEnabled
             )
 
@@ -373,7 +371,6 @@ struct NotificationSettingsView: View {
                 icon: "heart.fill",
                 title: "日常关怀",
                 subtitle: "统一管理喝水提醒、久坐提醒、睡前预提醒和睡觉提醒",
-                showsProBadge: true,
                 isOn: $model.dailyCare.isEnabled
             )
 
@@ -623,11 +620,10 @@ struct NotificationToggleRow: View {
     let icon: String
     let title: String
     let subtitle: String
-    var showsProBadge = false
     @Binding var isOn: Bool
 
     var body: some View {
-        NotificationBaseRow(icon: icon, title: title, subtitle: subtitle, showsProBadge: showsProBadge) {
+        NotificationBaseRow(icon: icon, title: title, subtitle: subtitle) {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(AppSwitchToggleStyle())
@@ -786,7 +782,6 @@ struct NotificationBaseRow<Accessory: View>: View {
     let icon: String
     let title: String
     let subtitle: String
-    var showsProBadge = false
     @ViewBuilder let accessory: () -> Accessory
 
     var body: some View {
@@ -802,15 +797,9 @@ struct NotificationBaseRow<Accessory: View>: View {
                 }
 
             VStack(alignment: .leading, spacing: AppSpacing.xs) {
-                HStack(spacing: AppSpacing.sm) {
-                    Text(title)
-                        .font(AppTypography.rowTitle)
-                        .foregroundStyle(NotificationStyle.primaryText)
-
-                    if showsProBadge {
-                        ProBadgeView()
-                    }
-                }
+                Text(title)
+                    .font(AppTypography.rowTitle)
+                    .foregroundStyle(NotificationStyle.primaryText)
 
                 Text(subtitle)
                     .font(AppTypography.supporting)
@@ -906,12 +895,6 @@ struct NotificationMenuPicker: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-    }
-}
-
-struct ProBadgeView: View {
-    var body: some View {
-        ProBadge()
     }
 }
 

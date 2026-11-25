@@ -94,6 +94,17 @@ struct FilesGridView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     toolbar
 
+                    if let error = provider.loadError {
+                        VStack(spacing: 8) {
+                            Text(error)
+                                .font(.system(size: 12))
+                                .foregroundStyle(IslandDesignTokens.secondaryText)
+                            Button("重试") { provider.load() }
+                                .disabled(provider.isLoading)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+
                     GeometryReader { proxy in
                         ScrollView {
                             LazyVGrid(
@@ -107,6 +118,8 @@ struct FilesGridView: View {
                                 ForEach(displayedFiles) { file in
                                     fileCell(file)
                                         .frame(maxWidth: .infinity, alignment: .top)
+                                        .task(id: provider.isLoading) { await provider.loadArtwork(for: file) }
+                                        .onDisappear { provider.unloadArtwork(for: file) }
                                 }
                             }
                             .animation(Self.gridReflowAnimation, value: visibleFileIDs)
@@ -132,8 +145,12 @@ struct FilesGridView: View {
                                 }
                             }
 
-                            if visibleFiles.isEmpty && !provider.searchText.isEmpty {
-                                emptySearchState
+                            if visibleFiles.isEmpty && !provider.isLoading && provider.loadError == nil {
+                                if !provider.searchText.isEmpty || provider.category != .all {
+                                    emptySearchState
+                                } else {
+                                    emptyDirectoryState
+                                }
                             }
                         }
                         .opacity(directoryContentOpacity)
@@ -188,6 +205,7 @@ struct FilesGridView: View {
             }
         }
         .onDisappear {
+            provider.cancelLoading()
             cleanupTransientState()
         }
         .alert(
@@ -242,45 +260,36 @@ struct FilesGridView: View {
     }
 
     private func breadcrumb(isCompact: Bool) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: isCompact ? 5 : 8) {
-                    breadcrumbLabel(icon: "folder", text: "文稿", isCompact: isCompact, isClickable: false)
-                    breadcrumbChevron
-                    breadcrumbLabel(icon: "shippingbox", text: IslandDesignTokens.appName, isCompact: isCompact, isClickable: false)
-                    breadcrumbChevron
-                    breadcrumbButton(icon: "externaldrive.fill", text: "FileData", isCompact: isCompact, isActive: provider.pathSegments.isEmpty) {
-                        navigateToDirectory(FileDataProvider.stagingDirectory)
-                    }
-                    .id("filedata")
-
-                    ForEach(provider.pathSegments) { segment in
-                        breadcrumbChevron
-                        breadcrumbButton(icon: "folder.fill", text: segment.title, isCompact: isCompact, isActive: segment.url.standardizedFileURL.path == provider.currentDirectory.standardizedFileURL.path) {
-                            navigateToDirectory(segment.url)
-                        }
-                        .id(segment.id)
-                    }
-
-                    Color.clear.frame(width: 1, height: 1)
-                        .id("breadcrumbTrailing")
-                }
-                .padding(.horizontal, 2)
+        HStack(spacing: isCompact ? 5 : 8) {
+            breadcrumbButton(icon: "externaldrive.fill", text: "FileData", isCompact: isCompact, isActive: provider.pathSegments.isEmpty) {
+                navigateToDirectory(FileDataProvider.stagingDirectory)
             }
-            .onAppear {
-                DispatchQueue.main.async {
-                    proxy.scrollTo("breadcrumbTrailing", anchor: .trailing)
-                }
-            }
-            .onChange(of: provider.currentDirectory) { _, _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("breadcrumbTrailing", anchor: .trailing)
+            .fixedSize()
+
+            if provider.pathSegments.count > 1 {
+                breadcrumbChevron
+                Menu {
+                    ForEach(provider.pathSegments.dropLast()) { segment in
+                        Button(segment.title) { navigateToDirectory(segment.url) }
                     }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 24, height: 30)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("上级文件夹")
+            }
+            if let segment = provider.pathSegments.last {
+                breadcrumbChevron
+                breadcrumbButton(icon: "folder.fill", text: segment.title, isCompact: isCompact, isActive: true) {
+                    navigateToDirectory(segment.url)
+                }
+                .layoutPriority(-1)
             }
         }
         .frame(height: 30)
+        .help(provider.currentDirectory.path)
     }
 
     private var breadcrumbChevron: some View {
@@ -310,6 +319,7 @@ struct FilesGridView: View {
             Text(text)
                 .font(.system(size: isCompact ? 10 : 12, weight: isActive ? .bold : .semibold, design: .rounded))
                 .lineLimit(1)
+                .truncationMode(.middle)
         }
         .foregroundStyle(isActive ? Color.white : (isClickable ? Color.white.opacity(0.9) : Color.white.opacity(0.55)))
         .padding(.horizontal, isCompact ? 7 : 9)
@@ -390,6 +400,8 @@ struct FilesGridView: View {
                 showTitle: showTitle
             )
         }
+        .accessibilityLabel("分类：\(provider.category.title)")
+        .help("分类：\(provider.category.title)")
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .handCursor()
@@ -403,16 +415,27 @@ struct FilesGridView: View {
                         provider.setSortOption(opt)
                     }
                 } label: {
-                    Label(opt.title, systemImage: opt.systemName)
+                    Label {
+                        Text(opt.title)
+                    } icon: {
+                        if opt == .name {
+                            Image(nsImage: SortNameIcon.image)
+                        } else {
+                            Image(systemName: opt.systemName)
+                        }
+                    }
                 }
             }
         } label: {
             fileToolbarMenuLabel(
                 systemName: provider.sortOption.systemName,
                 title: provider.sortOption.title,
-                showTitle: showTitle
+                showTitle: showTitle,
+                iconImage: provider.sortOption == .name ? SortNameIcon.image : nil
             )
         }
+        .accessibilityLabel("排序：\(provider.sortOption.title)")
+        .help("排序：\(provider.sortOption.title)")
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .handCursor()
@@ -421,10 +444,17 @@ struct FilesGridView: View {
     private func fileToolbarMenuLabel(
         systemName: String,
         title: String,
-        showTitle: Bool
+        showTitle: Bool,
+        iconImage: NSImage? = nil
     ) -> some View {
         HStack(spacing: 7) {
-            Image(systemName: systemName)
+            Group {
+                if let iconImage {
+                    Image(nsImage: iconImage).renderingMode(.template)
+                } else {
+                    Image(systemName: systemName)
+                }
+            }
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.white)
 
@@ -602,10 +632,35 @@ struct FilesGridView: View {
     // MARK: - Empty search state
 
     private var emptySearchState: some View {
-        Text("没有匹配文件")
-            .font(.system(size: 12, weight: .medium, design: .rounded))
-            .foregroundStyle(IslandDesignTokens.secondaryText)
-            .frame(maxWidth: .infinity, minHeight: 120)
+        VStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 22, weight: .regular))
+                .accessibilityHidden(true)
+            Text("未找到匹配文件")
+                .font(.system(size: 13, weight: .medium))
+            Button("清除筛选") {
+                provider.searchText = ""
+                provider.category = .all
+            }
+            .buttonStyle(.bordered)
+        }
+        .foregroundStyle(IslandDesignTokens.secondaryText)
+        .frame(maxWidth: .infinity, minHeight: 140)
+    }
+
+    private var emptyDirectoryState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "folder")
+                .font(.system(size: 26, weight: .regular))
+                .accessibilityHidden(true)
+            Text("这里还没有文件")
+                .font(.system(size: 13, weight: .medium))
+            Text("将文件拖入灵动岛，即可添加到 FileData")
+                .font(.system(size: 12))
+                .multilineTextAlignment(.center)
+        }
+        .foregroundStyle(IslandDesignTokens.secondaryText)
+        .frame(maxWidth: .infinity, minHeight: 140)
     }
 
     // MARK: - File cell
@@ -1105,20 +1160,8 @@ struct FilesGridView: View {
 
     // MARK: - Thumbnail
 
-    @ViewBuilder
     private func fileThumbnail(_ file: StagingFileItem) -> some View {
-        if let thumb = file.thumbnail {
-            Image(nsImage: thumb)
-                .resizable()
-                .scaledToFill()
-                .frame(width: Self.thumbSize, height: Self.thumbSize)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        } else {
-            Image(nsImage: file.icon)
-                .resizable()
-                .scaledToFit()
-                .frame(width: Self.thumbSize, height: Self.thumbSize)
-        }
+        StagingFileArtworkView(artwork: file.artwork, size: Self.thumbSize)
     }
 
     // MARK: - Preview overlay
@@ -1602,4 +1645,44 @@ private extension NSView {
         }
         return nil
     }
+}
+
+private struct StagingFileArtworkView: View {
+    @ObservedObject var artwork: StagingFileArtwork
+    let size: CGFloat
+
+    var body: some View {
+        if let thumbnail = artwork.thumbnail {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
+            Image(nsImage: artwork.icon)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+        }
+    }
+}
+
+
+enum SortNameIcon {
+    // Draw literal glyphs into a cached template image so system symbol localization cannot change “Aa”.
+    static let image: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 16), flipped: false) { rect in
+            let text = "Aa" as NSString
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: NSColor.black
+            ]
+            let size = text.size(withAttributes: attributes)
+            text.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+                      withAttributes: attributes)
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
 }

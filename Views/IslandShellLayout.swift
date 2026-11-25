@@ -9,12 +9,13 @@ enum IslandShellLayout {
         let defaults = IslandPanelModule.allCases
         let missing = defaults.filter { !saved.contains($0) }
         let order = saved.isEmpty ? defaults : saved + missing
+        let isProUnlocked = LicenseManager.shared.isProUnlocked
 
         return order.filter { module in
             switch module {
             case .weather:    settings.showWeatherModule
-            case .todo:       settings.showTodoModule
-            case .media:      settings.showMediaModule
+            case .todo:       isProUnlocked && settings.showTodoModule
+            case .media:      isProUnlocked && settings.showMediaModule
             case .quickApps:  settings.showQuickAppsModule
             case .shortcuts:  settings.showShortcutsModule
             case .imageCard:  settings.showImageCardModule
@@ -68,6 +69,7 @@ enum IslandShellLayout {
     }
 
     static func contentSize(settings: IslandSettings, selectedTopTab: IslandTopTab) -> CGSize {
+        if let simulated = settings.simulationExpandedSize { return simulated }
         switch selectedTopTab {
         case .applications:
             return CGSize(

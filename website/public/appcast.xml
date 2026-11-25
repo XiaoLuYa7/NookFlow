@@ -1,0 +1,57 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>NookFlow</title>
+        <item>
+            <title>1.0.4</title>
+            <pubDate>Mon, 31 Aug 2026 14:25:19 +0800</pubDate>
+            <link>https://nookflow.luckysoft.cn/</link>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:releaseNotesLink>https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.4.html</sparkle:releaseNotesLink>
+            <sparkle:releaseNotesLink xml:lang="en">https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.4.en.html</sparkle:releaseNotesLink>
+            <sparkle:releaseNotesLink xml:lang="zh">https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.4.zh.html</sparkle:releaseNotesLink>
+            <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.4.dmg" length="11065142" type="application/octet-stream" sparkle:edSignature="205OpAo7DP/+myslOTrHonj24eipICemSjcQNlnC4FXG0SdJcIdi4jhGHf2CcxXTKJs32O+Q50zDhy/MV2YNCw=="/>
+            <sparkle:deltas>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow5-4.delta" sparkle:deltaFrom="4" length="613530" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="I9ZVTkwuvm/sA8l/KkrgazgqP5vovFtBboUxkewFSnb168YY94sqG97gdVrG64RN2pDa7rUjef1SrEnI67/TAA=="/>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow5-3.delta" sparkle:deltaFrom="3" length="610522" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="7PjpU6X+iMHhxNvGI6O0ktLoKC1mf7r0p12A6QT85yxfHfa0gmL10OscovG9J4EaAEmT9Z7q+8/gljIkW/lrBw=="/>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow5-2.delta" sparkle:deltaFrom="2" length="646914" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="hCizYHT/g+8Z7bjng4x8wp8/pjZzUieWcnf8zkbbuzY/AY3WgE4if7ctpJOnD20zlLSMsA/P1JiJwUNvTPJKCg=="/>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow5-1.delta" sparkle:deltaFrom="1" length="633626" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="CkSTPosXynHrOzqidApSf9YD+RgOPLlTYVIkuFvCXID11BCjnUOeBR/VJqAwCjuDB0d4/plvxOOUFzATxcPiCA=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
+            <title>1.0.3</title>
+            <pubDate>Wed, 26 Aug 2026 17:46:14 +0800</pubDate>
+            <link>https://nookflow.luckysoft.cn/</link>
+            <sparkle:releaseNotesLink sparkle:edSignature="cHRtabkkONJxm11+qp9qgH9s/InwShG01XXD31ZwwmcQuLAuj0Uq5tE8wflhygYdVBnDYoI+ZRbwes9l/47DBQ==" sparkle:length="1088">https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.3.html</sparkle:releaseNotesLink>
+            <sparkle:releaseNotesLink xml:lang="zh" sparkle:edSignature="9uk4jOACNZ/nEO3/CAhOdZhLQl3v7hSWa69m792yQNe8yyQ7XciKWpWLctbmmelhRrFonFiRALzucpwVe6ygDw==" sparkle:length="1060">https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.3.zh.html</sparkle:releaseNotesLink>
+            <sparkle:releaseNotesLink xml:lang="en" sparkle:edSignature="cHRtabkkONJxm11+qp9qgH9s/InwShG01XXD31ZwwmcQuLAuj0Uq5tE8wflhygYdVBnDYoI+ZRbwes9l/47DBQ==" sparkle:length="1088">https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.3.en.html</sparkle:releaseNotesLink>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.3.dmg" length="11025549" type="application/octet-stream" sparkle:edSignature="PD1MXkW+/i6XxMZdphy6UiSiZPvYQKxjOMZCGl2oM2eXnBFfEHtt9xZAZbXeadEKw3cQuS4A+KBzzucFHQ13Cg=="/>
+            <sparkle:deltas>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow4-3.delta" sparkle:deltaFrom="3" length="4102" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="3V70q2KPlfhhTe6TKajIjAh0g/779ncx9DoBBXVpvXECFBZh91RBeOFgUVWTimf/nBPoacDJuPHHpQSFZI+dCQ=="/>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow4-2.delta" sparkle:deltaFrom="2" length="371258" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="SOGwB5wsiACLDF0YOJc8UGb6Iihf1CN0SbPq1sx0TW0CHuX9FsfFnzDPayAoM2gl4PLLkblQf8G0lMiM5rx6Ag=="/>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow4-1.delta" sparkle:deltaFrom="1" length="367114" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="RA3t4eX+YPOjwFWI9SAXT43iazD5vjtf47JCHRH6zao1wYMQX0VhXz9cvhmi+NVG22k93I47+8iaperoIM3IDQ=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
+            <title>1.0.2</title>
+            <pubDate>Wed, 26 Aug 2026 17:23:02 +0800</pubDate>
+            <link>https://nookflow.luckysoft.cn/</link>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow-1.0.2.dmg" length="11025499" type="application/octet-stream" sparkle:edSignature="2lEZ1Zy8CQm/TyANt5KliCrcXEw7nubd1INFrv++262jQWU9C9NxyvrX0gtn0JN8q9qxIjejnkKEP6hzJLdRDw=="/>
+            <sparkle:deltas>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow3-2.delta" sparkle:deltaFrom="2" length="371594" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="BqfSPOUMN50dIb/Bj1FcDaJN5WXXU1vsBymoNw3ghxk5aOVSWgWuPhuiE3qHZ11ZOgAXz3NaqTpc681/jfDmBQ=="/>
+                <enclosure url="https://nookflow.luckysoft.cn/downloads/NookFlow3-1.delta" sparkle:deltaFrom="1" length="366802" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="ye8gkkpv8DJadZnSZ8aQjHorwoyx11gqJ/XoDAV5HxouWaxBG5HgXj5j8AIL9mAtcqJ3YdPwQQNbHityzV2ECg=="/>
+            </sparkle:deltas>
+        </item>
+    </channel>
+</rss>

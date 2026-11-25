@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum GeneralAnimationPace: String, CaseIterable, Identifiable {
     case slow
@@ -38,6 +39,7 @@ final class GeneralSettingsViewModel: ObservableObject {
 
 struct GeneralSettingsView: View {
     @ObservedObject var settings: IslandSettings
+    @State private var availableScreens = NSScreen.screens
     @StateObject private var model = GeneralSettingsViewModel()
 
     var body: some View {
@@ -62,8 +64,16 @@ struct GeneralSettingsView: View {
                 trackpadSection
                 appearanceSection
                 displaySection
+                GeneralSettingsGroup(icon: "testtube.2", title: "实验性适配", subtitle: "测试参数不代表真实硬件尺寸；系统原生区域尚未验证。") {
+                    Button("打开灵动岛模拟窗口") { IslandSimulationWindowController.shared.show() }
+                        .buttonStyle(AppButtonStyle())
+                        .padding(AppSpacing.lg)
+                }
             }
 
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            availableScreens = NSScreen.screens
         }
         .alert("恢复通用设置？", isPresented: $model.showsResetConfirmation) {
             Button("取消", role: .cancel) {}
@@ -307,21 +317,26 @@ struct GeneralSettingsView: View {
     }
 
     private var displaySection: some View {
-        GeneralSettingsGroup(
-            icon: "display.2",
-            title: "多屏显示",
-            subtitle: "选择最适合当前桌面布局的显示位置。",
-            footer: "屏幕布局变化后会在下一次窗口定位时应用所选策略。"
-        ) {
-            SettingsSegmentedRow(
-                icon: nil,
-                title: "灵动岛显示策略",
-                subtitle: "选择灵动岛在哪些屏幕上显示",
-                options: IslandDisplayStrategy.allCases,
-                optionTitle: \IslandDisplayStrategy.title,
-                showsDivider: false,
-                selection: $settings.displayStrategy
-            )
+        GeneralSettingsGroup(icon: "display.2", title: "显示器与位置",
+                             subtitle: "宽刘海保留现有布局；无刘海屏幕使用顶部悬浮胶囊。",
+                             footer: "所选显示器断开时回退主屏。位置参数仅作用于无刘海屏幕；距离从可用区域顶部计算。") {
+            SettingsRow(title: "显示器", subtitle: "保持一个工作台窗口，不在系统原生区域覆盖透明窗口") {
+                Picker("显示器", selection: $settings.preferredDisplayID) {
+                    Text("自动（主屏）").tag("")
+                    ForEach(availableScreens, id: \.nookFlowDisplayID) { screen in
+                        Text(screen.localizedName).tag(screen.nookFlowDisplayID)
+                    }
+                    if !settings.preferredDisplayID.isEmpty && !availableScreens.contains(where: { $0.nookFlowDisplayID == settings.preferredDisplayID }) {
+                        Text("显示器已断开（使用主屏）").tag(settings.preferredDisplayID)
+                    }
+                }.labelsHidden().frame(width: 230)
+            }
+            SettingsSliderRow(icon: nil, title: "水平位置", subtitle: "展开内容始终围绕胶囊中心，靠近屏幕边缘时自动留出空间",
+                value: $settings.floatingHorizontalPosition, in: 0...1, step: 0.01,
+                valueText: { "\(Int($0 * 100))%" })
+            SettingsSliderRow(icon: nil, title: "顶部距离", subtitle: "向下展开，保留菜单栏空间",
+                value: $settings.floatingTopInset, in: 0...200, step: 1,
+                valueText: { "\(Int($0)) pt" })
         }
     }
 
@@ -407,5 +422,174 @@ private struct GeneralSettingsGroup<Content: View>: View {
         ) {
             content
         }
+    }
+}
+
+
+@MainActor
+private final class IslandSimulationWindowController: NSObject, NSWindowDelegate {
+    static let shared = IslandSimulationWindowController()
+    private var window: NSWindow?
+
+    func show() {
+        if let window {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 800),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "NookFlow · 灵动岛模拟（测试参数）"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.contentView = NSHostingView(rootView: IslandSimulationView())
+        window.minSize = NSSize(width: 900, height: 680)
+        self.window = window
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window?.contentView = nil
+        window = nil
+    }
+}
+
+@MainActor
+private final class IslandSimulationSession: ObservableObject {
+    let settings: IslandSettings
+    let model: IslandViewModel
+    private let suiteName = "NookFlow.Simulation.\(UUID().uuidString)"
+
+    init() {
+        let defaults = UserDefaults(suiteName: suiteName)!
+        for (key, value) in UserDefaults.standard.dictionaryRepresentation() where key.hasPrefix("settings.") {
+            defaults.set(value, forKey: key)
+        }
+        settings = IslandSettings(defaults: defaults)
+        settings.expansionMode = .hover
+        settings.simulationExpandedSize = CGSize(width: 900, height: 320)
+        model = IslandViewModel(settings: settings, enablesLiveServices: false)
+    }
+
+    deinit {
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+    }
+}
+
+private struct IslandSimulationView: View {
+    @StateObject private var session = IslandSimulationSession()
+    @State private var capsuleWidth = 220.0
+    @State private var capsuleHeight = 36.0
+    @State private var topInset = 12.0
+    @State private var scale = 0.8
+    @State private var panelWidth = 900.0
+    @State private var panelHeight = 320.0
+    @State private var wideNotch = false
+    @State private var isDragTargeted = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("实验性适配 · 共用正式布局与动画，尺寸仅为测试参数")
+                .font(.headline)
+            Text("本版仅测试 NookFlow 自有窗口。实时采集与播放控制停用；拖入仅预演，文件页只读。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Toggle("模拟宽刘海", isOn: $wideNotch)
+                Button("展开") { session.model.expand() }
+                Button("收起") { session.model.collapse() }
+                Button("首页工作台") { session.model.selectTopTab(.home); session.model.expand() }
+                Button("文件工作台") { session.model.selectTopTab(.files); session.model.expand() }
+            }
+            HStack {
+                control("胶囊宽", value: $capsuleWidth, range: 100...500)
+                control("胶囊高", value: $capsuleHeight, range: 24...70)
+                control("顶部距离", value: $topInset, range: 0...80)
+            }
+            HStack {
+                control("显示缩放", value: $scale, range: 0.5...1.2)
+                control("面板宽", value: $panelWidth, range: 600...1200)
+                control("面板高", value: $panelHeight, range: 240...480)
+            }
+            IslandSimulationCanvas(model: session.model, settings: session.settings,
+                                   topInset: topInset, scale: scale, isDragTargeted: $isDragTargeted)
+                .background(Color.gray.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .padding(20)
+        .onAppear { updateGeometry() }
+        .onChange(of: capsuleWidth) { _, _ in updateGeometry() }
+        .onChange(of: capsuleHeight) { _, _ in updateGeometry() }
+        .onChange(of: wideNotch) { _, _ in updateGeometry() }
+        .onChange(of: panelWidth) { _, _ in updateGeometry() }
+        .onChange(of: panelHeight) { _, _ in updateGeometry() }
+        .onDisappear { session.model.collapse(); session.model.playbackProvider.stop() }
+    }
+
+    private func control(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        VStack(alignment: .leading) {
+            Text("\(title)：\(value.wrappedValue, specifier: "%.1f")").font(.caption).monospacedDigit()
+            Slider(value: value, in: range)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func updateGeometry() {
+        let size = CGSize(width: capsuleWidth, height: capsuleHeight)
+        session.settings.simulationExpandedSize = CGSize(width: panelWidth, height: panelHeight)
+        session.model.updateCompactCapsuleSizes(camera: size, status: size, lyrics: size)
+        session.model.updateNotchGeometry(NotchGeometry(hasNotch: wideNotch,
+            cameraZoneWidth: wideNotch ? capsuleWidth * 0.45 : 0,
+            sideWidth: wideNotch ? capsuleWidth * 0.275 : capsuleWidth / 2,
+            totalWidth: capsuleWidth, height: capsuleHeight))
+    }
+}
+
+private struct IslandSimulationCanvas: View {
+    @ObservedObject var model: IslandViewModel
+    @ObservedObject var settings: IslandSettings
+    let topInset: CGFloat
+    let scale: CGFloat
+    @Binding var isDragTargeted: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            let canvasWidth = max(1300, proxy.size.width / scale)
+            let canvasHeight = max(600, proxy.size.height / scale)
+            IslandRootView(viewModel: model, settings: settings,
+                           onOpenSettings: {}, onOpenTodoSettings: {}, onOpenFeedback: {})
+                .frame(width: canvasWidth, height: canvasHeight, alignment: .top)
+                .allowsHitTesting(model.selectedTopTab != .files)
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let point):
+                        let size = model.mode == .compact ? model.compactCapsuleSize
+                            : IslandShellLayout.contentSize(settings: settings, selectedTopTab: model.selectedTopTab)
+                        let inside = abs(point.x - canvasWidth / 2) <= size.width / 2 + 12
+                            && point.y <= size.height + 24
+                        if inside {
+                            model.cancelCollapse()
+                            model.updateCameraHover(true)
+                        } else {
+                            model.updateCameraHover(false)
+                            model.scheduleCollapse()
+                        }
+                    case .ended:
+                        model.updateCameraHover(false)
+                        model.scheduleCollapse()
+                    }
+                }
+                .onDrop(of: [.fileURL], isTargeted: $isDragTargeted) { _ in
+                    model.finishFileDropInteraction()
+                    return true
+                }
+                .onChange(of: isDragTargeted) { _, targeted in
+                    if targeted { model.beginFileDrop(previewName: "测试拖入（不导入）") }
+                    else { model.finishFileDropInteraction() }
+                }
+                .scaleEffect(scale, anchor: .top)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                .padding(.top, topInset)
+        }
+        .clipped()
     }
 }

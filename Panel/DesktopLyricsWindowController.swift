@@ -153,6 +153,15 @@ final class DesktopLyricsWindowController: NSObject {
             }
             .store(in: &cancellables)
 
+        LicenseManager.shared.$state
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateVisibility(for: self.playbackProvider.snapshot)
+            }
+            .store(in: &cancellables)
+
         settings.$menuBarLyricsWidth
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
@@ -206,7 +215,9 @@ final class DesktopLyricsWindowController: NSObject {
     private func updateVisibility(for snapshot: PlaybackSnapshot) {
         guard let panel else { return }
 
-        guard snapshot.isLive, settings.showDesktopLyrics else {
+        guard LicenseManager.shared.isProUnlocked,
+              snapshot.isLive,
+              settings.showDesktopLyrics else {
             dragStartOrigin = nil
             stopPointerTracking()
             timelineController.setPointerHovering(false)
@@ -483,7 +494,7 @@ private final class DesktopLyricsPanel: NSPanel {
 
 enum MenuBarLyricsLayout {
     static let minimumLyricsWidth: CGFloat = 100
-    static let maximumLyricsWidth: CGFloat = 150
+    static let maximumLyricsWidth: CGFloat = 200
     static let maximumDisplayedWidthWithControls: CGFloat = 220
     static let playbackControlsWidth: CGFloat = 73
     static let horizontalPadding: CGFloat = 8

@@ -7,6 +7,7 @@ struct IslandRootView: View {
 
     @ObservedObject var viewModel: IslandViewModel
     @ObservedObject var settings: IslandSettings
+    @ObservedObject private var licenseManager = LicenseManager.shared
     let onOpenSettings: () -> Void
     let onOpenTodoSettings: () -> Void
     let onOpenFeedback: () -> Void
@@ -27,10 +28,13 @@ struct IslandRootView: View {
     @State private var currentLyricText: String?
     @State private var nextLyricText: String?
     @State private var currentLyricTiming: EstimatedLyricLine?
+    @State private var nextLyricTiming: EstimatedLyricLine?
+    @State private var compactSingingLineIndex: Int?
     @State private var compactLyricKey = 0
     @State private var compactLyricLoadingDotCount = 1
     @State private var compactLyricLoadingTask: Task<Void, Never>?
     @State private var foregroundPrompt: ForegroundAppPrompt?
+    @State private var foregroundPromptRevealProgress: Double = 0
     @State private var foregroundPromptTask: Task<Void, Never>?
     var body: some View {
         GeometryReader { proxy in
@@ -54,30 +58,37 @@ struct IslandRootView: View {
         .onChange(of: accessibilityReduceMotion) { _, enabled in
             viewModel.setReduceMotionEnabled(enabled)
         }
-        .onReceive(viewModel.playbackProvider.$snapshot) { snapshot in
-            currentSnapshot = snapshot
-            viewModel.lyricsProvider.update(for: snapshot, trackID: nil)
-            updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
+        .onChange(of: licenseManager.state) { _, _ in
+            viewModel.playbackProvider.updateAccessConfiguration(from: settings)
+            refreshRuntimeProviders()
+            updateCompactLyric(index: viewModel.lyricsProvider.capsuleLineIndex)
             updateCompactCapsuleMode()
             configureCompactLyricLoadingTask()
         }
-        .onReceive(viewModel.lyricsProvider.$currentLineIndex) { index in
+        .onReceive(viewModel.playbackProvider.$snapshot) { snapshot in
+            currentSnapshot = snapshot
+            viewModel.lyricsProvider.update(for: snapshot, trackID: nil)
+            updateCompactLyric(index: viewModel.lyricsProvider.capsuleLineIndex)
+            updateCompactCapsuleMode()
+            configureCompactLyricLoadingTask()
+        }
+        .onReceive(viewModel.lyricsProvider.$capsuleLineIndex) { index in
             updateCompactLyric(index: index)
             updateCompactCapsuleMode()
         }
         .onReceive(viewModel.lyricsProvider.$lyrics) { _ in
-            updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
+            updateCompactLyric(index: viewModel.lyricsProvider.capsuleLineIndex)
             updateCompactCapsuleMode()
             configureCompactLyricLoadingTask()
         }
-        .onReceive(viewModel.lyricsProvider.$estimatedTimeline) { _ in
-            updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
+        .onReceive(viewModel.lyricsProvider.$estimatedTimeline) { timeline in
+            updateCompactLyric(index: viewModel.lyricsProvider.capsuleLineIndex, timeline: timeline)
         }
         .onReceive(viewModel.lyricsProvider.$displayState) { state in
             if !state.isLoading {
                 compactLyricLoadingDotCount = 1
             }
-            updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)
+            updateCompactLyric(index: viewModel.lyricsProvider.capsuleLineIndex)
             updateCompactCapsuleMode()
             configureCompactLyricLoadingTask()
         }
@@ -302,12 +313,16 @@ struct IslandRootView: View {
                     nextLyricText: nextLyricText,
                     currentLyricTiming: currentLyricTiming,
                     showsTrackName: false,
-                    showsLyrics: settings.showMusicLyrics,
-                    leftSideIcon: settings.showCustomCompactIcons ? settings.compactLeftSideIcon : .none,
-                    rightSideIcon: settings.showCustomCompactIcons ? settings.compactRightSideIcon : .none,
+                    showsLyrics: isMusicProActive && settings.showMusicLyrics,
+                    leftSideIcon: resolvedCompactSideIcon(settings.compactLeftSideIcon),
+                    rightSideIcon: resolvedCompactSideIcon(settings.compactRightSideIcon),
                     sideStatusContext: sideStatusContext,
                     foregroundPromptDisplayMode: settings.foregroundAppPromptDisplayMode,
                     foregroundPrompt: foregroundPrompt,
+                    lyricFontSize: CGFloat(settings.capsuleLyricsFontSize),
+                    nextLyricTiming: nextLyricTiming,
+                    activeLyricSourceIndex: compactSingingLineIndex,
+                    foregroundPromptRevealProgress: foregroundPromptRevealProgress,
                     isContentVisible: viewModel.presentationPhase == .collapsed
                         && compactContentOpacity > 0.01
                 )
@@ -322,7 +337,7 @@ struct IslandRootView: View {
                     ExpandedIslandView(
                         viewModel: viewModel,
                         isContentReady: viewModel.shouldMountExpandedContent,
-                        runtimeIsActive: viewModel.isExpandedRuntimeActive,
+                        runtimeIsActive: viewModel.enablesLiveServices && viewModel.isExpandedRuntimeActive,
                         contentRevealProgress: viewModel.contentRevealProgress,
                         secondaryContentRevealProgress: viewModel.secondaryContentRevealProgress,
                         settings: settings,
@@ -427,8 +442,12 @@ struct IslandRootView: View {
     }
 
     private func refreshRuntimeProviders() {
+        guard viewModel.enablesLiveServices else { return }
         let compactIcons = settings.showCustomCompactIcons
-            ? [settings.compactLeftSideIcon, settings.compactRightSideIcon]
+            ? [
+                resolvedCompactSideIcon(settings.compactLeftSideIcon),
+                resolvedCompactSideIcon(settings.compactRightSideIcon)
+            ]
             : []
         let isExpanded = viewModel.isExpandedRuntimeActive
 
@@ -466,10 +485,11 @@ struct IslandRootView: View {
             foregroundAppProvider.stop()
         }
 
-        let needsPlayback = settings.showMediaModule && isExpanded
-            || settings.showMusicLyrics
-            || settings.showDesktopLyrics
-            || compactIcons.contains(.music)
+        let needsPlayback = isMusicProActive
+            && (settings.showMediaModule && isExpanded
+                || settings.showMusicLyrics
+                || settings.showDesktopLyrics
+                || compactIcons.contains(.music))
         if needsPlayback {
             viewModel.playbackProvider.start()
         } else {
@@ -640,7 +660,11 @@ struct IslandRootView: View {
         viewModel.presentationPhase == .collapsed ? 0 : 1
     }
 
-    private func updateCompactLyric(index: Int?) {
+    private func updateCompactLyric(index: Int?, timeline: [EstimatedLyricLine]? = nil) {
+        guard isMusicProActive else {
+            clearCompactLyric()
+            return
+        }
         let lyrics = viewModel.lyricsProvider.lyrics
         guard currentSnapshot.isLive else {
             clearCompactLyric()
@@ -652,28 +676,22 @@ struct IslandRootView: View {
             updateCompactLyricStatusText()
             return
         }
-        let line = lyrics[index]
-        let timing = viewModel.lyricsProvider.estimatedLine(at: index)
-        let words = line.words.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = words.isEmpty ? (line.translation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") : words
-
-        let nextText: String?
-        if lyrics.indices.contains(index + 1) {
-            let nextLine = lyrics[index + 1]
-            let nextWords = nextLine.words.trimmingCharacters(in: .whitespacesAndNewlines)
-            nextText = nextWords.isEmpty
-                ? nextLine.translation?.trimmingCharacters(in: .whitespacesAndNewlines)
-                : nextWords
-        } else {
-            nextText = nil
+        compactSingingLineIndex = index
+        guard let pair = CompactLyricPair.resolve(at: index, in: lyrics) else {
+            updateCompactLyricStatusText()
+            return
         }
-
-        if text != currentLyricText
-            || nextText != nextLyricText
-            || timing != currentLyricTiming {
+        let timings = timeline ?? viewModel.lyricsProvider.estimatedTimeline
+        let text = CompactLyricPair.displayText(for: lyrics[pair.leftIndex])
+        let nextText = pair.rightIndex.map { CompactLyricPair.displayText(for: lyrics[$0]) }
+        let timing = timings.first { $0.sourceIndex == pair.leftIndex }
+        let rightTiming = pair.rightIndex.flatMap { index in timings.first { $0.sourceIndex == index } }
+        if text != currentLyricText || nextText != nextLyricText
+            || timing != currentLyricTiming || rightTiming != nextLyricTiming {
             currentLyricText = text
             nextLyricText = nextText
             currentLyricTiming = timing
+            nextLyricTiming = rightTiming
             compactLyricKey += 1
         }
     }
@@ -686,7 +704,7 @@ struct IslandRootView: View {
             return requestedIndex
         }
 
-        let displayElapsedMS = max(0, currentSnapshot.elapsed + 0.5) * 1000
+        let displayElapsedMS = max(0, currentSnapshot.elapsed) * 1000
         return lyrics.lastIndex { line in
             line.startTimeMS <= displayElapsedMS
         }
@@ -706,12 +724,15 @@ struct IslandRootView: View {
             currentLyricText = text
             nextLyricText = nil
             currentLyricTiming = nil
+            nextLyricTiming = nil
+            compactSingingLineIndex = nil
             compactLyricKey += 1
         }
     }
 
     private func updateCompactLyricLoadingStatusIfNeeded() {
-        guard settings.showMusicLyrics,
+        guard isMusicProActive,
+              settings.showMusicLyrics,
               currentSnapshot.isLive,
               viewModel.lyricsProvider.displayState.isLoading,
               viewModel.lyricsProvider.lyrics.isEmpty else {
@@ -728,7 +749,8 @@ struct IslandRootView: View {
     }
 
     private func configureCompactLyricLoadingTask() {
-        let shouldRun = settings.showMusicLyrics
+        let shouldRun = isMusicProActive
+            && settings.showMusicLyrics
             && currentSnapshot.isLive
             && viewModel.lyricsProvider.displayState.isLoading
             && viewModel.lyricsProvider.lyrics.isEmpty
@@ -760,14 +782,16 @@ struct IslandRootView: View {
             currentLyricText = nil
             nextLyricText = nil
             currentLyricTiming = nil
+            nextLyricTiming = nil
+            compactSingingLineIndex = nil
             compactLyricKey += 1
         }
     }
 
-    private func updateCompactCapsuleMode() {
+    private func updateCompactCapsuleMode(animatedForForegroundPrompt: Bool = false) {
         let presentation = CompactMusicPresentation.resolve(
             showsTrackName: false,
-            showsLyrics: settings.showMusicLyrics,
+            showsLyrics: isMusicProActive && settings.showMusicLyrics,
             track: CompactMusicTrackSnapshot(
                 isLive: currentSnapshot.isLive,
                 title: currentSnapshot.title,
@@ -778,7 +802,8 @@ struct IslandRootView: View {
         )
         let mode: CompactCapsuleContentMode
 
-        if settings.showDesktopLyrics,
+        if isMusicProActive,
+           settings.showDesktopLyrics,
            settings.lyricsPresentationMode == .menuBar {
             mode = .camera
         } else if presentation != nil {
@@ -786,39 +811,134 @@ struct IslandRootView: View {
         } else if foregroundPrompt != nil {
             mode = .status
         } else if settings.showCustomCompactIcons
-            && (settings.compactLeftSideIcon != .none || settings.compactRightSideIcon != .none) {
+            && (resolvedCompactSideIcon(settings.compactLeftSideIcon) != .none
+                || resolvedCompactSideIcon(settings.compactRightSideIcon) != .none) {
             mode = .status
         } else {
             mode = .camera
         }
 
-        viewModel.updateCompactContentMode(mode)
+        if animatedForForegroundPrompt {
+            withAnimation(foregroundPromptShellAnimation(isOpening: foregroundPrompt != nil)) {
+                viewModel.updateCompactContentMode(mode)
+            }
+        } else {
+            viewModel.updateCompactContentMode(mode)
+        }
+    }
+
+    private var isMusicProActive: Bool {
+        licenseManager.isProUnlocked
+    }
+
+    private func resolvedCompactSideIcon(_ icon: SettingsHomeSideIcon) -> SettingsHomeSideIcon {
+        guard settings.showCustomCompactIcons else { return .none }
+        if icon == .music, !isMusicProActive {
+            return .none
+        }
+        return icon
     }
 
     private func handleForegroundPrompt(_ prompt: ForegroundAppPrompt?) {
         guard settings.foregroundAppLinkEnabled, let prompt else { return }
+        let isAlreadyPresented = foregroundPrompt != nil
+        foregroundPromptTask?.cancel()
         foregroundPrompt = prompt
-        scheduleForegroundPromptClearIfNeeded()
-        updateCompactCapsuleMode()
+        if isAlreadyPresented {
+            if foregroundPromptRevealProgress < 1 {
+                withAnimation(foregroundPromptContentRevealAnimation) {
+                    foregroundPromptRevealProgress = 1
+                }
+            }
+            scheduleForegroundPromptClearIfNeeded()
+        } else {
+            foregroundPromptRevealProgress = 0
+            updateCompactCapsuleMode(animatedForForegroundPrompt: true)
+            scheduleForegroundPromptClearIfNeeded(revealContent: true)
+        }
     }
 
-    private func scheduleForegroundPromptClearIfNeeded() {
+    private func scheduleForegroundPromptClearIfNeeded(revealContent: Bool = false) {
         foregroundPromptTask?.cancel()
         guard foregroundPrompt != nil else { return }
 
         let delay = min(max(settings.foregroundHoldDuration, 0.5), 2.0)
         foregroundPromptTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            let revealDelay = revealContent && !accessibilityReduceMotion
+                ? IslandDesignTokens.foregroundPromptContentRevealDelay
+                : 0
+            if revealDelay > 0 {
+                await sleepForForegroundPrompt(seconds: revealDelay)
+                guard !Task.isCancelled else { return }
+            }
+
+            if revealContent {
+                withAnimation(foregroundPromptContentRevealAnimation) {
+                    foregroundPromptRevealProgress = 1
+                }
+            }
+
+            await sleepForForegroundPrompt(seconds: max(0, delay - revealDelay))
             guard !Task.isCancelled else { return }
-            clearForegroundPrompt()
+            await dismissForegroundPromptContent()
+            guard !Task.isCancelled else { return }
+            foregroundPromptTask = nil
         }
     }
 
     private func clearForegroundPrompt() {
         foregroundPromptTask?.cancel()
-        foregroundPromptTask = nil
+        guard foregroundPrompt != nil else {
+            foregroundPromptTask = nil
+            return
+        }
+
+        foregroundPromptTask = Task { @MainActor in
+            await dismissForegroundPromptContent()
+            guard !Task.isCancelled else { return }
+            foregroundPromptTask = nil
+        }
+    }
+
+    private func dismissForegroundPromptContent() async {
+        withAnimation(foregroundPromptContentHideAnimation) {
+            foregroundPromptRevealProgress = 0
+        }
+        await sleepForForegroundPrompt(
+            seconds: accessibilityReduceMotion
+                ? 0.08
+                : IslandDesignTokens.foregroundPromptContentHideDuration
+        )
+        guard !Task.isCancelled else { return }
+
         foregroundPrompt = nil
-        updateCompactCapsuleMode()
+        updateCompactCapsuleMode(animatedForForegroundPrompt: true)
+    }
+
+    private func sleepForForegroundPrompt(seconds: TimeInterval) async {
+        guard seconds > 0 else { return }
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+
+    private func foregroundPromptShellAnimation(isOpening: Bool) -> Animation {
+        if accessibilityReduceMotion {
+            return .easeOut(duration: isOpening ? 0.14 : 0.12)
+        }
+        return isOpening
+            ? IslandDesignTokens.foregroundPromptShellOpenAnimation
+            : IslandDesignTokens.foregroundPromptShellCloseAnimation
+    }
+
+    private var foregroundPromptContentRevealAnimation: Animation {
+        accessibilityReduceMotion
+            ? .easeOut(duration: 0.10)
+            : IslandDesignTokens.foregroundPromptContentRevealAnimation
+    }
+
+    private var foregroundPromptContentHideAnimation: Animation {
+        accessibilityReduceMotion
+            ? .easeOut(duration: 0.08)
+            : IslandDesignTokens.foregroundPromptContentHideAnimation
     }
 
 }

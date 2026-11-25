@@ -11,7 +11,27 @@ struct NotchGeometry: Equatable {
 
 @MainActor
 enum NotchGeometryProvider {
-    private static let fallbackCameraRegionWidth: CGFloat = 185
+
+    // CGWindow bounds use a top-left origin; AppKit display frames use a bottom-left origin.
+    static func windowServerScreenRect(for frame: CGRect, primaryScreenFrame: CGRect) -> CGRect {
+        CGRect(x: frame.minX, y: primaryScreenFrame.maxY - frame.maxY,
+               width: frame.width, height: frame.height)
+    }
+
+    static func floatingPanelRect(size: CGSize, screenFrame: CGRect, visibleFrame: CGRect,
+                                  scale: CGFloat, horizontalPosition: Double, topInset: Double, anchorHeight: CGFloat? = nil) -> CGRect {
+        let scale = max(1, scale)
+        let width = ceil(size.width * scale) / scale
+        let height = ceil(size.height * scale) / scale
+        let halfWidth = min(width / 2, screenFrame.width / 2)
+        let desiredCenter = screenFrame.minX + screenFrame.width * min(1, max(0, horizontalPosition))
+        let center = min(screenFrame.maxX - halfWidth, max(screenFrame.minX + halfWidth, desiredCenter))
+        // Workbench height changes must not move the capsule anchor. Oversized content may extend below the display.
+        let inset = min(max(0, topInset), max(0, visibleFrame.height - (anchorHeight ?? height)))
+        return CGRect(x: round((center - width / 2) * scale) / scale,
+                      y: round((visibleFrame.maxY - inset - height) * scale) / scale,
+                      width: width, height: height)
+    }
 
     static func cameraSafeRegionCenterX(for screen: NSScreen?) -> CGFloat? {
         cameraSafeRegionRect(for: screen)?.midX
@@ -102,7 +122,7 @@ enum NotchGeometryProvider {
     }
 
     private static func fallbackGeometry(width: CGFloat, height: CGFloat) -> NotchGeometry {
-        let cameraWidth = min(fallbackCameraRegionWidth, width)
+        let cameraWidth: CGFloat = 0
         let sideWidth = max(0, (width - cameraWidth) / 2)
 
         return NotchGeometry(
@@ -112,5 +132,14 @@ enum NotchGeometryProvider {
             totalWidth: width,
             height: height
         )
+    }
+}
+
+
+extension NSScreen {
+    var nookFlowDisplayID: String {
+        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue() else { return "" }
+        return CFUUIDCreateString(nil, uuid) as String
     }
 }

@@ -1,0 +1,32 @@
+[Unit]
+Description=NookFlow License Server
+After=network-online.target mysql.service
+Wants=network-online.target
+Requires=mysql.service
+
+[Service]
+Type=simple
+User=nookflow
+Group=nookflow
+WorkingDirectory=/opt/nookflow/server
+EnvironmentFile=/etc/nookflow/license.env
+ExecStart=/usr/bin/java -Xms64m -Xmx320m -XX:+ExitOnOutOfMemoryError -jar /opt/nookflow/server/license-server.jar
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+SuccessExitStatus=143
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=420M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

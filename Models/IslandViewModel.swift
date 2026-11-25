@@ -55,7 +55,8 @@ final class IslandViewModel: ObservableObject {
     @Published private(set) var todoTasks: [TodoTask] = []
 
     let playbackProvider: PlaybackProvider
-    let lyricsProvider = LyricsProvider()
+    let lyricsProvider: LyricsProvider
+    let enablesLiveServices: Bool
 
     // Collapse work-item that can be cancelled if the mouse re-enters.
     private var collapseWork: DispatchWorkItem?
@@ -76,9 +77,11 @@ final class IslandViewModel: ObservableObject {
     )
     private let settings: IslandSettings
 
-    init(settings: IslandSettings) {
+    init(settings: IslandSettings, enablesLiveServices: Bool = true) {
+        self.enablesLiveServices = enablesLiveServices
         self.settings = settings
-        playbackProvider = PlaybackProvider(settings: settings)
+        playbackProvider = PlaybackProvider(settings: settings, isMonitoringEnabled: enablesLiveServices)
+        lyricsProvider = LyricsProvider(observesMediaQueue: enablesLiveServices)
         compactContentMode = Self.initialCompactContentMode(settings: settings)
     }
 

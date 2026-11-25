@@ -17,7 +17,6 @@ final class IslandWindowController: NSObject {
     )
     private var trackingView: IslandTrackingView?
     private var cancellables = Set<AnyCancellable>()
-    private var tabPanelFrameSettlementTask: Task<Void, Never>?
     private var workspaceVisibilitySettlementTask: Task<Void, Never>?
     private var settingsPresentationTask: Task<Void, Never>?
     private var localMouseMonitor: Any?
@@ -25,6 +24,8 @@ final class IslandWindowController: NSObject {
     private var didShowUnsupportedHardwareAlert = false
     private var hasActiveExternalInteractiveFrame = false
     private var externalInteractionDismissGraceDeadline: Date?
+    private var tabTransitionPointerOrigin: NSPoint?
+    private var tabTransitionPointerTargetRect: NSRect?
     private var isExternalFileDragSessionActive = false
     private var fileDropHoverSuppressionRect: NSRect?
     private var requiresFreshNotchHoverAfterFileDrop = false
@@ -44,7 +45,6 @@ final class IslandWindowController: NSObject {
             }
         }
         cancellables.removeAll()
-        tabPanelFrameSettlementTask?.cancel()
         workspaceVisibilitySettlementTask?.cancel()
         settingsPresentationTask?.cancel()
         let trackingView = trackingView
@@ -273,8 +273,6 @@ final class IslandWindowController: NSObject {
         selectedTopTab: IslandTopTab? = nil
     ) {
         guard panel != nil else { return }
-        tabPanelFrameSettlementTask?.cancel()
-        tabPanelFrameSettlementTask = nil
 
         trackingView?.expandedShellSize = IslandShellLayout.contentSize(
             settings: settings,
@@ -288,40 +286,28 @@ final class IslandWindowController: NSObject {
     private func preparePanelFrameForTabTransition(to tab: IslandTopTab) {
         guard let panel else { return }
 
-        tabPanelFrameSettlementTask?.cancel()
-
         let targetSize = panelEnvelopeSize(selectedTopTab: tab)
+        beginTabTransitionPointerOwnership(
+            retaining: currentInteractiveShellRect,
+            target: interactiveShellRect(
+                for: IslandShellLayout.contentSize(
+                    settings: settings,
+                    selectedTopTab: tab
+                )
+            )
+        )
         let envelopeSize = CGSize(
             width: max(panel.frame.width, targetSize.width),
             height: max(panel.frame.height, targetSize.height)
         )
         let envelopeRect = panelRect(for: envelopeSize)
-        let targetRect = panelRect(for: targetSize)
 
-        // Keep AppKit's transparent host large enough for both pages, while SwiftUI
-        // performs the visible shell transition. Continuously resizing NSPanel would
-        // otherwise force every hidden grid to relayout on every animation frame.
+        // The SwiftUI shell owns the visible size transition. Keep AppKit's
+        // transparent host at the shared envelope until the island collapses;
+        // shrinking it again at the same animation boundary races SwiftUI's
+        // canvas settlement and produces an intermittent one-frame bounce.
+        // IslandHostingView still passes events outside the visual shell through.
         applyPanelFrame(envelopeRect, display: false)
-
-        tabPanelFrameSettlementTask = Task { @MainActor [weak self] in
-            let duration = tab == .home
-                ? IslandDesignTokens.tabReturnHomeDuration
-                : IslandDesignTokens.tabSwitchDuration
-            try? await Task.sleep(
-                nanoseconds: UInt64(duration * 1_000_000_000)
-            )
-            guard let self,
-                  !Task.isCancelled,
-                  self.viewModel.mode == .expanded,
-                  !self.viewModel.isCollapsing,
-                  self.viewModel.selectedTopTab == tab
-            else {
-                return
-            }
-
-            self.applyPanelFrame(targetRect, display: false)
-            self.reconcilePointerHoverState()
-        }
     }
 
     private func applyPanelFrame(
@@ -377,11 +363,11 @@ final class IslandWindowController: NSObject {
     }
 
     private func panelEnvelopeSize(selectedTopTab: IslandTopTab? = nil) -> CGSize {
-        let tab = selectedTopTab ?? viewModel.selectedTopTab
-        let expandedEnvelope = IslandShellLayout.openingWindowEnvelopeSize(
-            settings: settings,
-            selectedTopTab: tab
-        )
+        // Reserve one envelope for all workbench tabs so edge clamping cannot move the capsule on a tab switch.
+        let expandedEnvelope = [IslandTopTab.home, .applications, .files].reduce(CGSize.zero) { size, tab in
+            let candidate = IslandShellLayout.openingWindowEnvelopeSize(settings: settings, selectedTopTab: tab)
+            return CGSize(width: max(size.width, candidate.width), height: max(size.height, candidate.height))
+        }
         let expandedOverflowHeight = viewModel.presentationPhase == .collapsed
             ? 0
             : viewModel.expandedContentOverflowHeight
@@ -418,26 +404,28 @@ final class IslandWindowController: NSObject {
         )
     }
 
-    private func panelRect(for size: CGSize) -> NSRect {
-        guard let screen = NSScreen.main else {
-            return NSRect(origin: .zero, size: size)
-        }
+    private var preferredScreen: NSScreen? {
+        NSScreen.screens.first { !$0.nookFlowDisplayID.isEmpty && $0.nookFlowDisplayID == settings.preferredDisplayID }
+            ?? NSScreen.main ?? NSScreen.screens.first
+    }
 
-        let screenFrame = screen.frame
+    private func panelRect(for size: CGSize) -> NSRect {
+        guard let screen = preferredScreen else { return NSRect(origin: .zero, size: size) }
         let scale = max(1, screen.backingScaleFactor)
         let width = ceil(size.width * scale) / scale
         let height = ceil(size.height * scale) / scale
-        let centerX = NotchGeometryProvider.cameraSafeRegionCenterX(for: screen)
-            ?? screenFrame.midX
-        let x = round((centerX - width / 2) * scale) / scale
-        // Keep two physical pixels of the shell beyond the display edge. One
-        // pixel was still vulnerable to SwiftUI shape antialiasing while the
-        // file-drop host resized, exposing a bright hairline above the chooser.
-        let screenTop = ceil(screenFrame.maxY * scale) / scale
-        let topEdgeBleed = IslandDesignTokens.shellTopEdgeBleedPhysicalPixels / scale
-        let y = screenTop + topEdgeBleed - height
-
-        return NSRect(x: x, y: y, width: width, height: height)
+        if let center = NotchGeometryProvider.cameraSafeRegionCenterX(for: screen) {
+            let screenFrame = screen.frame
+            let screenTop = ceil(screenFrame.maxY * scale) / scale
+            let topEdgeBleed = IslandDesignTokens.shellTopEdgeBleedPhysicalPixels / scale
+            let y = screenTop + topEdgeBleed - height
+            return NSRect(x: round((center - width / 2) * scale) / scale,
+                          y: y, width: width, height: height)
+        }
+        return NotchGeometryProvider.floatingPanelRect(size: size, screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame, scale: scale,
+            horizontalPosition: settings.floatingHorizontalPosition, topInset: settings.floatingTopInset,
+            anchorHeight: viewModel.compactCapsuleSize.height)
     }
 
     private var compactCapsuleHitRect: NSRect {
@@ -468,7 +456,7 @@ final class IslandWindowController: NSObject {
 
     @discardableResult
     private func updateCompactCapsuleMetrics() -> Bool {
-        let screen = panel?.screen ?? NSScreen.main
+        let screen = preferredScreen
         guard let metrics = compactCapsuleMetrics(for: screen) else {
             return false
         }
@@ -492,10 +480,10 @@ final class IslandWindowController: NSObject {
     private func compactCapsuleMetrics(
         for screen: NSScreen?
     ) -> (camera: CGSize, status: CGSize, lyrics: CGSize)? {
-        guard let screen,
-              let cameraCapsule = NotchGeometryProvider.cameraCapsuleSize(for: screen)
-        else {
-            return nil
+        guard let screen else { return nil }
+        guard let cameraCapsule = NotchGeometryProvider.cameraCapsuleSize(for: screen) else {
+            let compact = CGSize(width: 220, height: 36)
+            return (compact, compact, CGSize(width: compactLyricsWidth(cameraWidth: 0, screenWidth: screen.frame.width), height: 36))
         }
 
         let cameraWidth = max(1, cameraCapsule.width)
@@ -532,46 +520,10 @@ final class IslandWindowController: NSObject {
     }
 
     private func compactLyricsWidth(cameraWidth: CGFloat, screenWidth: CGFloat) -> CGFloat {
-        let maximumWidth = screenWidth * IslandDesignTokens.compactLyricsCapsuleMaximumScreenRatio
-        let defaultWidth = min(
-            max(
-                IslandDesignTokens.compactLyricsCapsuleMinimumWidth,
-                cameraWidth + IslandDesignTokens.compactLyricsCapsuleHorizontalExtension * 2
-            ),
-            maximumWidth
+        CapsuleLyricsLayout.fittedWidth(
+            settings.capsuleLyricsWidth, cameraWidth: cameraWidth,
+            maximumWidth: screenWidth * IslandDesignTokens.compactLyricsCapsuleMaximumScreenRatio
         )
-
-        guard settings.showMusicLyrics,
-              !settings.showMusicTrackName
-        else {
-            return defaultWidth
-        }
-
-        let snapshot = viewModel.playbackProvider.snapshot
-        guard snapshot.isLive else { return defaultWidth }
-
-        let titleWidth = compactMusicTextWidth(snapshot.title)
-        let artistWidth = compactMusicTextWidth(snapshot.artist)
-        let sideTextWidth = max(titleWidth, artistWidth)
-        guard sideTextWidth > 0 else { return defaultWidth }
-
-        let measuredWidth = cameraWidth + (sideTextWidth + 20) * 2
-        let minimumWidth = max(
-            180,
-            cameraWidth + IslandDesignTokens.compactCapsuleHorizontalExtension * 2
-        )
-
-        return min(max(minimumWidth, measuredWidth), maximumWidth)
-    }
-
-    private func compactMusicTextWidth(_ text: String) -> CGFloat {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return 0 }
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold)
-        ]
-        return ceil((trimmed as NSString).size(withAttributes: attributes).width)
     }
 
     private func showUnsupportedHardwareAlert() {
@@ -580,19 +532,163 @@ final class IslandWindowController: NSObject {
 
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "当前设备暂不支持 NookFlow"
-        alert.informativeText = "NookFlow 需要带顶部摄像头刘海区域的 Mac。当前屏幕没有可识别的摄像头区域，因此不会显示灵动岛胶囊。"
+        alert.messageText = "未检测到可用显示器"
+        alert.informativeText = "连接显示器后，NookFlow 会重新定位。宽刘海使用原有布局，无刘海屏幕使用悬浮胶囊。"
         alert.addButton(withTitle: "知道了")
         alert.runModal()
     }
 
     private func collapseImmediatelyIfPointerOutsidePanel() {
+        if shouldRetainTabTransitionPointerOwnership(at: NSEvent.mouseLocation) {
+            return
+        }
+
         if isPointerInsidePanel {
+            clearTabTransitionPointerOwnership()
             viewModel.cancelCollapse()
             externalInteractionDismissGraceDeadline = nil
         } else {
             viewModel.scheduleCollapse(delay: pointerExitCollapseDelay())
         }
+    }
+
+    /// A tab click can make the island narrower than the point that initiated
+    /// the click. Preserve only a tapered intent corridor from that point into
+    /// the new shell. This permits deliberate travel to the selected page while
+    /// restoring ordinary dismissal as soon as the pointer heads elsewhere.
+    private func beginTabTransitionPointerOwnership(
+        retaining retentionRect: NSRect,
+        target targetRect: NSRect
+    ) {
+        let hitPadding: CGFloat = 4
+        let paddedRetentionRect = retentionRect.insetBy(dx: -hitPadding, dy: -hitPadding)
+        let pointer = NSEvent.mouseLocation
+        let paddedTargetRect = targetRect.insetBy(dx: -hitPadding, dy: -hitPadding)
+        guard paddedRetentionRect.contains(pointer),
+              !paddedTargetRect.contains(pointer)
+        else {
+            clearTabTransitionPointerOwnership()
+            return
+        }
+
+        tabTransitionPointerOrigin = pointer
+        tabTransitionPointerTargetRect = paddedTargetRect
+        viewModel.cancelCollapse()
+    }
+
+    private func shouldRetainTabTransitionPointerOwnership(at point: NSPoint) -> Bool {
+        guard let origin = tabTransitionPointerOrigin,
+              let targetRect = tabTransitionPointerTargetRect
+        else {
+            return false
+        }
+
+        if targetRect.contains(point) {
+            clearTabTransitionPointerOwnership()
+            return false
+        }
+
+        guard tabTransitionIntentCorridorContains(
+            point,
+            origin: origin,
+            targetRect: targetRect
+        ) else {
+            clearTabTransitionPointerOwnership()
+            return false
+        }
+
+        viewModel.cancelCollapse()
+        return true
+    }
+
+    private func tabTransitionIntentCorridorContains(
+        _ point: NSPoint,
+        origin: NSPoint,
+        targetRect: NSRect
+    ) -> Bool {
+        let originPadding: CGFloat = 8
+
+        if origin.x < targetRect.minX {
+            return pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x, y: origin.y - originPadding),
+                NSPoint(x: origin.x, y: origin.y + originPadding),
+                NSPoint(x: targetRect.minX, y: targetRect.maxY)
+            ) || pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x, y: origin.y - originPadding),
+                NSPoint(x: targetRect.minX, y: targetRect.maxY),
+                NSPoint(x: targetRect.minX, y: targetRect.minY)
+            )
+        }
+
+        if origin.x > targetRect.maxX {
+            return pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x, y: origin.y - originPadding),
+                NSPoint(x: targetRect.maxX, y: targetRect.minY),
+                NSPoint(x: targetRect.maxX, y: targetRect.maxY)
+            ) || pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x, y: origin.y - originPadding),
+                NSPoint(x: targetRect.maxX, y: targetRect.maxY),
+                NSPoint(x: origin.x, y: origin.y + originPadding)
+            )
+        }
+
+        if origin.y < targetRect.minY {
+            return pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x - originPadding, y: origin.y),
+                NSPoint(x: targetRect.minX, y: targetRect.minY),
+                NSPoint(x: targetRect.maxX, y: targetRect.minY)
+            ) || pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x - originPadding, y: origin.y),
+                NSPoint(x: targetRect.maxX, y: targetRect.minY),
+                NSPoint(x: origin.x + originPadding, y: origin.y)
+            )
+        }
+
+        if origin.y > targetRect.maxY {
+            return pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x - originPadding, y: origin.y),
+                NSPoint(x: origin.x + originPadding, y: origin.y),
+                NSPoint(x: targetRect.maxX, y: targetRect.maxY)
+            ) || pointInTabTransitionTriangle(
+                point,
+                NSPoint(x: origin.x - originPadding, y: origin.y),
+                NSPoint(x: targetRect.maxX, y: targetRect.maxY),
+                NSPoint(x: targetRect.minX, y: targetRect.maxY)
+            )
+        }
+
+        return false
+    }
+
+    private func pointInTabTransitionTriangle(
+        _ point: NSPoint,
+        _ first: NSPoint,
+        _ second: NSPoint,
+        _ third: NSPoint
+    ) -> Bool {
+        func signedArea(_ point1: NSPoint, _ point2: NSPoint, _ point3: NSPoint) -> CGFloat {
+            (point1.x - point3.x) * (point2.y - point3.y)
+                - (point2.x - point3.x) * (point1.y - point3.y)
+        }
+
+        let area1 = signedArea(point, first, second)
+        let area2 = signedArea(point, second, third)
+        let area3 = signedArea(point, third, first)
+        let hasNegative = area1 < 0 || area2 < 0 || area3 < 0
+        let hasPositive = area1 > 0 || area2 > 0 || area3 > 0
+        return !(hasNegative && hasPositive)
+    }
+
+    private func clearTabTransitionPointerOwnership() {
+        tabTransitionPointerOrigin = nil
+        tabTransitionPointerTargetRect = nil
     }
 
     private func pointerExitCollapseDelay() -> TimeInterval {
@@ -853,6 +949,28 @@ final class IslandWindowController: NSObject {
     }
 
     private func observeSettings() {
+        settings.$capsuleLyricsWidth
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                _ = self.updateCompactCapsuleMetrics()
+                self.setPanelFrameToCurrentEnvelope()
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest3(settings.$preferredDisplayID, settings.$floatingHorizontalPosition, settings.$floatingTopInset)
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                _ = self.updateCompactCapsuleMetrics()
+                self.positionPanel()
+                self.applyPanelVisibility()
+            }
+            .store(in: &cancellables)
+
         settings.$isIslandEnabled
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
@@ -919,6 +1037,18 @@ final class IslandWindowController: NSObject {
         }
         .store(in: &cancellables)
 
+        LicenseManager.shared.$state
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.viewModel.playbackProvider.updateAccessConfiguration(from: self.settings)
+                guard !self.viewModel.isCollapsing else { return }
+                self.setPanelFrame(for: self.viewModel.mode)
+            }
+            .store(in: &cancellables)
+
         viewModel.$presentationPhase
             .dropFirst()
             .receive(on: DispatchQueue.main)
@@ -929,6 +1059,7 @@ final class IslandWindowController: NSObject {
                 case .expandingShell:
                     self.setPanelFrame(for: self.viewModel.mode)
                 case .collapsed:
+                    self.clearTabTransitionPointerOwnership()
                     self.restoreExpandedShellTrackingSize()
                     self.setPanelFrameToCurrentEnvelope()
                 case .expanded:
@@ -1024,7 +1155,7 @@ final class IslandWindowController: NSObject {
                 self.trackingView?.compactCapsuleSize = size
 
                 let geometry = NotchGeometryProvider.geometry(
-                    for: self.panel?.screen ?? NSScreen.main,
+                    for: self.preferredScreen,
                     capsuleWidth: size.width,
                     capsuleHeight: size.height
                 )
@@ -1172,14 +1303,16 @@ final class IslandWindowController: NSObject {
     }
 
     private func isFullscreenAppActive() -> Bool {
-        guard let screen = NSScreen.main,
+        guard let screen = preferredScreen,
               let activeApp = NSWorkspace.shared.frontmostApplication,
               activeApp.processIdentifier != ProcessInfo.processInfo.processIdentifier
         else {
             return false
         }
 
-        let screenFrame = screen.frame
+        let screenFrame = NotchGeometryProvider.windowServerScreenRect(
+            for: screen.frame, primaryScreenFrame: NSScreen.screens.first?.frame ?? screen.frame
+        )
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return false
         }
@@ -1633,6 +1766,10 @@ private final class IslandTrackingView: NSView {
 
 private final class IslandHostingView<Content: View>: NSHostingView<Content> {
     var shouldReceiveMouseEvents: (() -> Bool)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard shouldReceiveMouseEvents?() == true else {

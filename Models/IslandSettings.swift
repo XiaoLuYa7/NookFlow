@@ -1,6 +1,59 @@
 import AppKit
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
+
+enum ImageCardSourceAccess {
+    static func bookmarkData(for url: URL) -> Data? {
+        try? url.bookmarkData(
+            options: .withSecurityScope,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+    }
+
+    static func resolveURL(path: String, bookmarkData: Data) -> URL? {
+        if !bookmarkData.isEmpty {
+            var isStale = false
+            if let url = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ) {
+                return url
+            }
+        }
+
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedPath.isEmpty ? nil : URL(fileURLWithPath: trimmedPath)
+    }
+
+    nonisolated static func imageURLs(in sourceURL: URL) -> [URL] {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .contentTypeKey]
+        guard let values = try? sourceURL.resourceValues(forKeys: keys) else { return [] }
+
+        if values.isDirectory == true {
+            let urls = (try? FileManager.default.contentsOfDirectory(
+                at: sourceURL,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            )) ?? []
+
+            return urls
+                .filter { url in
+                    guard let values = try? url.resourceValues(forKeys: keys),
+                          values.isRegularFile == true else { return false }
+                    return values.contentType?.conforms(to: .image) == true
+                }
+                .sorted {
+                    $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+                }
+        }
+
+        return values.contentType?.conforms(to: .image) == true ? [sourceURL] : []
+    }
+}
 
 enum IslandLanguage: String, CaseIterable, Identifiable {
     case chinese
@@ -12,6 +65,14 @@ enum IslandLanguage: String, CaseIterable, Identifiable {
         switch self {
         case .chinese: "中文"
         case .english: "English"
+        }
+    }
+
+    /// Resource languages used by AppKit and embedded frameworks such as Sparkle.
+    var resourceLanguagePreferences: [String] {
+        switch self {
+        case .chinese: ["zh-Hans"]
+        case .english: ["en"]
         }
     }
 }
@@ -253,7 +314,10 @@ final class IslandSettings: ObservableObject {
     }
 
     @Published var language: IslandLanguage {
-        didSet { save(language.rawValue, for: Keys.language) }
+        didSet {
+            save(language.rawValue, for: Keys.language)
+            applyResourceLanguagePreference()
+        }
     }
 
     @Published private(set) var launchAtLogin: Bool
@@ -313,6 +377,16 @@ final class IslandSettings: ObservableObject {
         didSet { save(islandBackgroundStyle.rawValue, for: Keys.islandBackgroundStyle) }
     }
 
+    @Published var preferredDisplayID: String {
+        didSet { save(preferredDisplayID, for: "settings.preferredDisplayID") }
+    }
+    @Published var floatingHorizontalPosition: Double {
+        didSet { save(floatingHorizontalPosition, for: "settings.floatingHorizontalPosition") }
+    }
+    @Published var floatingTopInset: Double {
+        didSet { save(floatingTopInset, for: "settings.floatingTopInset") }
+    }
+
     @Published var displayStrategy: IslandDisplayStrategy {
         didSet { save(displayStrategy.rawValue, for: Keys.displayStrategy) }
     }
@@ -367,9 +441,25 @@ final class IslandSettings: ObservableObject {
         }
     }
 
+    @Published var capsuleLyricsWidth: Double {
+        didSet {
+            let value = CapsuleLyricsLayout.clampedWidth(capsuleLyricsWidth)
+            if capsuleLyricsWidth != value { capsuleLyricsWidth = value }
+            save(capsuleLyricsWidth, for: Keys.capsuleLyricsWidth)
+        }
+    }
+
+    @Published var capsuleLyricsFontSize: Double {
+        didSet {
+            let value = CapsuleLyricsLayout.clampedFontSize(capsuleLyricsFontSize)
+            if capsuleLyricsFontSize != value { capsuleLyricsFontSize = value }
+            save(capsuleLyricsFontSize, for: Keys.capsuleLyricsFontSize)
+        }
+    }
+
     @Published var menuBarLyricsWidth: Double {
         didSet {
-            let clampedValue = min(max(menuBarLyricsWidth, 100), 150)
+            let clampedValue = min(max(menuBarLyricsWidth, 100), 200)
             if menuBarLyricsWidth != clampedValue {
                 menuBarLyricsWidth = clampedValue
                 return
@@ -427,6 +517,10 @@ final class IslandSettings: ObservableObject {
         didSet { save(imageCardPath, for: Keys.imageCardPath) }
     }
 
+    @Published var imageCardBookmarkData: Data {
+        didSet { save(imageCardBookmarkData, for: Keys.imageCardBookmarkData) }
+    }
+
     @Published var quickAppsSettingsTrigger: Bool = false
     @Published var shortcutsSettingsTrigger: Bool = false
 
@@ -466,7 +560,9 @@ final class IslandSettings: ObservableObject {
         isIslandEnabled = defaults.object(forKey: Keys.isIslandEnabled) as? Bool ?? true
         showCustomCompactIcons = defaults.object(forKey: Keys.showCustomCompactIcons) as? Bool ?? true
         let savedLanguage = defaults.string(forKey: Keys.language)
-        language = IslandLanguage(rawValue: savedLanguage ?? "") ?? .chinese
+        let resolvedLanguage = IslandLanguage(rawValue: savedLanguage ?? "") ?? .chinese
+        language = resolvedLanguage
+        Self.applyResourceLanguagePreference(resolvedLanguage, to: defaults)
         let systemLaunchAtLoginEnabled = Self.isLaunchAtLoginEnabled
         launchAtLogin = systemLaunchAtLoginEnabled
         launchAtLoginError = nil
@@ -494,16 +590,19 @@ final class IslandSettings: ObservableObject {
         islandBackgroundStyle = IslandBackgroundStyle(
             rawValue: defaults.string(forKey: Keys.islandBackgroundStyle) ?? ""
         ) ?? .solid
+        preferredDisplayID = defaults.string(forKey: "settings.preferredDisplayID") ?? ""
+        floatingHorizontalPosition = min(1, max(0, defaults.object(forKey: "settings.floatingHorizontalPosition") as? Double ?? 0.5))
+        floatingTopInset = min(200, max(0, defaults.object(forKey: "settings.floatingTopInset") as? Double ?? 12))
         displayStrategy = IslandDisplayStrategy(
             rawValue: defaults.string(forKey: Keys.displayStrategy) ?? ""
         ) ?? .main
         showWeatherModule = defaults.object(forKey: Keys.showWeatherModule) as? Bool ?? true
-        showTodoModule = defaults.object(forKey: Keys.showTodoModule) as? Bool ?? true
-        showMediaModule = defaults.object(forKey: Keys.showMediaModule) as? Bool ?? true
+        showTodoModule = defaults.object(forKey: Keys.showTodoModule) as? Bool ?? false
+        showMediaModule = defaults.object(forKey: Keys.showMediaModule) as? Bool ?? false
         showMusicTrackName = defaults.object(forKey: Keys.showMusicTrackName) as? Bool ?? true
         let legacyCapsuleLyricsEnabled =
             defaults.object(forKey: Keys.showMusicLyrics) as? Bool
-        showMusicLyrics = legacyCapsuleLyricsEnabled ?? true
+        showMusicLyrics = legacyCapsuleLyricsEnabled ?? false
         allowAppleMusicAccess = defaults.object(forKey: Keys.allowAppleMusicAccess) as? Bool ?? true
         allowSpotifyAccess = defaults.object(forKey: Keys.allowSpotifyAccess) as? Bool ?? false
         allowQQMusicAccess = defaults.object(forKey: Keys.allowQQMusicAccess) as? Bool ?? false
@@ -512,7 +611,6 @@ final class IslandSettings: ObservableObject {
             defaults.object(forKey: Keys.showDesktopLyrics) as? Bool
         showDesktopLyrics = legacyDesktopLyricsEnabled == true
             || legacyCapsuleLyricsEnabled == true
-            || (legacyDesktopLyricsEnabled == nil && legacyCapsuleLyricsEnabled == nil)
         if let storedMode = LyricsPresentationMode(
             rawValue: defaults.string(forKey: Keys.lyricsPresentationMode) ?? ""
         ) {
@@ -520,9 +618,15 @@ final class IslandSettings: ObservableObject {
         } else {
             lyricsPresentationMode = legacyDesktopLyricsEnabled == true ? .desktop : .capsule
         }
+        capsuleLyricsWidth = CapsuleLyricsLayout.clampedWidth(
+            defaults.object(forKey: Keys.capsuleLyricsWidth) as? Double ?? CapsuleLyricsLayout.defaultWidth
+        )
+        capsuleLyricsFontSize = CapsuleLyricsLayout.clampedFontSize(
+            defaults.object(forKey: Keys.capsuleLyricsFontSize) as? Double ?? CapsuleLyricsLayout.defaultFontSize
+        )
         menuBarLyricsWidth = min(
             max(defaults.object(forKey: Keys.menuBarLyricsWidth) as? Double ?? 220, 100),
-            150
+            200
         )
         menuBarLyricsShowsPlaybackControls =
             defaults.object(forKey: Keys.menuBarLyricsShowsPlaybackControls) as? Bool ?? true
@@ -533,15 +637,16 @@ final class IslandSettings: ObservableObject {
         desktopLyricsColorMode = DesktopLyricsColorMode(
             rawValue: defaults.string(forKey: Keys.desktopLyricsColorMode) ?? ""
         ) ?? .automatic
-        showQuickAppsModule = defaults.object(forKey: Keys.showQuickAppsModule) as? Bool ?? true
+        showQuickAppsModule = defaults.object(forKey: Keys.showQuickAppsModule) as? Bool ?? false
         quickAppsColumnCount = QuickAppsColumnCount(
             rawValue: defaults.object(forKey: Keys.quickAppsColumnCount) as? Int ?? 2
         ) ?? .two
-        showShortcutsModule = defaults.object(forKey: Keys.showShortcutsModule) as? Bool ?? true
+        showShortcutsModule = defaults.object(forKey: Keys.showShortcutsModule) as? Bool ?? false
         showImageCardModule = defaults.object(forKey: Keys.showImageCardModule) as? Bool ?? true
         showDeviceInfoModule = defaults.object(forKey: Keys.showDeviceInfoModule) as? Bool ?? true
         showMirrorModule = defaults.object(forKey: Keys.showMirrorModule) as? Bool ?? false
         imageCardPath = defaults.string(forKey: Keys.imageCardPath) ?? ""
+        imageCardBookmarkData = defaults.data(forKey: Keys.imageCardBookmarkData) ?? Data()
         let storedOpenSpeed = defaults.object(forKey: Keys.openSpeed) as? Double ?? 0.59
         let storedCloseSpeed = defaults.object(forKey: Keys.closeSpeed) as? Double ?? 0.59
         openSpeed = Self.migratedAnimationSpeed(storedOpenSpeed)
@@ -575,6 +680,17 @@ final class IslandSettings: ObservableObject {
         }
     }
 
+    private func applyResourceLanguagePreference() {
+        Self.applyResourceLanguagePreference(language, to: defaults)
+    }
+
+    private static func applyResourceLanguagePreference(
+        _ language: IslandLanguage,
+        to defaults: UserDefaults
+    ) {
+        defaults.set(language.resourceLanguagePreferences, forKey: "AppleLanguages")
+    }
+
     private static func migratedAnimationSpeed(_ value: Double) -> Double {
         abs(value - 0.36) < 0.0001 ? 0.50 : value
     }
@@ -585,6 +701,9 @@ final class IslandSettings: ObservableObject {
     ) -> SettingsHomeSideIcon {
         SettingsHomeSideIcon.sideOptions.contains(icon) ? icon : fallback
     }
+
+    // Test-window overrides are never persisted to user preferences.
+    @Published var simulationExpandedSize: CGSize?
 
     var islandSize: CGSize {
         CGSize(width: islandWidth, height: islandHeight)
@@ -624,6 +743,9 @@ final class IslandSettings: ObservableObject {
         trackpadFeedbackMode = .single
         islandBackgroundStyle = .solid
         hideInFullscreen = true
+        preferredDisplayID = ""
+        floatingHorizontalPosition = 0.5
+        floatingTopInset = 12
         displayStrategy = .main
     }
 
@@ -658,6 +780,8 @@ final class IslandSettings: ObservableObject {
         static let allowNetEaseMusicAccess = "settings.allowNetEaseMusicAccess"
         static let showDesktopLyrics = "settings.showDesktopLyrics"
         static let lyricsPresentationMode = "settings.lyricsPresentationMode"
+        static let capsuleLyricsWidth = "settings.capsuleLyricsWidth"
+        static let capsuleLyricsFontSize = "settings.capsuleLyricsFontSize"
         static let menuBarLyricsWidth = "settings.menuBarLyricsWidth"
         static let menuBarLyricsShowsPlaybackControls =
             "settings.menuBarLyricsShowsPlaybackControls"
@@ -671,6 +795,7 @@ final class IslandSettings: ObservableObject {
         static let showDeviceInfoModule = "settings.showDeviceInfoModule"
         static let showMirrorModule = "settings.showMirrorModule"
         static let imageCardPath = "settings.imageCardPath"
+        static let imageCardBookmarkData = "settings.imageCardBookmarkData"
         static let openSpeed = "settings.openSpeed"
         static let closeSpeed = "settings.closeSpeed"
         static let closeDelay = "settings.closeDelay"

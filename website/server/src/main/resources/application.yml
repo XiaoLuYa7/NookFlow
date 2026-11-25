@@ -1,0 +1,74 @@
+server:
+  address: 127.0.0.1
+  port: 8787
+  forward-headers-strategy: framework
+  shutdown: graceful
+  error:
+    include-message: never
+
+spring:
+  application:
+    name: nookflow-license
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    hikari:
+      maximum-pool-size: 6
+      minimum-idle: 1
+      connection-timeout: 5000
+      max-lifetime: 1200000
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+  mail:
+    host: ${SMTP_HOST:smtp.qq.com}
+    port: ${SMTP_PORT:465}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_AUTH_CODE:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 10000
+          writetimeout: 10000
+
+nookflow:
+  license:
+    code-pepper: ${LICENSE_CODE_PEPPER}
+    signing-private-jwk: ${LICENSE_SIGNING_PRIVATE_JWK}
+    admin-token: ${ADMIN_TOKEN}
+    check-after-days: 14
+    offline-grace-days: 30
+    request-clock-skew-seconds: 300
+    rate-limit-per-minute: 60
+  payment:
+    enabled: ${PAYMENT_ENABLED:false}
+    base-url: ${YKM_API_URL:https://pay.ykmcn.com}
+    merchant-id: ${YKM_MERCHANT_ID:}
+    merchant-private-key: ${YKM_MERCHANT_PRIVATE_KEY:}
+    platform-public-key: ${YKM_PLATFORM_PUBLIC_KEY:}
+    delivery-encryption-key: ${PAYMENT_DELIVERY_ENCRYPTION_KEY:}
+    public-base-url: ${PUBLIC_BASE_URL:}
+    product-price-cents: ${NOOKFLOW_PRO_PRICE_CENTS:990}
+    order-expiry-minutes: 30
+    timestamp-skew-seconds: 600
+    provider-query-cooldown-seconds: 8
+  mail:
+    enabled: ${LICENSE_MAIL_ENABLED:false}
+    from-address: ${LICENSE_MAIL_FROM:${SMTP_USERNAME:}}
+    from-name: ${LICENSE_MAIL_FROM_NAME:NookFlow}
+    max-attempts: ${LICENSE_MAIL_MAX_ATTEMPTS:5}
+    retry-delay-seconds: ${LICENSE_MAIL_RETRY_DELAY_SECONDS:60}
+    poll-delay-millis: ${LICENSE_MAIL_POLL_DELAY_MILLIS:30000}
+
+logging:
+  level:
+    root: INFO
+    com.nookflow.license: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ssXXX} %-5level %logger{36} - %msg%n"

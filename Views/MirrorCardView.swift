@@ -361,22 +361,13 @@ struct MirrorCardView: View {
     let isActive: Bool
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             header
             previewSurface
         }
         .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.10, green: 0.13, blue: 0.15).opacity(0.72),
-                    Color.black.opacity(0.18)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
+        .background(Color.white.opacity(0.025))
         .onChange(of: isActive) { _, active in
             if active {
                 updateCameraActivity()
@@ -390,68 +381,41 @@ struct MirrorCardView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 7) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-                Image(systemName: "person.crop.square")
-                    .font(.system(size: 11, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.white.opacity(0.84))
-            }
-            .frame(width: 26, height: 26)
+        HStack(spacing: 6) {
+            Text("镜子")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.88))
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text("镜子")
-                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.94))
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 4, height: 4)
-                    Text(statusText)
-                        .font(.system(size: 8.5, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.55))
-                }
+            if isCameraEnabled {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 4, height: 4)
+                    .accessibilityHidden(true)
             }
 
-            Spacer(minLength: 2)
+            Spacer(minLength: 4)
 
             Button(action: toggleCamera) {
-                Image(systemName: isCameraEnabled ? "xmark" : "camera.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(0.90))
-                    .frame(width: 26, height: 26)
+                Image(systemName: "power")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.86))
+                    .frame(width: 26, height: 22)
                     .background(
-                        isCameraEnabled
-                            ? Color.white.opacity(0.13)
-                            : Color(red: 0.20, green: 0.62, blue: 0.61).opacity(0.88),
-                        in: Circle()
+                        Color.white.opacity(isCameraEnabled ? 0.10 : 0.05),
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                     )
-                    .overlay {
-                        Circle().stroke(Color.white.opacity(0.12), lineWidth: 0.7)
-                    }
             }
             .buttonStyle(MirrorControlButtonStyle(reduceMotion: reduceMotion))
-            .help(isCameraEnabled ? "关闭镜子" : "开启镜子")
+            .help("\(isCameraEnabled ? "关闭镜子" : "开启镜子") · 仅实时预览，不会保存")
             .accessibilityLabel(isCameraEnabled ? "关闭镜子" : "开启镜子")
+            .accessibilityValue(statusText)
         }
-        .frame(height: 28)
+        .frame(height: 22)
     }
 
     private var previewSurface: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.16, green: 0.32, blue: 0.35).opacity(0.72),
-                            Color(red: 0.035, green: 0.055, blue: 0.065)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+            Color.white.opacity(0.045)
 
             MirrorCameraPreview(
                 session: camera.session,
@@ -463,52 +427,23 @@ struct MirrorCardView: View {
             previewContent
         }
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.20), Color.white.opacity(0.055)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.8
-                )
-        }
-        .shadow(color: .black.opacity(0.22), radius: 5, y: 3)
         .animation(.easeOut(duration: reduceMotion ? 0.08 : 0.16), value: camera.state)
     }
 
     @ViewBuilder
     private var previewContent: some View {
         if camera.state == .running, isCameraEnabled {
-            ZStack(alignment: .bottom) {
-                if !camera.isPreviewReady {
-                    VStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(.white)
-                        Text("正在连接画面")
-                            .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.64))
-                    }
+            if !camera.isPreviewReady {
+                VStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                    Text("正在连接画面")
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.64))
                 }
-
-                LinearGradient(
-                    colors: [Color.clear, Color.black.opacity(0.50)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
-                .allowsHitTesting(false)
-
-                Label("实时镜像 · 不会保存", systemImage: "lock.fill")
-                    .font(.system(size: 8, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.84))
-                    .padding(.horizontal, 8)
-                    .frame(height: 20)
-                    .background(Color.black.opacity(0.25), in: Capsule(style: .continuous))
-                    .padding(.bottom, 7)
+                .transition(.opacity)
             }
-            .transition(.opacity)
         } else if camera.state == .denied, isCameraEnabled {
             mirrorMessage(
                 symbol: "camera.fill.badge.ellipsis",
@@ -534,28 +469,20 @@ struct MirrorCardView: View {
             }
         } else {
             Button(action: activateCamera) {
-                VStack(spacing: 7) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.white.opacity(0.09))
-                            .overlay {
-                                Circle().stroke(Color.white.opacity(0.12), lineWidth: 0.8)
-                            }
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.82))
-                    }
-                    .frame(width: 38, height: 38)
-
-                    Text("点击开启镜子")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.78))
-                }
+                Label("开启镜子", systemImage: "camera")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.82))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(
+                        Color.white.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(MirrorControlButtonStyle(reduceMotion: reduceMotion))
-            .help("开启镜子")
+            .help("开启镜子 · 仅实时预览，不会保存")
         }
     }
 

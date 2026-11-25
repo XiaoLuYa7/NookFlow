@@ -9,6 +9,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     case quickApps
     case shortcuts
     case notifications
+    case license
     case general
     case about
 
@@ -22,6 +23,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .quickApps: "应用"
         case .shortcuts: "指令"
         case .notifications: "通知"
+        case .license: "许可"
         case .general: "通用"
         case .about: "关于"
         }
@@ -35,10 +37,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .quickApps: "square.grid.2x2"
         case .shortcuts: "bolt"
         case .notifications: "bell"
+        case .license: "key"
         case .general: "gearshape"
         case .about: "info.circle"
         }
     }
+
 }
 
 enum SettingsPreviewMode: String, CaseIterable, Identifiable {
@@ -235,7 +239,7 @@ enum SettingsWidget: String, CaseIterable, Identifiable {
         case .music: "播放信息与歌词"
         case .quickApps: "常用应用启动"
         case .shortcuts: "运行系统快捷指令"
-        case .imageCard: "展示一张灵动岛图片"
+        case .imageCard: "展示图片或循环播放文件夹"
         case .deviceInfo: "查看 CPU 与存储状态"
         }
     }
@@ -256,11 +260,8 @@ enum SettingsWidget: String, CaseIterable, Identifiable {
         }
     }
 
-    var tag: String {
-        switch self {
-        case .command, .todo: "Pro"
-        default: "Free"
-        }
+    var requiresPro: Bool {
+        self == .todo || self == .music
     }
 
     var settingsPage: SettingsPage? {
@@ -290,6 +291,8 @@ final class SettingsEditorModel: ObservableObject {
     @Published var lyricsPresentationMode: LyricsPresentationMode = .desktop {
         didSet { markChanged() }
     }
+    @Published var capsuleLyricsWidth = CapsuleLyricsLayout.defaultWidth { didSet { markChanged() } }
+    @Published var capsuleLyricsFontSize = CapsuleLyricsLayout.defaultFontSize { didSet { markChanged() } }
     @Published var menuBarLyricsWidth = 220.0 { didSet { markChanged() } }
     @Published var menuBarLyricsShowsPlaybackControls = true {
         didSet { markChanged() }
@@ -310,6 +313,11 @@ final class SettingsEditorModel: ObservableObject {
         }
     }
     @Published var imageCardPath: String = "" {
+        didSet {
+            markChanged()
+        }
+    }
+    @Published var imageCardBookmarkData = Data() {
         didSet {
             markChanged()
         }
@@ -349,11 +357,14 @@ final class SettingsEditorModel: ObservableObject {
             ? supportedSideIcon(settings.compactRightSideIcon, fallback: .battery)
             : .none
         imageCardPath = settings.imageCardPath
+        imageCardBookmarkData = settings.imageCardBookmarkData
         leftStatusItems = [.network, .lunar, .battery, .temperature]
         rightStatusItems = [.calendar, .clock, .humidity, .weather]
         enabledWidgets = defaultEnabledWidgets(from: settings)
         showDesktopLyrics = settings.showDesktopLyrics
         lyricsPresentationMode = settings.lyricsPresentationMode
+        capsuleLyricsWidth = settings.capsuleLyricsWidth
+        capsuleLyricsFontSize = settings.capsuleLyricsFontSize
         menuBarLyricsWidth = settings.menuBarLyricsWidth
         menuBarLyricsShowsPlaybackControls = settings.menuBarLyricsShowsPlaybackControls
         allowAppleMusicAccess = settings.allowAppleMusicAccess
@@ -376,8 +387,11 @@ final class SettingsEditorModel: ObservableObject {
         update(\.showDeviceInfoModule, to: enabledWidgets.contains(.deviceInfo))
         update(\.showMirrorModule, to: enabledWidgets.contains(.mirror))
         update(\.imageCardPath, to: imageCardPath)
+        update(\.imageCardBookmarkData, to: imageCardBookmarkData)
         update(\.showDesktopLyrics, to: showDesktopLyrics)
         update(\.lyricsPresentationMode, to: lyricsPresentationMode)
+        update(\.capsuleLyricsWidth, to: capsuleLyricsWidth)
+        update(\.capsuleLyricsFontSize, to: capsuleLyricsFontSize)
         update(\.menuBarLyricsWidth, to: menuBarLyricsWidth)
         update(
             \.menuBarLyricsShowsPlaybackControls,
@@ -500,10 +514,13 @@ struct SettingsRootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var settings: IslandSettings
     @StateObject private var model: SettingsEditorModel
+    @StateObject private var licenseManager = LicenseManager.shared
     @State private var isSidebarCollapsed = false
     @State private var previewImageCardImage: NSImage?
     @State private var previewImageCardImagePath = ""
     @State private var previewImageCardLoadTask: Task<Void, Never>?
+    @State private var pendingProWidget: SettingsWidget?
+    @State private var isShowingProActivation = false
 
     init(settings: IslandSettings) {
         self.settings = settings
@@ -518,8 +535,9 @@ struct SettingsRootView: View {
     var body: some View {
         AppShellView {
             SidebarView(
-                selection: $model.selectedSettingsPage,
-                isCollapsed: $isSidebarCollapsed
+                selection: settingsPageSelection,
+                isCollapsed: $isSidebarCollapsed,
+                onLicenseRequested: presentLicenseActivation
             )
         } content: {
             content
@@ -532,8 +550,13 @@ struct SettingsRootView: View {
         .onAppear {
             consumeNavigationTriggers()
             loadPreviewImageCardThumbnailIfNeeded()
+            Task { await licenseManager.refreshIfNeeded() }
         }
         .onChange(of: model.imageCardPath) { _, _ in
+            loadPreviewImageCardThumbnailIfNeeded()
+        }
+        .onChange(of: model.imageCardBookmarkData) { _, _ in
+            previewImageCardImagePath = ""
             loadPreviewImageCardThumbnailIfNeeded()
         }
         .onChange(of: settings.quickAppsSettingsTrigger) { _, _ in
@@ -551,9 +574,31 @@ struct SettingsRootView: View {
                 model.showFeedbackSheet = false
             }
         }
+        .overlay {
+            if isShowingProActivation {
+                ProActivationModal(
+                    manager: licenseManager,
+                    requestedFeatureName: pendingProWidget?.title,
+                    onActivated: {
+                        completeProActivation()
+                    },
+                    onClose: dismissProActivation
+                )
+                .transition(
+                    reduceMotion
+                        ? .opacity
+                        : .opacity.combined(with: .scale(scale: 0.985, anchor: .center))
+                )
+                .zIndex(10)
+            }
+        }
     }
 
     private func consumeNavigationTriggers() {
+        if model.selectedSettingsPage == .license {
+            model.selectedSettingsPage = .home
+            presentLicenseActivation()
+        }
         if settings.quickAppsSettingsTrigger {
             model.selectedSettingsPage = .quickApps
             settings.quickAppsSettingsTrigger = false
@@ -564,15 +609,24 @@ struct SettingsRootView: View {
         }
     }
 
+    private var settingsPageSelection: Binding<SettingsPage> {
+        Binding(
+            get: { model.selectedSettingsPage },
+            set: { requestedPage in
+                guard requestedPage != .license else {
+                    presentLicenseActivation()
+                    return
+                }
+                model.selectedSettingsPage = requestedPage
+            }
+        )
+    }
+
     @ViewBuilder
     private var content: some View {
         selectedPageContent
             .id(model.selectedSettingsPage)
-            .transition(
-                .opacity.combined(
-                    with: .scale(scale: reduceMotion ? 1 : 0.995, anchor: .top)
-                )
-            )
+            .transition(.opacity)
             .animation(
                 AppMotion.resolved(AppMotion.settingsPage, reduceMotion: reduceMotion),
                 value: model.selectedSettingsPage
@@ -596,6 +650,8 @@ struct SettingsRootView: View {
             ShortcutsSettingsView()
         case .notifications:
             NotificationSettingsView()
+        case .license:
+            LicenseSettingsView(manager: licenseManager)
         case .general:
             GeneralSettingsView(settings: settings)
         case .about:
@@ -642,7 +698,7 @@ struct SettingsRootView: View {
             HStack(spacing: AppSpacing.lg) {
                 VStack(alignment: .leading, spacing: AppSpacing.xs) {
                     SectionTitle(title: "灵动岛预览", systemName: "sparkles.rectangle.stack")
-                    Text("切换状态，即时查看当前组合的实际布局。")
+                    Text("效果预览 · 示例内容，非设备实时数据。")
                         .font(AppTypography.supporting)
                         .foregroundStyle(AppColor.textSecondary)
                 }
@@ -728,10 +784,10 @@ struct SettingsRootView: View {
                     expandedScale: expandedScale
                 )
                     .padding(.top, screenTopInset)
-                    .animation(AppMotion.page, value: model.selectedPreviewMode)
-                    .animation(AppMotion.standard, value: model.leftSideIcon)
-                    .animation(AppMotion.standard, value: model.rightSideIcon)
-                    .animation(AppMotion.standard, value: settings.moduleOrder)
+                    .animation(AppMotion.resolved(AppMotion.page, reduceMotion: reduceMotion), value: model.selectedPreviewMode)
+                    .animation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion), value: model.leftSideIcon)
+                    .animation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion), value: model.rightSideIcon)
+                    .animation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion), value: settings.moduleOrder)
 
                 computerScreenGlassOverlay(
                     width: previewWidth,
@@ -1331,11 +1387,27 @@ struct SettingsRootView: View {
             return
         }
 
+        let bookmarkData = model.imageCardBookmarkData
         previewImageCardLoadTask = Task { @MainActor in
-            let image = await Task.detached(priority: .utility) { () -> NSImage? in
-                guard FileManager.default.fileExists(atPath: path) else { return nil }
-                return NSImage(contentsOfFile: path)
+            guard let sourceURL = ImageCardSourceAccess.resolveURL(
+                path: path,
+                bookmarkData: bookmarkData
+            ) else { return }
+            let didStartAccess = sourceURL.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccess {
+                    sourceURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let urls = await Task.detached(priority: .utility) {
+                ImageCardSourceAccess.imageURLs(in: sourceURL)
             }.value
+            guard !Task.isCancelled, let url = urls.first else { return }
+            let image = await ThreadSafeImageCache.shared.preview(
+                for: url,
+                targetSize: NSSize(width: 160, height: 160)
+            )
 
             guard !Task.isCancelled, previewImageCardImagePath == path else { return }
             previewImageCardImage = image
@@ -1474,6 +1546,21 @@ struct SettingsRootView: View {
                 isEnabled: model.showDesktopLyrics,
                 selection: $model.lyricsPresentationMode
             )
+            if model.lyricsPresentationMode == .capsule {
+                SettingsSliderRow(
+                    icon: nil, title: "胶囊宽度",
+                    subtitle: "整个歌词胶囊的宽度，包含刘海安全区；实际宽度受屏幕空间限制",
+                    value: $model.capsuleLyricsWidth, in: CapsuleLyricsLayout.widthRange, step: 1,
+                    isEnabled: model.showDesktopLyrics,
+                    valueText: { "\(Int($0)) pt" }
+                )
+                SettingsSliderRow(
+                    icon: nil, title: "字体大小", subtitle: "同时调整左右歌词和绿色扫词高亮",
+                    value: $model.capsuleLyricsFontSize, in: CapsuleLyricsLayout.fontSizeRange, step: 0.5,
+                    isEnabled: model.showDesktopLyrics, showsDivider: false,
+                    valueText: { String(format: "%.1f pt", $0) }
+                )
+            }
             if model.lyricsPresentationMode == .menuBar {
                 SettingsSliderRow(
                     icon: nil,
@@ -1518,7 +1605,7 @@ struct SettingsRootView: View {
     private var musicAccessSection: some View {
         SettingsSectionCard(
             title: "应用访问",
-            subtitle: "按需开启微光乐境可访问的应用来源",
+            subtitle: "选择允许 NookFlow 读取播放信息的应用",
             footer: "QQ 音乐与网易云音乐通过 macOS 系统媒体中心读取；播放器需先出现在系统控制中心的“正在播放”中。"
         ) {
             SettingsToggleRow(
@@ -1599,7 +1686,7 @@ struct SettingsRootView: View {
 
                 Spacer(minLength: AppSpacing.lg)
 
-                Text("已启用 \(model.enabledWidgets.intersection(Set(homeWidgets)).count) / \(homeWidgets.count)")
+                Text("已启用 \(enabledHomeWidgetCount) / \(homeWidgets.count)")
                     .font(AppTypography.control)
                     .foregroundStyle(AppColor.accent)
                     .padding(.horizontal, AppSpacing.md)
@@ -1612,15 +1699,20 @@ struct SettingsRootView: View {
                     ForEach(homeWidgets) { widget in
                         WidgetOptionCard(
                             widget: widget,
-                            isEnabled: model.enabledWidgets.contains(widget),
+                            isEnabled: isWidgetEffectivelyEnabled(widget),
+                            isProUnlocked: licenseManager.isProUnlocked,
                             onToggle: {
+                                guard !widget.requiresPro || licenseManager.isProUnlocked else {
+                                    presentProActivation(for: widget)
+                                    return
+                                }
                                 withAnimation(.easeOut(duration: 0.16)) {
                                     model.toggleWidget(widget)
                                 }
                             },
                             onSettings: {
                                 if widget == .imageCard {
-                                    chooseImageCardFile()
+                                    chooseImageCardSource()
                                 } else if let page = widget.settingsPage {
                                     withAnimation(.easeOut(duration: 0.16)) {
                                         model.selectedSettingsPage = page
@@ -1641,17 +1733,62 @@ struct SettingsRootView: View {
         [.mirror, .imageCard, .todo, .deviceInfo, .weather, .music, .quickApps, .shortcuts]
     }
 
-    private func chooseImageCardFile() {
+    private var enabledHomeWidgetCount: Int {
+        homeWidgets.filter(isWidgetEffectivelyEnabled).count
+    }
+
+    private func isWidgetEffectivelyEnabled(_ widget: SettingsWidget) -> Bool {
+        model.enabledWidgets.contains(widget)
+            && (!widget.requiresPro || licenseManager.isProUnlocked)
+    }
+
+    private func chooseImageCardSource() {
         let panel = NSOpenPanel()
-        panel.title = "选择图片卡片"
+        panel.title = "选择一张图片或图片文件夹"
+        panel.message = "选择文件夹后，灵动岛会循环展示其中的图片。"
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.canChooseFiles = true
+        panel.treatsFilePackagesAsDirectories = false
 
         if panel.runModal() == .OK, let url = panel.url {
             model.imageCardPath = url.path
+            model.imageCardBookmarkData = ImageCardSourceAccess.bookmarkData(for: url) ?? Data()
             model.enabledWidgets.insert(.imageCard)
+        }
+    }
+
+    private func presentProActivation(for widget: SettingsWidget) {
+        licenseManager.resetError()
+        withAnimation(AppMotion.resolved(AppMotion.settingsPage, reduceMotion: reduceMotion)) {
+            pendingProWidget = widget
+            isShowingProActivation = true
+        }
+    }
+
+    private func presentLicenseActivation() {
+        licenseManager.resetError()
+        withAnimation(AppMotion.resolved(AppMotion.settingsPage, reduceMotion: reduceMotion)) {
+            pendingProWidget = nil
+            isShowingProActivation = true
+        }
+    }
+
+    private func completeProActivation() {
+        withAnimation(AppMotion.resolved(AppMotion.settingsStandard, reduceMotion: reduceMotion)) {
+            if let pendingProWidget {
+                model.enabledWidgets.insert(pendingProWidget)
+            }
+            pendingProWidget = nil
+            isShowingProActivation = false
+        }
+    }
+
+    private func dismissProActivation() {
+        withAnimation(AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion)) {
+            pendingProWidget = nil
+            isShowingProActivation = false
         }
     }
 
@@ -1817,6 +1954,7 @@ private struct SectionTitle: View {
 }
 
 private struct SideIconPickerSection: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let options: [SettingsHomeSideIcon]
     let context: SideStatusContext
     @Binding var selection: SettingsHomeSideIcon
@@ -1835,7 +1973,7 @@ private struct SideIconPickerSection: View {
                     isSelected: selection == option,
                     context: context
                 ) {
-                    withAnimation(AppMotion.quick) {
+                    withAnimation(AppMotion.resolved(AppMotion.quick, reduceMotion: reduceMotion)) {
                         selection = option
                     }
                 }
@@ -1875,8 +2013,13 @@ private struct SideIconOptionButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .scaleEffect(isHovering ? 1.012 : 1)
-        .offset(y: isHovering ? AppControlStyle.hoverLift : 0)
+        .background {
+            RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                .fill(isHovering ? AppColor.controlFillHover : .clear)
+        }
+        .help(item.title)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onHover { isHovering = $0 }
         .animation(AppMotion.resolved(AppMotion.quick, reduceMotion: reduceMotion), value: isHovering)
     }
@@ -1890,19 +2033,19 @@ private struct SideIconCapsulePreview: View {
     var body: some View {
         ZStack {
             Capsule(style: .continuous)
-                .fill(item == .none ? Color.black.opacity(0.42) : AppColor.islandBackground)
+                .fill(AppColor.islandBackground)
                 .overlay {
                     Capsule(style: .continuous)
                         .stroke(
                             isSelected ? AppColor.accent : Color.white.opacity(0.06),
-                            lineWidth: isSelected ? 2 : 1
+                            lineWidth: 1
                         )
                 }
                 .shadow(
-                    color: isSelected ? AppColor.accent.opacity(0.16) : .black.opacity(0.08),
-                    radius: isSelected ? 6 : 3,
+                    color: .black.opacity(0.06),
+                    radius: 3,
                     x: 0,
-                    y: isSelected ? 3 : 2
+                    y: 2
                 )
 
             SideIconCapsuleContent(item: item, context: context)
@@ -2102,6 +2245,7 @@ private struct WidgetOptionCard: View {
 
     let widget: SettingsWidget
     let isEnabled: Bool
+    let isProUnlocked: Bool
     let onToggle: () -> Void
     let onSettings: () -> Void
 
@@ -2120,15 +2264,9 @@ private struct WidgetOptionCard: View {
 
                 Spacer()
 
-                Text(widget.tag)
-                    .font(AppTypography.badge)
-                    .foregroundStyle(widget.tag == "Pro" ? .orange : .green)
-                    .padding(.horizontal, AppSpacing.sm)
-                    .frame(height: 22)
-                    .background {
-                        Capsule()
-                            .fill((widget.tag == "Pro" ? Color.orange : Color.green).opacity(0.12))
-                    }
+                if widget.requiresPro {
+                    WidgetProBadge(isUnlocked: isProUnlocked)
+                }
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -2148,7 +2286,7 @@ private struct WidgetOptionCard: View {
                 if widget.settingsPage != nil || widget == .imageCard {
                     Button(action: onSettings) {
                         HStack(spacing: AppSpacing.xs) {
-                            Text(widget == .imageCard ? "选择图片" : "设置")
+                            Text(widget == .imageCard ? "选择来源" : "设置")
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 9, weight: .bold))
                         }
@@ -2160,7 +2298,7 @@ private struct WidgetOptionCard: View {
 
                 Spacer()
 
-                Toggle("", isOn: Binding(get: { isEnabled }, set: { _ in onToggle() }))
+                Toggle(widget.title, isOn: Binding(get: { isEnabled }, set: { _ in onToggle() }))
                     .toggleStyle(AppSwitchToggleStyle())
                     .labelsHidden()
             }
@@ -2172,7 +2310,7 @@ private struct WidgetOptionCard: View {
                 .fill(
                     isEnabled
                         ? LinearGradient(
-                            colors: [accent.opacity(0.075), Color.white.opacity(0.98)],
+                            colors: [accent.opacity(0.04), Color.white.opacity(0.98)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -2185,17 +2323,16 @@ private struct WidgetOptionCard: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
                         .stroke(
-                            isEnabled ? accent.opacity(0.22) : AppColor.border,
+                            isEnabled ? accent.opacity(0.14) : AppColor.border,
                             lineWidth: isEnabled ? 1 : 0.7
                         )
                 }
                 .shadow(
-                    color: Color.black.opacity(isHovering ? 0.085 : 0.035),
-                    radius: isHovering ? 12 : 7,
-                    y: isHovering ? 6 : 3
+                    color: Color.black.opacity(isHovering ? 0.045 : 0.025),
+                    radius: 7,
+                    y: 3
                 )
         }
-        .offset(y: isHovering && !reduceMotion ? -2 : 0)
         .onHover { isHovering = $0 }
         .animation(
             AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion),
@@ -2220,6 +2357,41 @@ private struct WidgetOptionCard: View {
         case .shortcuts: AppColor.accent
         default: AppColor.accent
         }
+    }
+}
+
+private struct WidgetProBadge: View {
+    let isUnlocked: Bool
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: isUnlocked ? "sparkles" : "lock.fill")
+                .font(.system(size: 9, weight: .bold))
+            Text("PRO")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+        }
+        .foregroundStyle(isUnlocked ? AppColor.accent : Color(red: 0.28, green: 0.45, blue: 0.88))
+        .padding(.horizontal, 9)
+        .frame(height: 23)
+        .background {
+            Capsule(style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.90, green: 0.94, blue: 1.0),
+                            Color(red: 0.95, green: 0.91, blue: 1.0)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .overlay {
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.9), lineWidth: 0.8)
+                }
+                .shadow(color: AppColor.accent.opacity(0.12), radius: 5, y: 2)
+        }
+        .accessibilityLabel(isUnlocked ? "Pro 已激活" : "Pro 功能")
     }
 }
 
@@ -2322,9 +2494,9 @@ private struct SettingsMusicSupportedAppCard: View {
 
             Spacer(minLength: 8)
 
-            Image(systemName: "waveform")
-                .font(.system(size: AppIconStyle.actionSize, weight: .semibold))
-                .foregroundStyle(AppColor.textTertiary)
+            Text("兼容")
+                .font(AppTypography.caption)
+                .foregroundStyle(AppColor.textSecondary)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)

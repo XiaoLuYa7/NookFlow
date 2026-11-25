@@ -8,14 +8,21 @@ import UniformTypeIdentifiers
 struct StagingFileItem: Identifiable, Hashable {
     let id: String
     let name: String
-    let icon: NSImage
+    let artwork: StagingFileArtwork
+    var icon: NSImage { artwork.icon }
     let url: URL
     let isDirectory: Bool
     let size: Int64
     let date: Date
     let kind: String
-    let thumbnail: NSImage?
+    var thumbnail: NSImage? { artwork.thumbnail }
     let isPreviewable: Bool
+    let typeIdentifier: String
+    var hasLoadedArtwork: Bool { artwork.isLoaded }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     var sizeText: String {
         Self.formatSize(size)
@@ -40,6 +47,34 @@ struct StagingFileItem: Identifiable, Hashable {
         if bytes < 1024 * 1024 { return String(format: "%.1f KB", Double(bytes) / 1024) }
         if bytes < 1024 * 1024 * 1024 { return String(format: "%.1f MB", Double(bytes) / 1024 / 1024) }
         return String(format: "%.1f GB", Double(bytes) / 1024 / 1024 / 1024)
+    }
+}
+
+// Image updates only redraw the corresponding cell, without sorting the full directory again.
+final class StagingFileArtwork: ObservableObject {
+    @Published private(set) var icon: NSImage
+    @Published private(set) var thumbnail: NSImage?
+    private(set) var isLoaded = false
+    private let placeholder: NSImage
+
+    init(placeholder: NSImage) {
+        self.placeholder = placeholder
+        self.icon = placeholder
+    }
+
+    @MainActor
+    func update(icon: NSImage, thumbnail: NSImage?) {
+        self.icon = icon
+        self.thumbnail = thumbnail
+        isLoaded = true
+    }
+
+    @MainActor
+    func reset() {
+        guard isLoaded else { return }
+        icon = placeholder
+        thumbnail = nil
+        isLoaded = false
     }
 }
 
@@ -110,15 +145,18 @@ enum FileCategory: String, CaseIterable, Identifiable {
         }
     }
 
-    func matches(kind: String) -> Bool {
-        switch self {
-        case .all: return true
-        case .image: return kind.contains("image") || kind.contains("图")
-        case .document: return kind.contains("document") || kind.contains("text") || kind.contains("pdf") || kind.contains("文")
-        case .video: return kind.contains("video") || kind.contains("视")
-        case .audio: return kind.contains("audio") || kind.contains("音")
-        case .other: return true
-        }
+    static func category(typeIdentifier: String, isDirectory: Bool) -> FileCategory {
+        guard !isDirectory, let type = UTType(typeIdentifier) else { return .other }
+        if type.conforms(to: .image) { return .image }
+        if type.conforms(to: .movie) || type.conforms(to: .video) { return .video }
+        if type.conforms(to: .audio) { return .audio }
+        if type.conforms(to: .text) || type.conforms(to: .pdf)
+            || type.conforms(to: .compositeContent) { return .document }
+        return .other
+    }
+
+    func matches(_ file: StagingFileItem) -> Bool {
+        self == .all || self == Self.category(typeIdentifier: file.typeIdentifier, isDirectory: file.isDirectory)
     }
 }
 
@@ -141,7 +179,7 @@ enum FileSortOption: String, CaseIterable, Identifiable {
 
     var systemName: String {
         switch self {
-        case .name: "textformat"
+        case .name: "arrow.up.arrow.down"
         case .date: "calendar"
         case .size: "externaldrive"
         case .kind: "square.grid.2x2"
@@ -154,6 +192,7 @@ final class FileDataProvider: ObservableObject {
 
     @Published private(set) var files: [StagingFileItem] = []
     @Published private(set) var isLoading = false
+    @Published private(set) var loadError: String?
     @Published private(set) var currentDirectory = FileDataProvider.stagingDirectory
     @Published var searchText = ""
     @Published var category: FileCategory = .all
@@ -166,7 +205,6 @@ final class FileDataProvider: ObservableObject {
     private static let customOrderKey = "FileDataCustomOrder"
     nonisolated private static let iconImageSize = NSSize(width: 48, height: 48)
     nonisolated private static let thumbnailImageSize = NSSize(width: 56, height: 56)
-    nonisolated private static let maxInlineThumbnailsPerDirectory = 120
 
     static let stagingDirectory: URL = {
         stagingDirectoryURL()
@@ -208,7 +246,7 @@ final class FileDataProvider: ObservableObject {
         }
 
         if category != .all {
-            result = result.filter { category.matches(kind: $0.kind) }
+            result = result.filter { category.matches($0) }
         }
 
         let dirKey = currentDirectory.standardizedFileURL.path
@@ -250,18 +288,6 @@ final class FileDataProvider: ObservableObject {
                 url = url.appendingPathComponent(component)
                 return FilePathSegment(title: component, url: url)
             }
-    }
-
-    func ensureDirectoryExists() {
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: Self.stagingDirectory.path) {
-            try? fm.createDirectory(at: Self.stagingDirectory, withIntermediateDirectories: true)
-        }
-
-        var isDir: ObjCBool = false
-        if !fm.fileExists(atPath: currentDirectory.path, isDirectory: &isDir) || !isDir.boolValue {
-            currentDirectory = Self.stagingDirectory
-        }
     }
 
     @discardableResult
@@ -311,32 +337,74 @@ final class FileDataProvider: ObservableObject {
         }
 
         isLoading = true
-
-        ensureDirectoryExists()
+        loadError = nil
         let directory = currentDirectory
-
+        let rootDirectory = Self.stagingDirectory
         loadTask?.cancel()
         loadGeneration += 1
         let generation = loadGeneration
 
-        loadTask = Task.detached(priority: .userInitiated) { [directory, generation] in
-            let items = await Self.scanDirectory(directory)
-            let wasCancelled = Task.isCancelled
-
+        loadTask = Task.detached(priority: .userInitiated) { [weak self, directory, rootDirectory, generation] in
+            let result: Result<[StagingFileItem], Error>
+            do {
+                // Only the staging root is created; missing child folders remain visible errors.
+                try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+                result = .success(try await Self.scanDirectory(directory))
+            } catch {
+                result = .failure(error)
+            }
+            guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
-                guard let self,
-                      self.loadGeneration == generation else { return }
-
-                if !wasCancelled,
-                   self.currentDirectory.standardizedFileURL == directory.standardizedFileURL {
+                guard let self, self.loadGeneration == generation else { return }
+                switch result {
+                case .success(let items):
                     self.files = items
                     self.applyCustomOrderIfNeeded()
+                case .failure(let error):
+                    self.files = []
+                    self.loadError = "无法读取“\(directory.lastPathComponent)”：\(error.localizedDescription)"
                 }
-
                 self.isLoading = false
                 self.loadTask = nil
             }
         }
+    }
+
+    func cancelLoading() {
+        loadTask?.cancel()
+        loadTask = nil
+        loadGeneration += 1
+        isLoading = false
+    }
+
+    func loadArtwork(for file: StagingFileItem) async {
+        guard !isLoading, !file.hasLoadedArtwork else { return }
+        let generation = loadGeneration
+        let task = Task.detached(priority: .utility) {
+            let icon = await ThreadSafeImageCache.shared.icon(for: file.url, targetSize: Self.iconImageSize)
+            guard !Task.isCancelled else { return (icon, Optional<NSImage>.none) }
+            let thumbnail = file.isPreviewable
+                ? await ThreadSafeImageCache.shared.thumbnail(for: file.url, typeID: file.typeIdentifier, targetSize: Self.thumbnailImageSize)
+                : nil
+            return (icon, thumbnail)
+        }
+        let (icon, thumbnail) = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        guard !Task.isCancelled, loadGeneration == generation,
+              let index = files.firstIndex(where: { $0.id == file.id }) else { return }
+        files[index].artwork.update(icon: icon, thumbnail: thumbnail)
+    }
+
+    func unloadArtwork(for file: StagingFileItem) {
+        file.artwork.reset()
+    }
+
+    private static func placeholderIcon(isDirectory: Bool) -> NSImage {
+        NSImage(systemSymbolName: isDirectory ? "folder.fill" : "doc.fill", accessibilityDescription: nil)
+            ?? NSImage(size: iconImageSize)
     }
 
     func enterFolder(_ file: StagingFileItem) {
@@ -359,7 +427,6 @@ final class FileDataProvider: ObservableObject {
 
     /// Set sort option and clear any manual order for the current directory.
     func setSortOption(_ option: FileSortOption) {
-        guard sortOption != option else { return }
         sortOption = option
         clearManualOrder()
     }
@@ -498,20 +565,23 @@ final class FileDataProvider: ObservableObject {
         }
     }
 
-    nonisolated private static func scanDirectory(_ dir: URL) async -> [StagingFileItem] {
+    nonisolated static func scanDirectory(_ dir: URL) async throws -> [StagingFileItem] {
         let fm = FileManager.default
 
-        guard let contents = try? fm.contentsOfDirectory(
+        let contents = try fm.contentsOfDirectory(
             at: dir,
             includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .typeIdentifierKey],
             options: [.skipsHiddenFiles]
-        ) else { return [] }
+        )
 
+        let (folderIcon, documentIcon) = await MainActor.run {
+            (Self.placeholderIcon(isDirectory: true), Self.placeholderIcon(isDirectory: false))
+        }
         var items: [StagingFileItem] = []
-        var thumbnailCount = 0
+        items.reserveCapacity(contents.count)
 
         for url in contents {
-            guard !Task.isCancelled else { return items }
+            try Task.checkCancellation()
 
             let resourceValues = try? url.resourceValues(forKeys: [
                 .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .typeIdentifierKey
@@ -523,30 +593,20 @@ final class FileDataProvider: ObservableObject {
             let typeID = resourceValues?.typeIdentifier ?? ""
             let kind = Self.kindString(for: typeID, isDirectory: isDir)
 
-            let icon = await ThreadSafeImageCache.shared.icon(for: url, targetSize: iconImageSize)
-            guard !Task.isCancelled else { return items }
-
+            let icon = isDir ? folderIcon : documentIcon
             let previewable = Self.isPreviewable(typeID: typeID, isDirectory: isDir)
-            let shouldLoadThumbnail = previewable && thumbnailCount < Self.maxInlineThumbnailsPerDirectory
-            let thumbnail = shouldLoadThumbnail
-                ? await ThreadSafeImageCache.shared.thumbnail(for: url, typeID: typeID, targetSize: thumbnailImageSize)
-                : nil
-            guard !Task.isCancelled else { return items }
-            if thumbnail != nil {
-                thumbnailCount += 1
-            }
 
             items.append(StagingFileItem(
                 id: url.path,
                 name: url.lastPathComponent,
-                icon: icon,
+                artwork: StagingFileArtwork(placeholder: icon),
                 url: url,
                 isDirectory: isDir,
                 size: size,
                 date: date,
                 kind: kind,
-                thumbnail: thumbnail,
-                isPreviewable: previewable
+                isPreviewable: previewable,
+                typeIdentifier: typeID
             ))
         }
 
@@ -686,7 +746,12 @@ actor ThreadSafeImageCache {
         )
 
         do {
-            let representation = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+            let representation = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+            } onCancel: {
+                QLThumbnailGenerator.shared.cancel(request)
+            }
             guard !Task.isCancelled else { return nil }
             return NSImage(cgImage: representation.cgImage, size: targetSize)
         } catch {

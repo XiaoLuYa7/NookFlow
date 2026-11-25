@@ -79,6 +79,12 @@
 		D9A100010000000000000001 /* MediaRemoteStreamBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9A100020000000000000001 /* MediaRemoteStreamBridge.swift */; };
 		D9A100010000000000000002 /* mediaremote-adapter.pl in Resources */ = {isa = PBXBuildFile; fileRef = D9A100020000000000000002 /* mediaremote-adapter.pl */; };
 		D9A100010000000000000003 /* MediaRemoteAdapter.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D9A100020000000000000003 /* MediaRemoteAdapter.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F7A100010000000000000001 /* LicenseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A100020000000000000001 /* LicenseManager.swift */; };
+		F7A100010000000000000002 /* LicenseSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A100020000000000000002 /* LicenseSettingsView.swift */; };
+		F7A100010000000000000003 /* ProActivationModal.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A100020000000000000003 /* ProActivationModal.swift */; };
+		F8A100010000000000000001 /* AppUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8A100020000000000000001 /* AppUpdateController.swift */; };
+		F8A100010000000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F8A100040000000000000001 /* Sparkle */; };
+		F8A100010000000000000003 /* Sparkle LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = F8A100020000000000000003 /* Sparkle LICENSE */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -171,6 +177,12 @@
 		D9A100020000000000000003 /* MediaRemoteAdapter.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = MediaRemoteAdapter.framework; sourceTree = "<group>"; };
 		D9A100020000000000000004 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
 		D9A100020000000000000005 /* NOTICE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = NOTICE.md; sourceTree = "<group>"; };
+		F7A100020000000000000001 /* LicenseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseManager.swift; sourceTree = "<group>"; };
+		F7A100020000000000000002 /* LicenseSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseSettingsView.swift; sourceTree = "<group>"; };
+		F7A100020000000000000003 /* ProActivationModal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProActivationModal.swift; sourceTree = "<group>"; };
+		F8A100020000000000000001 /* AppUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateController.swift; sourceTree = "<group>"; };
+		F8A100020000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F8A100020000000000000003 /* Sparkle LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Sparkle-LICENSE.txt"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -178,6 +190,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F8A100010000000000000002 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -214,6 +227,7 @@
 			children = (
 				A2000001 /* NookFlowApp.swift */,
 				A2000002 /* AppDelegate.swift */,
+				F8A100020000000000000002 /* Info.plist */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -261,6 +275,8 @@
 				B5A100020000000000000004 /* ShortcutsCardView.swift */,
 				B5A100020000000000000005 /* ShortcutsSettingsView.swift */,
 				B6A100020000000000000001 /* NotificationSettingsView.swift */,
+				F7A100020000000000000002 /* LicenseSettingsView.swift */,
+				F7A100020000000000000003 /* ProActivationModal.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -297,6 +313,8 @@
 				B5A100020000000000000002 /* ShortcutsStore.swift */,
 				B4A100020000000000000003 /* ApplicationLauncher.swift */,
 				A1000AE5 /* ModuleDragController.swift */,
+				F7A100020000000000000001 /* LicenseManager.swift */,
+				F8A100020000000000000001 /* AppUpdateController.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -305,6 +323,7 @@
 			isa = PBXGroup;
 			children = (
 				D9A100040000000000000002 /* MediaRemoteAdapter */,
+				F8A100050000000000000001 /* Sparkle */,
 			);
 			path = ThirdParty;
 			sourceTree = "<group>";
@@ -318,6 +337,14 @@
 				D9A100020000000000000005 /* NOTICE.md */,
 			);
 			path = MediaRemoteAdapter;
+			sourceTree = "<group>";
+		};
+		F8A100050000000000000001 /* Sparkle */ = {
+			isa = PBXGroup;
+			children = (
+				F8A100020000000000000003 /* Sparkle LICENSE */,
+			);
+			path = Sparkle;
 			sourceTree = "<group>";
 		};
 		A5000007 /* Products */ = {
@@ -345,6 +372,9 @@
 			dependencies = (
 			);
 			name = NookFlow;
+			packageProductDependencies = (
+				F8A100040000000000000001 /* Sparkle */,
+			);
 			productName = NookFlow;
 			productReference = A3000001 /* NookFlow.app */;
 			productType = "com.apple.product-type.application";
@@ -373,6 +403,9 @@
 				Base,
 			);
 			mainGroup = A5000001;
+			packageReferences = (
+				F8A100030000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			productRefGroup = A5000007 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -388,6 +421,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000008 /* Assets.xcassets in Resources */,
+				F8A100010000000000000003 /* Sparkle LICENSE in Resources */,
 				D9A100010000000000000002 /* mediaremote-adapter.pl in Resources */,
 				A1000014 /* application.png in Resources */,
 				A1000013 /* folder.png in Resources */,
@@ -467,6 +501,10 @@
 				D7A100010000000000000003 /* SettingsAppShell.swift in Sources */,
 				E8A100010000000000000001 /* GeneralSettingsView.swift in Sources */,
 				E8A100010000000000000002 /* AboutView.swift in Sources */,
+				F7A100010000000000000001 /* LicenseManager.swift in Sources */,
+				F7A100010000000000000002 /* LicenseSettingsView.swift in Sources */,
+				F7A100010000000000000003 /* ProActivationModal.swift in Sources */,
+				F8A100010000000000000001 /* AppUpdateController.swift in Sources */,
 				A10009E5 /* ModuleDragController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -582,20 +620,25 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_ENTITLEMENTS = NookFlow.entitlements;
 				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
 				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				OTHER_CODE_SIGN_FLAGS = "--requirements $(PROJECT_DIR)/NookFlowDebug.requirements";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NookFlow;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "NookFlow uses Apple Events to read playback information from music apps.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "仅在镜子卡片可见时使用摄像头进行实时预览，画面不会保存。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "NookFlow uses your location to show local weather.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "NookFlow uses your location to show local weather.";
+				INFOPLIST_KEY_NookFlowLicenseAPIBaseURL = "https://nookflow.luckysoft.cn/api";
+				INFOPLIST_KEY_NookFlowLicensePublicKey = "BN0TaJS2f6F19ptHSYVW4JpL9AqfPa/gszT5T9a9ZxBf5dxTbOjWSbHAmxn393Ia/GILUVl7ETWcsZ1++ky/Qbw=";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "NookFlow uses reminders access to show your incomplete tasks.";
@@ -603,8 +646,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.personal.DynamicNook;
+				MARKETING_VERSION = 1.0.4;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.luckysoft.NookFlow;
 				PRODUCT_NAME = NookFlow;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -615,18 +658,23 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_ENTITLEMENTS = Distribution/NookFlowAdHoc.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NookFlow;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "NookFlow uses Apple Events to read playback information from music apps.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "仅在镜子卡片可见时使用摄像头进行实时预览，画面不会保存。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "NookFlow uses your location to show local weather.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "NookFlow uses your location to show local weather.";
+				INFOPLIST_KEY_NookFlowLicenseAPIBaseURL = "https://nookflow.luckysoft.cn/api";
+				INFOPLIST_KEY_NookFlowLicensePublicKey = "BN0TaJS2f6F19ptHSYVW4JpL9AqfPa/gszT5T9a9ZxBf5dxTbOjWSbHAmxn393Ia/GILUVl7ETWcsZ1++ky/Qbw=";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "NookFlow uses reminders access to show your incomplete tasks.";
@@ -634,8 +682,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.personal.DynamicNook;
+				MARKETING_VERSION = 1.0.4;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.luckysoft.NookFlow;
 				PRODUCT_NAME = NookFlow;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -664,6 +712,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F8A100030000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.6;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F8A100040000000000000001 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F8A100030000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A9000001 /* Project object */;
 }

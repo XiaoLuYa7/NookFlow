@@ -11,7 +11,7 @@ let package = Package(
             exclude: [
                 "ApplicationLauncher.swift",
                 "ApplicationsProvider.swift",
-                "FileDataProvider.swift",
+                "AppUpdateController.swift",
                 "IslandSettings.swift",
                 "IslandState.swift",
                 "IslandViewModel.swift",
@@ -28,12 +28,14 @@ let package = Package(
             ],
             sources: [
                 "CompactMusicPresentation.swift",
+                "FileDataProvider.swift",
                 "LyricsCacheModel.swift",
                 "LyricsModels.swift",
                 "LyricsNetworkService.swift",
                 "LyricsParser.swift",
                 "LyricsProvider.swift",
                 "LyricTimingEstimator.swift",
+                "LicenseManager.swift",
                 "NotificationRuntimePolicy.swift",
                 "PlaybackProvider.swift",
                 "MediaRemoteStreamBridge.swift",

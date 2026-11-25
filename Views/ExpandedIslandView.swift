@@ -35,6 +35,8 @@ struct ExpandedIslandView: View {
     @State private var containerFrame: CGRect = .zero
     @State private var imageCardImage: NSImage?
     @State private var imageCardImagePath = ""
+    @State private var imageCardImageIdentifier = ""
+    @State private var imageCardIsSlideshow = false
     @State private var imageCardLoadTask: Task<Void, Never>?
     @State private var isEmptyModulesActionHovered = false
 
@@ -79,6 +81,10 @@ struct ExpandedIslandView: View {
             .onChange(of: settings.imageCardPath) { _, _ in
                 loadImageCardIfNeeded()
             }
+            .onChange(of: settings.imageCardBookmarkData) { _, _ in
+                imageCardImagePath = ""
+                loadImageCardIfNeeded()
+            }
             .onChange(of: viewModel.fileDataRefreshToken) { _, _ in
                 if runtimeIsActive {
                     fileProvider.load()
@@ -107,8 +113,7 @@ struct ExpandedIslandView: View {
                 stopContentProviders()
                 todoSyncTask?.cancel()
                 todoSyncTask = nil
-                imageCardLoadTask?.cancel()
-                imageCardLoadTask = nil
+                stopImageCardLoading()
             }
     }
 
@@ -222,25 +227,26 @@ struct ExpandedIslandView: View {
     }
 
     private var topBar: some View {
-        HStack(alignment: .center, spacing: 14) {
+        ZStack(alignment: .trailing) {
             HStack(spacing: 8) {
                 ForEach(IslandTopTab.allCases) { tab in
                     topTabButton(tab)
                 }
             }
-            .offset(x: 10)
-
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 10)
+            .padding(.trailing, 58)
 
             settingsButton
-                .offset(x: -10)
-                .zIndex(1)
+                .padding(.trailing, 10)
+                .zIndex(2)
         }
         .padding(.horizontal, 22)
         .frame(width: visibleTopBarWidth)
         .frame(maxWidth: .infinity, alignment: .center)
         .frame(height: IslandDesignTokens.expandedTopBarControlHeight, alignment: .center)
         .padding(.top, IslandDesignTokens.expandedTopBarTopPadding)
+        .zIndex(2)
     }
 
     /// Home modules can be wider than the active display. Keep navigation
@@ -282,13 +288,14 @@ struct ExpandedIslandView: View {
     }
 
     private var settingsButton: some View {
-        Menu {
-            Button {
-                onOpenSettings()
-            } label: {
-                Label("打开设置", systemImage: "gearshape")
-            }
-
+        Button(action: onOpenSettings) {
+            SettingsButtonLabel()
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .accessibilityLabel("设置")
+        .help("设置")
+        .contextMenu {
             Button {
                 onOpenFeedback()
             } label: {
@@ -302,19 +309,7 @@ struct ExpandedIslandView: View {
             } label: {
                 Label("退出 NookFlow", systemImage: "power")
             }
-        } label: {
-            Color.clear
-                .frame(width: 32, height: 30)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .overlay {
-            SettingsMenuLabel()
-                .allowsHitTesting(false)
-        }
-        .fixedSize()
-        .help("设置")
     }
 
     private func closeTodoFloatingPanel() {
@@ -398,6 +393,7 @@ struct ExpandedIslandView: View {
         .coordinateSpace(name: "moduleRow")
         .onChange(of: visibleModules) { _, _ in
             if dragController.isActive { dragController.reset() }
+            refreshContentProviders()
         }
     }
 
@@ -407,7 +403,7 @@ struct ExpandedIslandView: View {
             return
         }
 
-        if settings.showTodoModule {
+        if settings.showTodoModule && visibleModules.contains(.todo) {
             syncTodoTasksIfNeeded(force: forceTodoSync)
         } else {
             reminderProvider.stop()
@@ -425,6 +421,7 @@ struct ExpandedIslandView: View {
     private func stopImageCardLoading() {
         imageCardLoadTask?.cancel()
         imageCardLoadTask = nil
+        imageCardImagePath = ""
     }
 
     private func syncTodoTasksIfNeeded(force: Bool = false) {
@@ -902,15 +899,17 @@ struct ExpandedIslandView: View {
                         )
                         .frame(width: cardSide, height: cardSide)
 
-                    Group {
+                    ZStack {
+                        Image("ImageCardDefault")
+                            .resizable()
+                            .scaledToFill()
+
                         if let image = imageCardImage {
                             Image(nsImage: image)
                                 .resizable()
                                 .scaledToFill()
-                        } else {
-                            Image("ImageCardDefault")
-                                .resizable()
-                                .scaledToFill()
+                                .id(imageCardImageIdentifier)
+                                .transition(imageCardTransition)
                         }
                     }
                     .frame(width: cardSide, height: cardSide)
@@ -939,41 +938,127 @@ struct ExpandedIslandView: View {
             imageCardLoadTask?.cancel()
             imageCardLoadTask = nil
             imageCardImagePath = ""
+            imageCardImageIdentifier = ""
+            imageCardIsSlideshow = false
             imageCardImage = nil
             return
         }
 
-        guard path != imageCardImagePath || imageCardImage == nil else { return }
+        guard path != imageCardImagePath
+                || imageCardImage == nil
+                || (imageCardIsSlideshow && imageCardLoadTask == nil) else {
+            return
+        }
 
         imageCardLoadTask?.cancel()
         imageCardImagePath = path
-        imageCardImage = nil
-        let url = URL(fileURLWithPath: path)
+        let bookmarkData = settings.imageCardBookmarkData
 
         imageCardLoadTask = Task { @MainActor in
-            let exists = await Task.detached(priority: .utility) {
-                FileManager.default.fileExists(atPath: path)
+            guard let sourceURL = ImageCardSourceAccess.resolveURL(
+                path: path,
+                bookmarkData: bookmarkData
+            ) else {
+                imageCardLoadTask = nil
+                return
+            }
+            let didStartAccess = sourceURL.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccess {
+                    sourceURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            var imageURLs = await Task.detached(priority: .utility) {
+                let urls = ImageCardSourceAccess.imageURLs(in: sourceURL)
+                return urls.count > 1 ? urls.shuffled() : urls
             }.value
-            guard exists, !Task.isCancelled else {
+            guard !imageURLs.isEmpty, !Task.isCancelled else {
                 if imageCardImagePath == path {
+                    imageCardIsSlideshow = false
                     imageCardImage = nil
                     imageCardLoadTask = nil
                 }
                 return
             }
 
-            let image = await ThreadSafeImageCache.shared.preview(
-                for: url,
-                targetSize: NSSize(width: 320, height: 320)
-            )
-            guard !Task.isCancelled,
-                  imageCardImagePath == path,
-                  settings.imageCardPath.trimmingCharacters(in: .whitespacesAndNewlines) == path else {
-                return
-            }
+            imageCardIsSlideshow = imageURLs.count > 1
 
+            var currentIndex = 0
+            var lastURL: URL?
+            while !Task.isCancelled {
+                let url = imageURLs[currentIndex]
+                if let image = await ThreadSafeImageCache.shared.preview(
+                    for: url,
+                    targetSize: NSSize(width: 320, height: 320)
+                ), !Task.isCancelled,
+                   imageCardImagePath == path,
+                   settings.imageCardPath.trimmingCharacters(in: .whitespacesAndNewlines) == path {
+                    presentImageCardImage(image, identifier: url.standardizedFileURL.path)
+                    lastURL = url
+                }
+
+                guard imageURLs.count > 1 else {
+                    imageCardLoadTask = nil
+                    return
+                }
+
+                do {
+                    try await Task.sleep(for: .seconds(8))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+
+                currentIndex += 1
+                if currentIndex >= imageURLs.count {
+                    imageURLs = await Task.detached(priority: .utility) {
+                        var nextCycle = imageURLs.shuffled()
+                        if nextCycle.count > 1, nextCycle.first == lastURL {
+                            nextCycle.swapAt(0, 1)
+                        }
+                        return nextCycle
+                    }.value
+                    currentIndex = 0
+                }
+            }
+        }
+    }
+
+    private var imageCardTransition: AnyTransition {
+        if viewModel.reduceMotionEnabled {
+            return .opacity
+        }
+
+        return .asymmetric(
+            insertion: .modifier(
+                active: ImageCardDissolveModifier(opacity: 0, blurRadius: 9, scale: 1.018),
+                identity: ImageCardDissolveModifier(opacity: 1, blurRadius: 0, scale: 1)
+            ),
+            removal: .modifier(
+                active: ImageCardDissolveModifier(opacity: 0, blurRadius: 3, scale: 0.992),
+                identity: ImageCardDissolveModifier(opacity: 1, blurRadius: 0, scale: 1)
+            )
+        )
+    }
+
+    private func presentImageCardImage(_ image: NSImage, identifier: String) {
+        let update = {
             imageCardImage = image
-            imageCardLoadTask = nil
+            imageCardImageIdentifier = identifier
+        }
+
+        guard imageCardImage != nil else {
+            update()
+            return
+        }
+
+        withAnimation(
+            viewModel.reduceMotionEnabled
+                ? .easeOut(duration: 0.18)
+                : .easeInOut(duration: 0.72)
+        ) {
+            update()
         }
     }
 
@@ -1524,26 +1609,30 @@ private struct WeatherCardView: View {
                 Color.clear
                     .frame(height: metricsTopGap)
 
-                HStack(spacing: WeatherCardMetrics.chipSpacing) {
-                    WeatherInfoChipView(
-                        systemName: "thermometer.medium",
-                        label: "体感",
-                        value: apparentTemperature,
-                        isCompact: isCompact
-                    )
-
-                    WeatherInfoChipView(
-                        systemName: "drop",
-                        label: "湿度",
-                        value: humidity,
-                        isCompact: isCompact
-                    )
+                ViewThatFits(in: .horizontal) {
+                    metricsRow(isCompact: isCompact, compactIcons: false)
+                    metricsRow(isCompact: isCompact, compactIcons: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: chipHeight)
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func metricsRow(isCompact: Bool, compactIcons: Bool) -> some View {
+        HStack(spacing: WeatherCardMetrics.chipSpacing) {
+            WeatherInfoChipView(
+                systemName: "thermometer.medium", label: "体感",
+                value: apparentTemperature, isCompact: isCompact, compactIcon: compactIcons
+            )
+            Spacer(minLength: 0)
+            WeatherInfoChipView(
+                systemName: "drop", label: "湿度",
+                value: humidity, isCompact: isCompact, compactIcon: compactIcons
+            )
+        }
     }
 
     private var locationRow: some View {
@@ -2170,6 +2259,7 @@ private struct WeatherInfoChipView: View {
     let label: String
     let value: String
     let isCompact: Bool
+    let compactIcon: Bool
 
     var body: some View {
         HStack(spacing: isCompact ? 3 : 4) {
@@ -2177,34 +2267,34 @@ private struct WeatherInfoChipView: View {
                 .font(.system(size: isCompact ? 9.5 : 10.5, weight: .medium))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(Color.white.opacity(0.82))
-                .frame(width: isCompact ? 21 : 23, height: isCompact ? 21 : 23)
+                .frame(width: compactIcon ? 12 : (isCompact ? 21 : 23), height: isCompact ? 21 : 23)
                 .background {
-                    Circle()
-                        .fill(Color.white.opacity(0.07))
-                        .overlay {
-                            Circle()
-                                .stroke(Color.white.opacity(0.10), lineWidth: 0.8)
-                        }
+                    if !compactIcon {
+                        Circle()
+                            .fill(Color.white.opacity(0.07))
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+                            }
+                    }
                 }
 
             chipText
                 .lineLimit(1)
-                .minimumScaleFactor(0.68)
-                .allowsTightening(true)
+                .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(1)
         }
         .padding(.leading, isCompact ? 1 : 2)
-        .padding(.trailing, isCompact ? 4 : 6)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .leading)
     }
 
     private var chipText: Text {
         var labelPart = AttributedString(label + " ")
-        labelPart.font = .system(size: isCompact ? 8.4 : 9, weight: .medium, design: .rounded)
+        labelPart.font = .system(size: isCompact ? 9.4 : 10, weight: .medium, design: .rounded)
         labelPart.foregroundColor = Color.white.opacity(0.52)
 
         var valuePart = AttributedString(value)
-        valuePart.font = .system(size: isCompact ? 11.1 : 12.2, weight: .semibold, design: .rounded)
+        valuePart.font = .system(size: isCompact ? 10.1 : 11.2, weight: .semibold, design: .rounded)
         valuePart.foregroundColor = Color.white.opacity(0.82)
 
         labelPart.append(valuePart)
@@ -3255,7 +3345,7 @@ private struct TodoDateSelectorView: View {
         } label: {
             VStack(spacing: isCompact ? 3 : 3.5) {
                 Text(item.weekday)
-                    .font(.system(size: isCompact ? 7.6 : (isNarrow ? 7.8 : 8.4), weight: .semibold, design: .rounded))
+                    .font(.system(size: isCompact ? 8.6 : (isNarrow ? 8.8 : 9.4), weight: .semibold, design: .rounded))
                     .foregroundStyle(weekdayColor(isSelected: item.isSelected))
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
@@ -4847,6 +4937,19 @@ private struct TodoPanelCompactButtonStyle: ButtonStyle {
         case .secondary: Color.white.opacity(0.070)
         case .danger: Color.red.opacity(0.30)
         }
+    }
+}
+
+private struct ImageCardDissolveModifier: ViewModifier {
+    let opacity: Double
+    let blurRadius: CGFloat
+    let scale: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(opacity)
+            .blur(radius: blurRadius)
+            .scaleEffect(scale)
     }
 }
 
@@ -6596,7 +6699,7 @@ private final class PlaybackArtworkImageCache {
     }
 }
 
-private struct SettingsMenuLabel: View {
+private struct SettingsButtonLabel: View {
     @State private var isHovering = false
 
     var body: some View {
@@ -6609,7 +6712,7 @@ private struct SettingsMenuLabel: View {
                 color: Color.white.opacity(isHovering ? 0.16 : 0),
                 radius: isHovering ? 5 : 0
             )
-            .frame(width: 32, height: 30)
+            .frame(width: 40, height: 30)
             .contentShape(Rectangle())
             .onHover { hovering in
                 isHovering = hovering

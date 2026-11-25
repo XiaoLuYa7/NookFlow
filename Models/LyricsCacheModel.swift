@@ -77,10 +77,18 @@ actor LyricsCacheService: LyricsCaching {
     private let context: ModelContext?
     private var memoryEntries: [String: (lyrics: [LyricLine], fetchedAt: Date, lastAccess: Date)] = [:]
     private let maxMemoryEntries = 24
+    private let maxDiskEntries = 256
+    private let diskMaxAge: TimeInterval = 30 * 24 * 3600
+    private var lastDiskMaintenance = Date.distantPast
+    private var maintenanceTask: Task<Void, Never>?
 
-    init() {
+    deinit {
+        maintenanceTask?.cancel()
+    }
+
+    init(modelContainer: ModelContainer? = nil) {
         do {
-            let container = try ModelContainer(for: CachedLyrics.self)
+            let container = try modelContainer ?? ModelContainer(for: CachedLyrics.self)
             self.container = container
             self.context = ModelContext(container)
         } catch {
@@ -109,6 +117,7 @@ actor LyricsCacheService: LyricsCaching {
 
     func get(key: String, maxAge: TimeInterval = 30 * 24 * 3600) -> [LyricLine]? {
         let now = Date()
+        scheduleDiskMaintenance(now: now)
         if var entry = memoryEntries[key], now.timeIntervalSince(entry.fetchedAt) < maxAge {
             entry.lastAccess = now
             memoryEntries[key] = entry
@@ -167,6 +176,7 @@ actor LyricsCacheService: LyricsCaching {
         let entry = CachedLyrics(cacheKey: key, title: title, artist: artist, lyrics: lyrics)
         context.insert(entry)
         try? context.save()
+        scheduleDiskMaintenance(now: now, force: true)
     }
 
     func remove(key: String) {
@@ -184,6 +194,50 @@ actor LyricsCacheService: LyricsCaching {
             context.delete(existing)
             try? context.save()
         }
+    }
+
+    private func scheduleDiskMaintenance(now: Date, force: Bool = false) {
+        guard context != nil, maintenanceTask == nil,
+              force || now.timeIntervalSince(lastDiskMaintenance) >= 3600 else { return }
+        maintenanceTask = Task { [weak self] in
+            await self?.performDiskMaintenance(now: now)
+        }
+    }
+
+    private func performDiskMaintenance(now: Date) async {
+        defer { maintenanceTask = nil }
+        do {
+            while !Task.isCancelled {
+                if try !removeDiskBatch(now: now) { break }
+                await Task.yield()
+            }
+            lastDiskMaintenance = now
+        } catch {
+            NSLog("Lyrics cache cleanup failed: %@", error.localizedDescription)
+        }
+    }
+
+    // Fetch only a small batch of oldest records so old databases do not load all lyric blobs.
+    private func removeDiskBatch(now: Date) throws -> Bool {
+        guard let context else { return false }
+        let cutoff = now.addingTimeInterval(-diskMaxAge)
+        var expired = FetchDescriptor<CachedLyrics>(
+            predicate: #Predicate { $0.fetchedAt < cutoff },
+            sortBy: [SortDescriptor(\.fetchedAt)]
+        )
+        expired.fetchLimit = 64
+        var entries = try context.fetch(expired)
+        if entries.isEmpty {
+            let overflow = try context.fetchCount(FetchDescriptor<CachedLyrics>()) - maxDiskEntries
+            guard overflow > 0 else { return false }
+            var oldest = FetchDescriptor<CachedLyrics>(sortBy: [SortDescriptor(\.fetchedAt)])
+            oldest.fetchLimit = min(overflow, 64)
+            entries = try context.fetch(oldest)
+        }
+        guard !entries.isEmpty else { return false }
+        entries.forEach { context.delete($0) }
+        try context.save()
+        return true
     }
 
     private func trimMemoryCacheIfNeeded() {

@@ -264,13 +264,22 @@ struct ApplicationsGridView: View {
                         provider.loadSizesIfNeeded()
                     }
                 } label: {
-                    Label(option.title, systemImage: option.systemName)
+                    Label {
+                        Text(option.title)
+                    } icon: {
+                        if option == .name {
+                            Image(nsImage: SortNameIcon.image)
+                        } else {
+                            Image(systemName: option.systemName)
+                        }
+                    }
                 }
             }
         } label: {
             toolbarMenuLabel(
                 systemName: selectedSort.systemName,
-                title: selectedSort.title
+                title: selectedSort.title,
+                iconImage: selectedSort == .name ? SortNameIcon.image : nil
             )
         }
         .buttonStyle(.plain)
@@ -278,9 +287,15 @@ struct ApplicationsGridView: View {
         .handCursor()
     }
 
-    private func toolbarMenuLabel(systemName: String, title: String) -> some View {
+    private func toolbarMenuLabel(systemName: String, title: String, iconImage: NSImage? = nil) -> some View {
         HStack(spacing: 7) {
-            Image(systemName: systemName)
+            Group {
+                if let iconImage {
+                    Image(nsImage: iconImage).renderingMode(.template)
+                } else {
+                    Image(systemName: systemName)
+                }
+            }
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.white)
 

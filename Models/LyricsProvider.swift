@@ -39,6 +39,7 @@ final class LyricsProvider: ObservableObject {
     @Published var lyrics: [LyricLine] = []
     @Published private(set) var estimatedTimeline: [EstimatedLyricLine] = []
     @Published var currentLineIndex: Int?
+    @Published private(set) var capsuleLineIndex: Int?
     @Published var desktopPresentationLineIndex: Int?
     @Published var isLoading = false
     @Published var statusText: String = ""
@@ -67,22 +68,25 @@ final class LyricsProvider: ObservableObject {
     private let desktopAnimationLeadTime: TimeInterval = 0.4
     private let nextTrackTransitionGracePeriod: TimeInterval = 1.2
 
-    convenience init() {
+    convenience init(observesMediaQueue: Bool = true) {
         self.init(
             networkService: LyricsNetworkService(),
             cache: LyricsCacheService(),
-            timingEstimator: LyricTimingEstimator()
+            timingEstimator: LyricTimingEstimator(),
+            observesMediaQueue: observesMediaQueue
         )
     }
 
     init(
         networkService: any LyricsNetworking,
         cache: any LyricsCaching,
-        timingEstimator: LyricTimingEstimator = LyricTimingEstimator()
+        timingEstimator: LyricTimingEstimator = LyricTimingEstimator(),
+        observesMediaQueue: Bool = true
     ) {
         self.networkService = networkService
         self.cache = cache
         self.timingEstimator = timingEstimator
+        guard observesMediaQueue else { return }
         queueObserver = NotificationCenter.default.publisher(for: .mediaRemoteQueueDidUpdate)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -193,6 +197,7 @@ final class LyricsProvider: ObservableObject {
         currentLyricsRequestID = nil
         estimatedTimeline = []
         lyrics = []
+        capsuleLineIndex = nil
         currentLineIndex = nil
         desktopPresentationLineIndex = nil
         currentTrackKey = nil
@@ -279,6 +284,7 @@ final class LyricsProvider: ObservableObject {
         applyDisplayState(.loading)
         estimatedTimeline = []
         lyrics = []
+        capsuleLineIndex = nil
         currentLineIndex = nil
         desktopPresentationLineIndex = nil
 
@@ -377,6 +383,7 @@ final class LyricsProvider: ObservableObject {
         applyDisplayState(.loading)
         estimatedTimeline = []
         lyrics = []
+        capsuleLineIndex = nil
         currentLineIndex = nil
         desktopPresentationLineIndex = nil
 
@@ -533,8 +540,10 @@ final class LyricsProvider: ObservableObject {
                     leadTime: self.desktopAnimationLeadTime,
                     in: lyrics
                 )
+                let capsuleLineEvent = self.nextScheduledLine(after: currentTime, leadTime: 0, in: lyrics)
                 guard let nextDeadline = [
                     currentLineEvent?.deadline,
+                    capsuleLineEvent?.deadline,
                     desktopLineEvent?.deadline
                 ].compactMap({ $0 }).min() else {
                     break
@@ -547,6 +556,10 @@ final class LyricsProvider: ObservableObject {
                 guard !Task.isCancelled else { break }
 
                 let reachedTime = elapsed + Date().timeIntervalSince(anchorDate)
+                let capsuleIndex = self.bestLineIndex(at: reachedTime, in: lyrics)
+                if self.capsuleLineIndex != capsuleIndex {
+                    self.capsuleLineIndex = capsuleIndex
+                }
                 if let currentLineEvent,
                    currentLineEvent.deadline <= reachedTime + 0.002 {
                     self.currentLineIndex = currentLineEvent.index
@@ -566,6 +579,8 @@ final class LyricsProvider: ObservableObject {
     }
 
     private func updateCurrentLine(elapsed: TimeInterval) {
+        let capsuleIndex = bestLineIndex(at: elapsed, in: lyrics)
+        if capsuleLineIndex != capsuleIndex { capsuleLineIndex = capsuleIndex }
         let currentBestIndex = bestLineIndex(
             at: elapsed + lyricDisplayLeadTime,
             in: lyrics

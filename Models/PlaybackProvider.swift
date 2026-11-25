@@ -164,6 +164,7 @@ final class PlaybackProvider: ObservableObject {
     @Published private(set) var diagnosticText: String = ""
 
     private var accessConfiguration: PlaybackAccessConfiguration
+    private var isProAccessEnabled: Bool
     private var timer: Timer?
     private var ignoreExternalRefreshUntil = Date.distantPast
     private let commandQueue = DispatchQueue(label: "com.personal.NookFlow.playback-command")
@@ -178,26 +179,35 @@ final class PlaybackProvider: ObservableObject {
     private var isRefreshInFlight = false
     private var needsRefreshAfterCurrent = false
     private var refreshGeneration = 0
+    private let isMonitoringEnabled: Bool
 
     @MainActor
-    init(settings: IslandSettings) {
-        accessConfiguration = Self.accessConfiguration(from: settings)
-        configureMediaRemoteStream(from: settings)
+    init(settings: IslandSettings, isMonitoringEnabled: Bool = true) {
+        self.isMonitoringEnabled = isMonitoringEnabled
+        isProAccessEnabled = isMonitoringEnabled && LicenseManager.shared.isProUnlocked
+        accessConfiguration = isMonitoringEnabled ? Self.accessConfiguration(from: settings) : .defaults
+        configureMediaRemoteStream()
     }
 
     @MainActor
     func updateAccessConfiguration(from settings: IslandSettings) {
-        accessConfiguration = Self.accessConfiguration(from: settings)
-        configureMediaRemoteStream(from: settings)
-        refresh()
+        isProAccessEnabled = isMonitoringEnabled && LicenseManager.shared.isProUnlocked
+        accessConfiguration = isMonitoringEnabled ? Self.accessConfiguration(from: settings) : .defaults
+        refreshGeneration += 1
+        isRefreshInFlight = false
+        needsRefreshAfterCurrent = false
+        configureMediaRemoteStream()
+        if timer != nil { refresh() }
     }
 
     func start() {
-        guard timer == nil else { return }
-        refresh()
+        guard isMonitoringEnabled, timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+
+        configureMediaRemoteStream()
+        refresh()
 
         // Listen for Apple Music playback notifications for faster updates
         if notificationObserver == nil {
@@ -222,13 +232,16 @@ final class PlaybackProvider: ObservableObject {
     }
 
     func stop() {
+        guard timer != nil || notificationObserver != nil || mediaRemoteObserver != nil else { return }
         timer?.invalidate()
         timer = nil
+        configureMediaRemoteStream()
         refreshGeneration += 1
         isRefreshInFlight = false
         needsRefreshAfterCurrent = false
         artworkLookupTask?.cancel()
         artworkLookupTask = nil
+        lastArtworkLookupKey = nil
         cancelPendingLiveSeek()
 
         if let observer = notificationObserver {
@@ -255,6 +268,7 @@ final class PlaybackProvider: ObservableObject {
     }
 
     func seek(to progress: Double, refreshAfterSeek: Bool = true) {
+        guard isMonitoringEnabled else { return }
         let appName = snapshot.appName
         let duration = snapshot.duration
         guard snapshot.canSeek else { return }
@@ -267,10 +281,12 @@ final class PlaybackProvider: ObservableObject {
         if refreshAfterSeek {
             cancelPendingLiveSeek()
             let access = resolvedAccessConfiguration()
+            let generation = refreshGeneration
 
             var optimisticSnapshot = snapshot
             optimisticSnapshot.elapsed = seconds
             DispatchQueue.main.async { [weak self] in
+                guard self?.refreshGeneration == generation else { return }
                 self?.ignoreExternalRefreshUntil = Date().addingTimeInterval(0.65)
                 self?.snapshot = optimisticSnapshot
             }
@@ -279,8 +295,9 @@ final class PlaybackProvider: ObservableObject {
                 Self.runCommand(command)
                 Thread.sleep(forTimeInterval: 0.12)
 
-                let result = Self.loadSnapshotResult(access: access)
+                let result = Self.loadSnapshotResult(access: access, preferredAppName: appName)
                 DispatchQueue.main.async { [weak self] in
+                    guard self?.refreshGeneration == generation else { return }
                     self?.ignoreExternalRefreshUntil = .distantPast
                     self?.applySnapshot(result.snapshot)
                     if self?.diagnosticText != result.diagnostic {
@@ -300,8 +317,10 @@ final class PlaybackProvider: ObservableObject {
     }
 
     private func runTransportCommand(_ commandKind: PlaybackTransportCommand, allowFallback: Bool) {
+        guard isMonitoringEnabled else { return }
         let appName = snapshot.appName
         let originalSnapshot = snapshot
+        let generation = refreshGeneration
         let access = resolvedAccessConfiguration()
 
         commandQueue.async { [weak self, appName, originalSnapshot] in
@@ -315,17 +334,18 @@ final class PlaybackProvider: ObservableObject {
             Self.runCommand(command)
             Thread.sleep(forTimeInterval: commandKind == .previous ? 0.22 : 0.12)
 
-            var refreshedResult = Self.loadSnapshotResult(access: access)
+            var refreshedResult = Self.loadSnapshotResult(access: access, preferredAppName: appName)
             var refreshedSnapshot = refreshedResult.snapshot
             if commandKind == .previous,
                Self.representsSameTrack(originalSnapshot, refreshedSnapshot) {
                 Self.runCommand(command)
                 Thread.sleep(forTimeInterval: 0.18)
-                refreshedResult = Self.loadSnapshotResult(access: access)
+                refreshedResult = Self.loadSnapshotResult(access: access, preferredAppName: appName)
                 refreshedSnapshot = refreshedResult.snapshot
             }
 
             DispatchQueue.main.async { [weak self] in
+                guard self?.refreshGeneration == generation else { return }
                 self?.applySnapshot(refreshedSnapshot)
                 if self?.diagnosticText != refreshedResult.diagnostic {
                     self?.diagnosticText = refreshedResult.diagnostic
@@ -387,6 +407,7 @@ final class PlaybackProvider: ObservableObject {
     }
 
     private func refresh() {
+        guard timer != nil else { return }
         guard !isRefreshInFlight else {
             needsRefreshAfterCurrent = true
             return
@@ -395,8 +416,9 @@ final class PlaybackProvider: ObservableObject {
         isRefreshInFlight = true
         let generation = refreshGeneration
         let access = resolvedAccessConfiguration()
+        let preferredAppName = snapshot.appName
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Self.loadSnapshotResult(access: access)
+            let result = Self.loadSnapshotResult(access: access, preferredAppName: preferredAppName)
             DispatchQueue.main.async { [weak self] in
                 guard let self,
                       self.refreshGeneration == generation
@@ -429,45 +451,48 @@ final class PlaybackProvider: ObservableObject {
     }
 
     private func resolvedAccessConfiguration() -> PlaybackAccessConfiguration {
+        guard isProAccessEnabled else {
+            return PlaybackAccessConfiguration(
+                appleMusic: false,
+                spotify: false,
+                qqMusic: false,
+                netEaseMusic: false
+            )
+        }
         let access = PlaybackAccessConfiguration.persisted(fallback: accessConfiguration)
         accessConfiguration = access
         return access
     }
 
     private func applyMediaRemoteStreamUpdate() {
+        // Events and periodic refreshes must use the same source selection policy.
+        refresh()
+    }
+
+    private func configureMediaRemoteStream() {
+        guard isMonitoringEnabled else { return }
         let access = resolvedAccessConfiguration()
         let allowedBundleIdentifiers = SystemNowPlayingMetadataParser.allowedBundleIdentifiers(
             qqMusic: access.qqMusic,
             netEaseMusic: access.netEaseMusic
         )
-        if let systemSnapshot = MediaRemoteStreamBridge.shared.snapshot(
-            allowedBundleIdentifiers: allowedBundleIdentifiers
-        ) {
-            applySnapshot(systemSnapshot)
-            diagnosticText = "System stream \(systemSnapshot.appName) \(systemSnapshot.state)"
-        } else {
-            refresh()
-        }
-    }
-
-    @MainActor
-    private func configureMediaRemoteStream(from settings: IslandSettings) {
-        let allowedBundleIdentifiers = SystemNowPlayingMetadataParser.allowedBundleIdentifiers(
-            qqMusic: settings.allowQQMusicAccess,
-            netEaseMusic: settings.allowNetEaseMusicAccess
-        )
-        let mediaFeaturesEnabled = settings.showMediaModule
-            || settings.showMusicLyrics
-            || settings.showDesktopLyrics
         MediaRemoteStreamBridge.shared.configure(
-            isEnabled: mediaFeaturesEnabled,
+            isEnabled: timer != nil,
             allowedBundleIdentifiers: allowedBundleIdentifiers
         )
     }
 
     @MainActor
     private static func accessConfiguration(from settings: IslandSettings) -> PlaybackAccessConfiguration {
-        PlaybackAccessConfiguration(
+        guard LicenseManager.shared.isProUnlocked else {
+            return PlaybackAccessConfiguration(
+                appleMusic: false,
+                spotify: false,
+                qqMusic: false,
+                netEaseMusic: false
+            )
+        }
+        return PlaybackAccessConfiguration(
             appleMusic: settings.allowAppleMusicAccess,
             spotify: settings.allowSpotifyAccess,
             qqMusic: settings.allowQQMusicAccess,
@@ -552,11 +577,11 @@ final class PlaybackProvider: ObservableObject {
         loadSnapshotResult(access: access).snapshot
     }
 
-    private static func loadSnapshotResult(access: PlaybackAccessConfiguration) -> (
+    private static func loadSnapshotResult(access: PlaybackAccessConfiguration, preferredAppName: String? = nil) -> (
         snapshot: PlaybackSnapshot,
         diagnostic: String
     ) {
-        let result = loadAudioSnapshotResult(access: access)
+        let result = loadAudioSnapshotResult(access: access, preferredAppName: preferredAppName)
         return (result.snapshot ?? .idle, result.diagnostic)
     }
 
@@ -564,7 +589,7 @@ final class PlaybackProvider: ObservableObject {
         loadAudioSnapshotResult(access: access).snapshot
     }
 
-    private static func loadAudioSnapshotResult(access: PlaybackAccessConfiguration) -> (
+    private static func loadAudioSnapshotResult(access: PlaybackAccessConfiguration, preferredAppName: String? = nil) -> (
         snapshot: PlaybackSnapshot?,
         diagnostic: String
     ) {
@@ -610,12 +635,18 @@ final class PlaybackProvider: ObservableObject {
             }
         }
 
-        let selected = snapshots.first { $0.state == .playing } ?? snapshots.first
+        let selected = selectSnapshot(from: snapshots, preferredAppName: preferredAppName)
         diagnostics.append("snapshots \(snapshots.count)")
         if let selected {
             diagnostics.append("selected \(selected.appName) \(selected.state)")
         }
         return (selected, diagnostics.joined(separator: " | "))
+    }
+
+    static func selectSnapshot(from snapshots: [PlaybackSnapshot], preferredAppName: String?) -> PlaybackSnapshot? {
+        snapshots.first { $0.appName == preferredAppName && $0.state == .playing }
+            ?? snapshots.first { $0.state == .playing }
+            ?? snapshots.first
     }
 
     private static func isApplicationRunning(bundleIdentifier: String) -> Bool {

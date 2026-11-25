@@ -30,10 +30,10 @@ struct PageHeaderView<Actions: View>: View {
                         .frame(width: 44, height: 44)
                         .background {
                             RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                                .fill(AppColor.accentSoft.opacity(0.82))
+                                .fill(AppColor.accentSoft.opacity(0.55))
                                 .overlay {
                                     RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                                        .stroke(AppColor.accentBorder.opacity(0.62), lineWidth: 0.7)
+                                        .stroke(AppColor.accentBorder.opacity(0.4), lineWidth: 0.7)
                                 }
                         }
                 }
@@ -479,6 +479,7 @@ struct PillSegmentedControl<Option: Hashable>: View {
                         .frame(height: AppControlStyle.compactHeight)
                 }
                 .buttonStyle(AppButtonStyle(role: .quiet, isSelected: selection == option))
+                .accessibilityAddTraits(selection == option ? .isSelected : [])
             }
         }
         .padding(AppSpacing.xs)
@@ -535,27 +536,6 @@ struct SettingsMultiSelectGrid<Option: Identifiable & Hashable>: View {
                 .buttonStyle(AppButtonStyle(role: .secondary, isSelected: isSelected))
             }
         }
-    }
-}
-
-struct ProBadge: View {
-    @Environment(\.appFontPreference) private var fontPreference
-    var title = "PRO"
-
-    var body: some View {
-        Text(title)
-            .font(AppTypography.badge(fontPreference))
-            .foregroundStyle(AppColor.accent)
-            .padding(.horizontal, AppSpacing.sm)
-            .frame(height: 20)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(AppColor.accentSoft)
-                    .overlay {
-                        Capsule(style: .continuous)
-                            .stroke(AppColor.accentBorder, lineWidth: 1)
-                    }
-            }
     }
 }
 

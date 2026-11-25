@@ -30,7 +30,7 @@ struct ShortcutsCardView: View {
         HStack(spacing: 7) {
             Image(systemName: "bolt.fill")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(AppColor.accent.opacity(0.88))
+                .foregroundStyle(Color.white.opacity(0.58))
                 .frame(width: 13)
 
             Text("快捷指令")
@@ -65,19 +65,10 @@ struct ShortcutsCardView: View {
         return Button {
             store.run(item)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    AppColor.accent.opacity(0.92),
-                                    Color.blue.opacity(0.62)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(0.07))
 
                     if isRunning {
                         ProgressView()
@@ -85,46 +76,30 @@ struct ShortcutsCardView: View {
                             .scaleEffect(0.62)
                     } else {
                         Image(systemName: shortcutSymbol(for: item.name))
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 10, weight: .medium))
                             .symbolRenderingMode(.monochrome)
-                            .foregroundStyle(Color.white.opacity(0.96))
+                            .foregroundStyle(Color.white.opacity(0.76))
                     }
                 }
-                .frame(width: 25, height: 25)
+                .frame(width: 22, height: 22)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(item.name)
-                        .font(.system(size: 10.8, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.90))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    Text(isRunning ? "正在运行" : "点击运行")
-                        .font(.system(size: 8.2, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.42))
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 3)
+                Text(item.name)
+                    .font(.system(size: 10.2, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 Image(systemName: isRunning ? "ellipsis" : "play.fill")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(isRunning ? 0.38 : 0.72))
-                    .frame(width: 20, height: 20)
-                    .background {
-                        Circle()
-                            .fill(Color.white.opacity(0.065))
-                    }
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(isRunning ? 0.38 : 0.86))
+                    .frame(width: 12, height: 20)
             }
             .padding(.horizontal, 7)
             .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36)
             .background {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.052))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.white.opacity(0.06), lineWidth: 0.8)
-                    }
+                    .fill(Color.white.opacity(0.045))
             }
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
@@ -133,6 +108,7 @@ struct ShortcutsCardView: View {
         .disabled(isRunning)
         .help("运行“\(item.name)”")
         .accessibilityLabel("运行快捷指令 \(item.name)")
+        .accessibilityValue(isRunning ? "正在运行" : "未运行")
     }
 
     private var addShortcutRow: some View {
@@ -143,7 +119,7 @@ struct ShortcutsCardView: View {
                 Image(systemName: "plus.circle")
                     .font(.system(size: 11, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(AppColor.accent.opacity(0.62))
+                    .foregroundStyle(Color.white.opacity(0.52))
 
                 Text("添加快捷指令")
                     .font(.system(size: 9.8, weight: .semibold, design: .rounded))
@@ -160,7 +136,7 @@ struct ShortcutsCardView: View {
                     .overlay {
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .stroke(
-                                AppColor.accent.opacity(0.28),
+                                Color.white.opacity(0.18),
                                 style: StrokeStyle(lineWidth: 1, dash: [4, 3])
                             )
                     }

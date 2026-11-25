@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct CompactCapsuleContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
     let mode: CompactCapsuleContentMode
     let geometry: NotchGeometry
     let snapshot: PlaybackSnapshot
@@ -14,6 +16,10 @@ struct CompactCapsuleContentView: View {
     let sideStatusContext: SideStatusContext
     let foregroundPromptDisplayMode: ForegroundAppPromptDisplayMode
     let foregroundPrompt: ForegroundAppPrompt?
+    var lyricFontSize: CGFloat = 10.5
+    var nextLyricTiming: EstimatedLyricLine? = nil
+    var activeLyricSourceIndex: Int? = nil
+    var foregroundPromptRevealProgress: Double = 1
     var isContentVisible: Bool = true
     var statusContentScale: CGFloat = 1
 
@@ -31,6 +37,7 @@ struct CompactCapsuleContentView: View {
                 sideZoneLayout {
                     if let foregroundPrompt {
                         foregroundPromptLeft(foregroundPrompt)
+                            .modifier(foregroundPromptMaterialization)
                     } else {
                         sideStatus(leftSideIcon)
                             .scaleEffect(statusContentScale)
@@ -38,6 +45,7 @@ struct CompactCapsuleContentView: View {
                 } right: {
                     if let foregroundPrompt {
                         foregroundPromptRight(foregroundPrompt)
+                            .modifier(foregroundPromptMaterialization)
                     } else {
                         sideStatus(rightSideIcon)
                             .scaleEffect(statusContentScale)
@@ -45,18 +53,22 @@ struct CompactCapsuleContentView: View {
                 }
             case .lyrics:
                 sideZoneLayout(placement: .lyrics) {
-                    adaptiveStatusText(
-                        primary: presentation?.leftText ?? "",
-                        fallback: presentation?.leftFallbackText ?? ""
-                    )
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    if showsTrackName {
+                        adaptiveStatusText(primary: presentation?.leftText ?? "", fallback: presentation?.leftFallbackText ?? "")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        SyncedCompactLyricText(
+                            text: presentation?.leftText ?? "", playbackAnchor: playbackAnchor,
+                            isPlaying: snapshot.state == .playing && activeLyricSourceIndex == currentLyricTiming?.sourceIndex,
+                            isVisible: isContentVisible, timing: currentLyricTiming, fontSize: lyricFontSize
+                        )
+                    }
                 } right: {
                     SyncedCompactLyricText(
-                        text: presentation?.rightText ?? "",
-                        playbackAnchor: playbackAnchor,
-                        isPlaying: snapshot.state == .playing,
+                        text: presentation?.rightText ?? "", playbackAnchor: playbackAnchor,
+                        isPlaying: snapshot.state == .playing && (showsTrackName || activeLyricSourceIndex == nextLyricTiming?.sourceIndex),
                         isVisible: isContentVisible,
-                        timing: currentLyricTiming
+                        timing: showsTrackName ? currentLyricTiming : nextLyricTiming, fontSize: lyricFontSize
                     )
                 }
             }
@@ -71,7 +83,10 @@ struct CompactCapsuleContentView: View {
         .onChange(of: snapshot.state) { _, _ in
             resetTimelineAnchor()
         }
-        .onChange(of: currentLyricText) { _, _ in
+        .onChange(of: snapshot.title) { _, _ in
+            resetTimelineAnchor()
+        }
+        .onChange(of: snapshot.artist) { _, _ in
             resetTimelineAnchor()
         }
     }
@@ -151,6 +166,13 @@ struct CompactCapsuleContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .padding(.horizontal, 2)
         .scaleEffect(statusContentScale)
+    }
+
+    private var foregroundPromptMaterialization: ForegroundPromptMaterializationModifier {
+        ForegroundPromptMaterializationModifier(
+            progress: foregroundPromptRevealProgress,
+            reduceMotion: accessibilityReduceMotion
+        )
     }
 
     private var cameraWidth: CGFloat {
@@ -445,6 +467,24 @@ struct CompactCapsuleContentView: View {
     }
 }
 
+private struct ForegroundPromptMaterializationModifier: ViewModifier {
+    let progress: Double
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        let clampedProgress = min(max(progress, 0), 1)
+
+        content
+            .opacity(clampedProgress)
+            .blur(radius: reduceMotion ? 0 : (1 - clampedProgress) * 6)
+            .scaleEffect(
+                reduceMotion ? 1 : 0.965 + clampedProgress * 0.035,
+                anchor: .center
+            )
+            .offset(y: reduceMotion ? 0 : (1 - clampedProgress) * 1.5)
+    }
+}
+
 private struct CompactPromptMarqueeText: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -582,17 +622,18 @@ private struct SyncedCompactLyricText: View {
     let isPlaying: Bool
     let isVisible: Bool
     let timing: EstimatedLyricLine?
+    let fontSize: CGFloat
 
     var body: some View {
         GeometryReader { proxy in
             let viewWidth = max(1, proxy.size.width)
             let textLayout = timingLayout
-            let textWidth = textLayout?.totalWidth ?? LyricTextMeasurer.width(of: text)
+            let textWidth = textLayout?.totalWidth ?? LyricTextMeasurer.width(of: text, fontSize: fontSize, design: .rounded)
             let distance = max(0, textWidth - viewWidth)
             let endRevealInset = endRevealInset(viewWidth: viewWidth, textWidth: textWidth)
             let usesTimeline = needsContinuousTimeline(distance: distance)
 
-            TimelineView(.animation(paused: !usesTimeline)) { _ in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !usesTimeline)) { _ in
                 lyricContent(
                     playbackTime: effectivePlaybackTime,
                     textLayout: textLayout,
@@ -696,7 +737,7 @@ private struct SyncedCompactLyricText: View {
 
     private func compactLyricText(color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+            .font(.system(size: fontSize, weight: .semibold, design: .rounded))
             .foregroundStyle(color)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
@@ -723,7 +764,7 @@ private struct SyncedCompactLyricText: View {
         guard let timing, timing.text == text else { return nil }
         return LyricTextMeasurer.layout(
             for: timing,
-            fontSize: 10.5,
+            fontSize: fontSize,
             weight: .semibold,
             design: .rounded
         )

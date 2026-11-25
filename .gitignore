@@ -16,3 +16,8 @@ xcuserdata/
 
 # Logs
 *.log
+.m2/
+
+# Generated website release artifacts
+website/public/downloads/**/*.dmg
+website/public/downloads/**/*.delta

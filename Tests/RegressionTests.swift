@@ -950,6 +950,50 @@ final class LyricsProviderRequestTests: XCTestCase {
         XCTAssertEqual(provider.currentLineIndex, 2)
     }
 
+    func testCapsulePairsDoNotAdvanceWithTheEarlyPresentationIndexAndSupportSeeking() async throws {
+        let cache = MemoryLyricsCache()
+        let lines = [LyricLine(startTimeMS: 0, words: "Left"),
+                     LyricLine(startTimeMS: 60_000, words: "Right"),
+                     LyricLine(startTimeMS: 90_000, words: "New left"),
+                     LyricLine(startTimeMS: 120_000, words: "New right")]
+        await cache.set(key: "capsule-pair-id", title: "Pair", artist: "Artist", lyrics: lines)
+        let provider = LyricsProvider(networkService: DelayedLyricsNetwork(), cache: cache, observesMediaQueue: false)
+        var paused = snapshot(title: "Pair")
+        paused.state = .paused
+        paused.elapsed = 89.65
+        provider.update(for: paused, trackID: "capsule-pair-id")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(provider.currentLineIndex, 2)
+        XCTAssertEqual(provider.capsuleLineIndex, 1)
+        XCTAssertEqual(CompactLyricPair.resolve(at: provider.capsuleLineIndex, in: lines),
+                       CompactLyricPair(leftIndex: 0, rightIndex: 1))
+        provider.seek(to: 90)
+        XCTAssertEqual(CompactLyricPair.resolve(at: provider.capsuleLineIndex, in: lines),
+                       CompactLyricPair(leftIndex: 2, rightIndex: 3))
+        provider.seek(to: 60)
+        XCTAssertEqual(CompactLyricPair.resolve(at: provider.capsuleLineIndex, in: lines),
+                       CompactLyricPair(leftIndex: 0, rightIndex: 1))
+        provider.clear()
+        XCTAssertNil(provider.capsuleLineIndex)
+    }
+
+    func testCapsuleSchedulerUsesActualLineStartDuringPlayback() async throws {
+        let cache = MemoryLyricsCache()
+        let lines = [LyricLine(startTimeMS: 0, words: "Left"),
+                     LyricLine(startTimeMS: 500, words: "Right"),
+                     LyricLine(startTimeMS: 4000, words: "Next pair")]
+        await cache.set(key: "capsule-clock-id", title: "Clock", artist: "Artist", lyrics: lines)
+        let provider = LyricsProvider(networkService: DelayedLyricsNetwork(), cache: cache, observesMediaQueue: false)
+        var playing = snapshot(title: "Clock")
+        playing.state = .playing
+        provider.update(for: playing, trackID: "capsule-clock-id")
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(provider.capsuleLineIndex, 1)
+        XCTAssertEqual(CompactLyricPair.resolve(at: provider.capsuleLineIndex, in: lines),
+                       CompactLyricPair(leftIndex: 0, rightIndex: 1))
+        provider.clear()
+    }
+
     func testDesktopLyricsUseFourTenthsLeadWithoutChangingSharedLead() async throws {
         let cache = MemoryLyricsCache()
         await cache.set(
@@ -1136,7 +1180,7 @@ final class MenuBarLyricsContractTests: XCTestCase {
         XCTAssertTrue(controller.contains("NSStatusBar.system.statusItem"))
         XCTAssertTrue(controller.contains("NSStatusBar.system.removeStatusItem"))
         XCTAssertTrue(controller.contains("static let playbackControlsWidth: CGFloat = 73"))
-        XCTAssertTrue(controller.contains("static let maximumLyricsWidth: CGFloat = 150"))
+        XCTAssertTrue(controller.contains("static let maximumLyricsWidth: CGFloat = 200"))
         XCTAssertTrue(controller.contains(
             "static let maximumDisplayedWidthWithControls: CGFloat = 220"
         ))
@@ -1194,7 +1238,7 @@ final class MenuBarLyricsContractTests: XCTestCase {
         XCTAssertTrue(settingsView.contains(
             "showsPlaybackControls: model.menuBarLyricsShowsPlaybackControls"
         ))
-        XCTAssertTrue(settings.contains("min(max(menuBarLyricsWidth, 100), 150)"))
+        XCTAssertTrue(settings.contains("min(max(menuBarLyricsWidth, 100), 200)"))
         XCTAssertFalse(settingsView.contains("title: \"显示歌名\""))
         XCTAssertTrue(islandRoot.contains("|| settings.showDesktopLyrics"))
         XCTAssertTrue(islandRoot.contains(
@@ -1258,7 +1302,7 @@ final class LyricDisplayRefreshCadenceContractTests: XCTestCase {
             "TimelineView(.animation(paused: !needsContinuousTimeline))"
         ))
         XCTAssertTrue(capsuleSource.contains(
-            "TimelineView(.animation(paused: !usesTimeline))"
+            "TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !usesTimeline))"
         ))
     }
 }
@@ -1530,6 +1574,45 @@ final class SettingsLayoutContractTests: XCTestCase {
         XCTAssertTrue(source.contains(".frame(width: isCollapsed ? 60 : 184)"))
         XCTAssertFalse(source.contains(".frame(width: isCollapsed ? 60 : 208)"))
     }
+
+    func testLicenseActionStaysAboveSidebarCollapseControl() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsAppShell.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("SettingsNavigationGroup(id: \"system\", pages: [.general, .about])"))
+        let bottomControls = try XCTUnwrap(source.range(of: "VStack(spacing: AppSpacing.xs) {\n                licenseButton\n                collapseButton"))
+        let licenseAction = try XCTUnwrap(source.range(of: "action: onLicenseRequested"))
+        XCTAssertLessThan(bottomControls.lowerBound, licenseAction.lowerBound)
+    }
+}
+
+final class ProActivationPresentationContractTests: XCTestCase {
+    func testLicenseAndProCardsShareStableInWindowActivationOverlay() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settingsRoot = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsRootView.swift"),
+            encoding: .utf8
+        )
+        let modal = try String(
+            contentsOf: root.appendingPathComponent("Views/ProActivationModal.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(settingsRoot.contains("onLicenseRequested: presentLicenseActivation"))
+        XCTAssertTrue(settingsRoot.contains("if isShowingProActivation"))
+        XCTAssertTrue(settingsRoot.contains("requestedFeatureName: pendingProWidget?.title"))
+        XCTAssertFalse(modal.contains(".ignoresSafeArea()"))
+        XCTAssertTrue(modal.contains(".background(AppColor.solidSurface)"))
+        XCTAssertTrue(modal.contains("title: \"音乐与歌词\""))
+        XCTAssertTrue(modal.contains("title: \"待办与提醒\""))
+    }
 }
 
 final class AppBrandIconPresentationContractTests: XCTestCase {
@@ -1641,9 +1724,9 @@ final class CompactPausedLyricContractTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("updateCompactLyric(index: viewModel.lyricsProvider.currentLineIndex)"))
+        XCTAssertTrue(source.contains("updateCompactLyric(index: viewModel.lyricsProvider.capsuleLineIndex)"))
         XCTAssertTrue(source.contains("resolvedCompactLyricIndex(requestedIndex: index, lyrics: lyrics)"))
-        XCTAssertTrue(source.contains("currentSnapshot.elapsed + 0.5"))
+        XCTAssertTrue(source.contains("max(0, currentSnapshot.elapsed) * 1000"))
         XCTAssertTrue(source.contains("lyrics.lastIndex { line in"))
     }
 }
@@ -1671,7 +1754,7 @@ final class PlaybackArtworkStabilityContractTests: XCTestCase {
 }
 
 final class SettingsActionMenuContractTests: XCTestCase {
-    func testExpandedSettingsButtonUsesNativeMacOSMenu() throws {
+    func testExpandedSettingsButtonIsAlwaysVisibleAndOpensSettingsDirectly() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1680,13 +1763,20 @@ final class SettingsActionMenuContractTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("private var settingsButton: some View {\n        Menu {"))
-        XCTAssertTrue(source.contains("Label(\"打开设置\", systemImage: \"gearshape\")"))
+        XCTAssertTrue(source.contains("private var settingsButton: some View {\n        Button(action: onOpenSettings)"))
         XCTAssertTrue(source.contains("Label(\"问题反馈\", systemImage: \"bubble.left.and.exclamationmark\")"))
         XCTAssertTrue(source.contains("Label(\"退出 NookFlow\", systemImage: \"power\")"))
-        XCTAssertTrue(source.contains(".menuStyle(.borderlessButton)"))
-        XCTAssertTrue(source.contains("Color.clear\n                .frame(width: 32, height: 30)"))
-        XCTAssertTrue(source.contains(".overlay {\n            SettingsMenuLabel()\n                .allowsHitTesting(false)"))
+        XCTAssertTrue(source.contains("Button(action: onOpenSettings) {\n            SettingsButtonLabel()"))
+        XCTAssertTrue(source.contains(".buttonStyle(.plain)"))
+        XCTAssertTrue(source.contains(".accessibilityLabel(\"设置\")"))
+        XCTAssertTrue(source.contains(".contextMenu {"))
+        XCTAssertTrue(source.contains(".frame(width: 40, height: 30)"))
+        let settingsButton = try XCTUnwrap(
+            source.components(separatedBy: "private var settingsButton: some View")
+                .dropFirst().first?
+                .components(separatedBy: "private func closeTodoFloatingPanel").first
+        )
+        XCTAssertFalse(settingsButton.contains(".menuStyle(.borderlessButton)"))
         XCTAssertFalse(source.contains("isSettingsMenuPresented"))
         XCTAssertFalse(source.contains("settingsActionMenuBackground"))
     }
@@ -1734,6 +1824,181 @@ final class DockPresentationContractTests: XCTestCase {
     }
 }
 
+final class LicenseContinuityContractTests: XCTestCase {
+    func testLaunchRefreshesStoredLicenseWithoutDeletingExpiredOfflineToken() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appDelegate = try String(
+            contentsOf: root.appendingPathComponent("App/AppDelegate.swift"),
+            encoding: .utf8
+        )
+        let licenseManager = try String(
+            contentsOf: root.appendingPathComponent("Models/LicenseManager.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(appDelegate.contains("refreshLicenseAfterLaunch()"))
+        XCTAssertTrue(appDelegate.contains("refreshIfNeeded(force: force)"))
+        XCTAssertTrue(appDelegate.contains("refreshLicenseAfterLaunch(force: false)"))
+        XCTAssertTrue(appDelegate.contains("licenseRefreshTask?.cancel()"))
+        XCTAssertTrue(licenseManager.contains("Keep the signed token so startup validation can restore Pro"))
+        XCTAssertTrue(licenseManager.contains("需要联网验证许可证，连接网络后会自动重试。"))
+        XCTAssertFalse(licenseManager.contains(
+            "payload.offlineUntil > Int64(Date.now.timeIntervalSince1970 * 1000),\n              payload.deviceID"
+        ))
+    }
+
+    func testDeviceSigningKeyIsCachedAfterOneKeychainAuthorization() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let licenseManager = try String(
+            contentsOf: root.appendingPathComponent("Models/LicenseManager.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(licenseManager.contains("private final class DeviceKeyStore"))
+        XCTAssertTrue(licenseManager.contains("private var cachedKey: P256.Signing.PrivateKey?"))
+        XCTAssertTrue(licenseManager.contains("if let cachedKey {\n            return cachedKey\n        }"))
+        XCTAssertTrue(licenseManager.contains("cachedKey = key\n            return key"))
+        XCTAssertTrue(licenseManager.contains("try saveNew(key.rawRepresentation)\n        cachedKey = key"))
+        XCTAssertFalse(licenseManager.contains("SecItemDelete(baseQuery as CFDictionary)"))
+    }
+
+    func testAutomaticLicenseRecoveryNeverPromptsOrDestroysStoredIdentity() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let licenseManager = try String(
+            contentsOf: root.appendingPathComponent("Models/LicenseManager.swift"),
+            encoding: .utf8
+        )
+        let settingsView = try String(
+            contentsOf: root.appendingPathComponent("Views/LicenseSettingsView.swift"),
+            encoding: .utf8
+        )
+        let activationModal = try String(
+            contentsOf: root.appendingPathComponent("Views/ProActivationModal.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(licenseManager.contains(
+            "validateStoredLicense(force: force, allowKeychainInteraction: false)"
+        ))
+        XCTAssertTrue(licenseManager.contains("authenticationContext.interactionNotAllowed = !allowInteraction"))
+        XCTAssertTrue(licenseManager.contains("case errSecItemNotFound:\n            return nil"))
+        XCTAssertTrue(licenseManager.contains("case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:"))
+        XCTAssertTrue(licenseManager.contains("func resumeStoredLicense() async"))
+        XCTAssertTrue(licenseManager.contains("许可证已保留"))
+        XCTAssertTrue(settingsView.contains("无需重新输入激活码"))
+        XCTAssertTrue(activationModal.contains("NookFlow 不会在后台突然弹出该提示"))
+    }
+
+    func testTransientNetworkFailuresRetryOnceAndKeepLicense() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let licenseManager = try String(
+            contentsOf: root.appendingPathComponent("Models/LicenseManager.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(licenseManager.contains("dataWithOneTransientRetry"))
+        XCTAssertTrue(licenseManager.contains(".secureConnectionFailed"))
+        XCTAssertTrue(licenseManager.contains("request.timeoutInterval = 15"))
+        XCTAssertTrue(licenseManager.contains("安全连接暂时失败。许可证已保留"))
+    }
+}
+
+final class AppUpdateContractTests: XCTestCase {
+    func testSparkleUsesStableIdentitySignedFeedAndSandboxInstaller() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let project = try String(
+            contentsOf: root.appendingPathComponent("NookFlow.xcodeproj/project.pbxproj"),
+            encoding: .utf8
+        )
+        let info = try String(
+            contentsOf: root.appendingPathComponent("App/Info.plist"),
+            encoding: .utf8
+        )
+        let entitlements = try String(
+            contentsOf: root.appendingPathComponent("NookFlow.entitlements"),
+            encoding: .utf8
+        )
+        let releaseEntitlements = try String(
+            contentsOf: root.appendingPathComponent("Distribution/NookFlowAdHoc.entitlements"),
+            encoding: .utf8
+        )
+        let appDelegate = try String(
+            contentsOf: root.appendingPathComponent("App/AppDelegate.swift"),
+            encoding: .utf8
+        )
+        let about = try String(
+            contentsOf: root.appendingPathComponent("Views/AboutView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(project.contains("PRODUCT_BUNDLE_IDENTIFIER = cn.luckysoft.NookFlow;"))
+        XCTAssertTrue(project.contains("version = 2.9.6;"))
+        XCTAssertTrue(info.contains("https://nookflow.luckysoft.cn/appcast.xml"))
+        XCTAssertTrue(info.contains("<key>SUPublicEDKey</key>"))
+        XCTAssertTrue(info.contains("<key>SUEnableInstallerLauncherService</key>"))
+        XCTAssertTrue(entitlements.contains("$(PRODUCT_BUNDLE_IDENTIFIER)-spks"))
+        XCTAssertTrue(entitlements.contains("$(PRODUCT_BUNDLE_IDENTIFIER)-spki"))
+        XCTAssertTrue(project.contains(
+            "CODE_SIGN_ENTITLEMENTS = Distribution/NookFlowAdHoc.entitlements;"
+        ))
+        XCTAssertTrue(releaseEntitlements.contains(
+            "<key>com.apple.security.cs.disable-library-validation</key>"
+        ))
+        XCTAssertTrue(appDelegate.contains("AppUpdateController.shared.start()"))
+        XCTAssertTrue(about.contains("AppUpdateController.shared.checkForUpdates()"))
+        XCTAssertFalse(about.contains("自动更新服务尚未接入"))
+    }
+
+    func testSparkleDialogFollowsTheSelectedApplicationLanguage() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let info = try String(
+            contentsOf: root.appendingPathComponent("App/Info.plist"),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Models/IslandSettings.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(info.contains("<key>CFBundleLocalizations</key>"))
+        XCTAssertTrue(info.contains("<string>zh-Hans</string>"))
+        XCTAssertTrue(info.contains("<string>en</string>"))
+        XCTAssertTrue(info.contains("<key>CFBundleAllowMixedLocalizations</key>"))
+        XCTAssertTrue(settings.contains("resourceLanguagePreferences"))
+        XCTAssertTrue(settings.contains("forKey: \"AppleLanguages\""))
+    }
+}
+
+final class AboutVersionPresentationContractTests: XCTestCase {
+    func testAboutPageHidesBuildBadgeButCopiesTheFullDiagnosticVersion() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Views/AboutView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("Text(\"NookFlow \\(model.version)\")"))
+        XCTAssertFalse(source.contains("AboutTag(text: \"Build \\(model.build)\")"))
+        XCTAssertTrue(source.contains("title: \"复制诊断信息\""))
+        XCTAssertTrue(source.contains("NookFlow: \\(version) (\\(build))"))
+        XCTAssertTrue(source.contains("NSPasteboard.general.setString(diagnostics, forType: .string)"))
+    }
+}
+
 final class SettingsWindowActivationContractTests: XCTestCase {
     func testDockReopenKeepsSettingsWindowAtFrontWithoutLevelDemotion() throws {
         let root = URL(fileURLWithPath: #filePath)
@@ -1750,7 +2015,7 @@ final class SettingsWindowActivationContractTests: XCTestCase {
         XCTAssertFalse(source.contains("420_000_000"))
     }
 
-    func testIslandSettingsMenuUsesItsVisibleLabelAsTheHitTarget() throws {
+    func testIslandSettingsButtonUsesItsVisibleLabelAsTheHitTarget() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1768,14 +2033,15 @@ final class SettingsWindowActivationContractTests: XCTestCase {
                 .components(separatedBy: "private func closeTodoFloatingPanel").first
         )
 
-        XCTAssertTrue(settingsButton.contains(
-            "Color.clear\n                .frame(width: 32, height: 30)"
-        ))
-        XCTAssertTrue(settingsButton.contains(
-            ".overlay {\n            SettingsMenuLabel()\n                .allowsHitTesting(false)"
-        ))
+        XCTAssertTrue(settingsButton.contains("Button(action: onOpenSettings)"))
+        XCTAssertTrue(settingsButton.contains("SettingsButtonLabel()"))
+        XCTAssertTrue(settingsButton.contains(".buttonStyle(.plain)"))
+        XCTAssertTrue(settingsButton.contains(".contentShape(Rectangle())"))
         XCTAssertFalse(settingsButton.contains("await Task.yield()"))
-        XCTAssertTrue(expanded.contains(".frame(width: 32, height: 30)"))
+        XCTAssertTrue(expanded.contains(".frame(width: 40, height: 30)"))
+        XCTAssertTrue(controller.contains(
+            "override func acceptsFirstMouse(for event: NSEvent?) -> Bool"
+        ))
         XCTAssertTrue(controller.contains(
             "private var settingsPresentationTask: Task<Void, Never>?"
         ))
@@ -1784,6 +2050,52 @@ final class SettingsWindowActivationContractTests: XCTestCase {
             "settingsPresentationTask = Task { @MainActor [weak self] in"
         ))
         XCTAssertTrue(controller.contains("guard let self, !Task.isCancelled else { return }"))
+    }
+}
+
+final class IslandTabPointerOwnershipContractTests: XCTestCase {
+    func testTabResizeCannotTreatTheInitiatingClickAsAnImmediatePointerExit() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let controller = try String(
+            contentsOf: root.appendingPathComponent("Panel/IslandWindowController.swift"),
+            encoding: .utf8
+        )
+
+        let tabTransition = try XCTUnwrap(
+            controller.components(separatedBy: "private func preparePanelFrameForTabTransition")
+                .dropFirst().first?
+                .components(separatedBy: "private func applyPanelFrame").first
+        )
+        XCTAssertTrue(tabTransition.contains("beginTabTransitionPointerOwnership("))
+        XCTAssertTrue(tabTransition.contains("retaining: currentInteractiveShellRect"))
+        XCTAssertTrue(tabTransition.contains("target: interactiveShellRect("))
+        XCTAssertTrue(tabTransition.contains("applyPanelFrame(envelopeRect, display: false)"))
+        XCTAssertFalse(tabTransition.contains("Task.sleep"))
+        XCTAssertFalse(tabTransition.contains("applyPanelFrame(targetRect"))
+
+        let collapseCheck = try XCTUnwrap(
+            controller.components(separatedBy: "private func collapseImmediatelyIfPointerOutsidePanel")
+                .dropFirst().first?
+                .components(separatedBy: "private func pointerExitCollapseDelay").first
+        )
+        XCTAssertTrue(collapseCheck.contains(
+            "shouldRetainTabTransitionPointerOwnership(at: NSEvent.mouseLocation)"
+        ))
+        XCTAssertTrue(controller.contains(
+            "private var tabTransitionPointerOrigin: NSPoint?"
+        ))
+        XCTAssertTrue(controller.contains(
+            "private var tabTransitionPointerTargetRect: NSRect?"
+        ))
+        XCTAssertTrue(controller.contains("if targetRect.contains(point)"))
+        XCTAssertTrue(controller.contains("tabTransitionIntentCorridorContains("))
+        XCTAssertTrue(controller.contains("pointInTabTransitionTriangle("))
+        XCTAssertTrue(controller.contains("let originPadding: CGFloat = 8"))
+        XCTAssertFalse(controller.contains("tabTransitionPointerRetentionRect"))
+        XCTAssertFalse(controller.contains("let releaseDistance: CGFloat = 2"))
+        XCTAssertFalse(controller.contains("tabPanelFrameSettlementTask"))
     }
 }
 
@@ -1938,7 +2250,7 @@ final class NotchGeometryContractTests: XCTestCase {
         )
 
         let modeResolver = try XCTUnwrap(
-            islandRoot.components(separatedBy: "private func updateCompactCapsuleMode()")
+            islandRoot.components(separatedBy: "private func updateCompactCapsuleMode(")
                 .dropFirst().first?
                 .components(separatedBy: "private func handleForegroundPrompt").first
         )
@@ -1955,7 +2267,7 @@ final class NotchGeometryContractTests: XCTestCase {
             "refreshRuntimeProviders()\n            updateCompactCapsuleMode()"
         ))
         XCTAssertTrue(islandRoot.contains(
-            "let shouldRun = settings.showMusicLyrics\n            && currentSnapshot.isLive"
+            "let shouldRun = isMusicProActive\n            && settings.showMusicLyrics\n            && currentSnapshot.isLive"
         ))
         XCTAssertTrue(viewModel.contains(
             "case .camera:\n            size = compactCameraCapsuleSize"
@@ -2038,7 +2350,7 @@ final class NotchGeometryContractTests: XCTestCase {
 }
 
 final class ShortcutsCardPresentationContractTests: XCTestCase {
-    func testShortcutCardUsesCompactBlueCommandRowsAndSemanticSymbols() throws {
+    func testShortcutCardUsesCompactCommandRowsAndSemanticSymbols() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -2080,8 +2392,10 @@ final class WeatherPresentationContractTests: XCTestCase {
         XCTAssertTrue(project.contains(
             "OTHER_CODE_SIGN_FLAGS = \"--requirements $(PROJECT_DIR)/NookFlowDebug.requirements\";"
         ))
+        let bundleIdentifier = "cn.luckysoft.NookFlow"
+        XCTAssertTrue(project.contains("PRODUCT_BUNDLE_IDENTIFIER = \(bundleIdentifier);"))
         XCTAssertTrue(requirement.contains(
-            "designated => identifier \"com.personal.DynamicNook\""
+            "designated => identifier \"\(bundleIdentifier)\""
         ))
     }
 
@@ -2115,6 +2429,13 @@ final class WeatherPresentationContractTests: XCTestCase {
         XCTAssertTrue(provider.contains("manager.startUpdatingLocation()"))
         XCTAssertTrue(provider.contains("locationTimeoutTimer"))
         XCTAssertTrue(provider.contains("clError.code == .locationUnknown"))
+        XCTAssertTrue(provider.contains("self.snapshot = weatherSnapshot"))
+        XCTAssertTrue(provider.contains(
+            "requestGeneration: requestGeneration"
+        ))
+        XCTAssertTrue(provider.contains("self.weatherRequestGeneration == requestGeneration"))
+        XCTAssertTrue(provider.contains("request.timeoutInterval = 12"))
+        XCTAssertFalse(provider.contains("async let placeName"))
         XCTAssertFalse(provider.contains("manager.requestLocation()"))
     }
 }
@@ -2257,7 +2578,7 @@ final class IslandExpansionSmoothnessContractTests: XCTestCase {
         XCTAssertTrue(viewModel.contains("runtimeActivationTask?.cancel()"))
         XCTAssertTrue(viewModel.contains("scheduleExpandedRuntimeActivation"))
         XCTAssertTrue(rootView.contains(
-            "runtimeIsActive: viewModel.isExpandedRuntimeActive"
+            "runtimeIsActive: viewModel.enablesLiveServices && viewModel.isExpandedRuntimeActive"
         ))
         XCTAssertTrue(rootView.contains(
             "let isExpanded = viewModel.isExpandedRuntimeActive"
@@ -2960,12 +3281,13 @@ final class MirrorCardContractTests: XCTestCase {
                 .components(separatedBy: "private var previewContent").first
         )
         XCTAssertTrue(stablePreviewSurface.contains("MirrorCameraPreview("))
-        XCTAssertTrue(card.contains("Text(\"点击开启镜子\")"))
+        XCTAssertTrue(card.contains("Label(\"开启镜子\", systemImage: \"camera\")"))
         XCTAssertTrue(card.contains(".padding(10)"))
         XCTAssertTrue(card.contains("NSWorkspace.willSleepNotification"))
         XCTAssertTrue(card.contains("NSWorkspace.didWakeNotification"))
         XCTAssertTrue(card.contains("connection.isVideoMirrored = true"))
-        XCTAssertTrue(card.contains("实时镜像 · 不会保存"))
+        XCTAssertTrue(card.contains("仅实时预览，不会保存"))
+        XCTAssertFalse(card.contains("Label(\"实时镜像"))
         XCTAssertFalse(card.contains("Timer("))
         XCTAssertFalse(card.contains("TimelineView"))
     }
@@ -2978,7 +3300,11 @@ final class MirrorCardContractTests: XCTestCase {
 
         XCTAssertTrue(expanded.contains(".frame(width: visibleTopBarWidth)"))
         XCTAssertTrue(expanded.contains("screenWidth - 72"))
-        XCTAssertTrue(expanded.contains("settingsButton\n                .offset(x: -10)\n                .zIndex(1)"))
+        XCTAssertTrue(expanded.contains("ZStack(alignment: .trailing)"))
+        XCTAssertTrue(expanded.contains(
+            "settingsButton\n                .padding(.trailing, 10)\n                .zIndex(2)"
+        ))
+        XCTAssertTrue(expanded.contains(".padding(.trailing, 58)"))
     }
 
     func testMirrorSettingsPreviewDoesNotOpenTheCamera() throws {
@@ -3046,5 +3372,44 @@ final class SettingsIslandPreviewContractTests: XCTestCase {
         XCTAssertTrue(source.contains(".scaleEffect(expandedScale, anchor: .topLeading)"))
         XCTAssertTrue(source.contains(".compositingGroup()"))
         XCTAssertTrue(source.contains("Capsule(style: .continuous)"))
+    }
+}
+
+final class ImageCardSlideshowContractTests: XCTestCase {
+    func testImageCardSupportsSandboxedFoldersWithoutDroppingSingleImageSupport() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Models/IslandSettings.swift"),
+            encoding: .utf8
+        )
+        let settingsView = try String(
+            contentsOf: root.appendingPathComponent("Views/SettingsRootView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(settings.contains("options: .withSecurityScope"))
+        XCTAssertTrue(settings.contains("imageCardBookmarkData"))
+        XCTAssertTrue(settings.contains("values.isDirectory == true"))
+        XCTAssertTrue(settingsView.contains("panel.canChooseDirectories = true"))
+        XCTAssertTrue(settingsView.contains("panel.canChooseFiles = true"))
+        XCTAssertTrue(settingsView.contains("选择一张图片或图片文件夹"))
+    }
+
+    func testSlideshowUsesCancelableLowFrequencyTaskAndReducedMotionFallback() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let expanded = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(expanded.contains("try await Task.sleep(for: .seconds(8))"))
+        XCTAssertTrue(expanded.contains("imageCardLoadTask?.cancel()"))
+        XCTAssertTrue(expanded.contains("viewModel.reduceMotionEnabled"))
+        XCTAssertTrue(expanded.contains("ImageCardDissolveModifier"))
+        XCTAssertTrue(expanded.contains("imageURLs.shuffle"))
     }
 }

@@ -96,10 +96,10 @@ enum AppRadius {
 }
 
 enum AppTypography {
-    static let pageTitle = Font.system(size: 29, weight: .semibold)
+    static let pageTitle = Font.system(size: 26, weight: .semibold)
     static let pageSubtitle = Font.system(size: 14, weight: .regular)
     static let sectionTitle = Font.system(size: 16, weight: .semibold)
-    static let rowTitle = Font.system(size: 14, weight: .semibold)
+    static let rowTitle = Font.system(size: 14, weight: .medium)
     static let body = Font.system(size: 14, weight: .regular)
     static let supporting = Font.system(size: 12, weight: .medium)
     static let caption = Font.system(size: 11, weight: .medium)
@@ -107,7 +107,7 @@ enum AppTypography {
     static let badge = Font.system(size: 10, weight: .bold)
 
     static func pageTitle(_ preference: AppFontPreference) -> Font {
-        preference.font(size: 29, weight: .semibold)
+        preference.font(size: 26, weight: .semibold)
     }
 
     static func pageSubtitle(_ preference: AppFontPreference) -> Font {
@@ -119,7 +119,7 @@ enum AppTypography {
     }
 
     static func rowTitle(_ preference: AppFontPreference) -> Font {
-        preference.font(size: 14, weight: .semibold)
+        preference.font(size: 14, weight: .medium)
     }
 
     static func supporting(_ preference: AppFontPreference) -> Font {
@@ -175,7 +175,7 @@ enum AppMotion {
     static let settingsPress = Animation.spring(response: 0.18, dampingFraction: 1.0)
     static let settingsQuick = Animation.spring(response: 0.24, dampingFraction: 1.0)
     static let settingsStandard = Animation.spring(response: 0.30, dampingFraction: 1.0)
-    static let settingsPage = Animation.spring(response: 0.36, dampingFraction: 1.0)
+    static let settingsPage = Animation.easeOut(duration: 0.16)
 
     static func resolved(_ animation: Animation, reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : animation
@@ -341,10 +341,9 @@ private struct AppSwitchButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? AppControlStyle.pressedScale : 1)
             .opacity(configuration.isPressed ? AppControlStyle.pressedOpacity : 1)
             .animation(
-                AppMotion.resolved(AppMotion.settingsPress, reduceMotion: reduceMotion),
+                configuration.isPressed ? nil : AppMotion.resolved(AppMotion.instant, reduceMotion: reduceMotion),
                 value: configuration.isPressed
             )
     }
@@ -380,11 +379,11 @@ private struct AppButtonStyleBody: View {
                     }
             }
             .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
-            .scaleEffect(configuration.isPressed ? AppControlStyle.pressedScale : 1)
+            .opacity(configuration.isPressed ? AppControlStyle.pressedOpacity : 1)
             .opacity(isEnabled ? 1 : AppControlStyle.disabledOpacity)
             .onHover { isHovering = $0 }
             .animation(AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion), value: isHovering)
-            .animation(AppMotion.resolved(AppMotion.settingsPress, reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(configuration.isPressed ? nil : AppMotion.resolved(AppMotion.instant, reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 
     private var foreground: Color {
@@ -397,6 +396,9 @@ private struct AppButtonStyleBody: View {
     private var background: Color {
         if role == .primary {
             return AppColor.accent.opacity(configuration.isPressed ? AppControlStyle.pressedOpacity : 1)
+        }
+        if configuration.isPressed {
+            return isSelected ? AppColor.accent.opacity(0.18) : AppColor.controlFillHover
         }
         if isSelected {
             return AppColor.accentSoft

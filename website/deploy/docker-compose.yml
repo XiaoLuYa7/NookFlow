@@ -1,0 +1,54 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --innodb-buffer-pool-size=256M
+      - --max-connections=60
+      - --performance-schema=OFF
+    environment:
+      MYSQL_DATABASE: nookflow
+      MYSQL_USER: nookflow
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 560m
+
+  license-server:
+    build:
+      context: ../server
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: jdbc:mysql://mysql:3306/nookflow?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true
+      DATABASE_USER: nookflow
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      LICENSE_CODE_PEPPER: ${LICENSE_CODE_PEPPER}
+      LICENSE_SIGNING_PRIVATE_JWK: ${LICENSE_SIGNING_PRIVATE_JWK}
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      PAYMENT_ENABLED: ${PAYMENT_ENABLED:-false}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      YKM_API_URL: ${YKM_API_URL:-https://pay.ykmcn.com}
+      YKM_MERCHANT_ID: ${YKM_MERCHANT_ID:-}
+      YKM_MERCHANT_PRIVATE_KEY: ${YKM_MERCHANT_PRIVATE_KEY:-}
+      YKM_PLATFORM_PUBLIC_KEY: ${YKM_PLATFORM_PUBLIC_KEY:-}
+      PAYMENT_DELIVERY_ENCRYPTION_KEY: ${PAYMENT_DELIVERY_ENCRYPTION_KEY:-}
+      NOOKFLOW_PRO_PRICE_CENTS: ${NOOKFLOW_PRO_PRICE_CENTS:-990}
+      JAVA_TOOL_OPTIONS: -XX:MaxRAM=320m
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:8787:8787
+    mem_limit: 420m
+
+volumes:
+  mysql-data:

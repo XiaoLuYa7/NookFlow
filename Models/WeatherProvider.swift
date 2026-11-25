@@ -54,6 +54,7 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     private var locationTimeoutTimer: Timer?
     private var isLocationUpdateActive = false
     private var hasUsableLocationForCurrentRequest = false
+    private var weatherRequestGeneration: UInt64 = 0
     private static let authorizationRequestLock = NSLock()
     private static var authorizationRequestInFlight = false
     private static let defaultRefreshInterval: TimeInterval = 15 * 60
@@ -93,6 +94,7 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     func stop() {
         hasStarted = false
         configureAutoRefresh(interval: nil)
+        weatherRequestGeneration &+= 1
         weatherTask?.cancel()
         weatherTask = nil
         geocoder.cancelGeocode()
@@ -310,6 +312,9 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func loadWeather(for location: CLLocation) {
+        weatherRequestGeneration &+= 1
+        let requestGeneration = weatherRequestGeneration
+
         if !snapshot.isLive {
             updateSnapshot(
                 WeatherSnapshot(
@@ -329,14 +334,18 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
         weatherTask = Task { [weak self, location] in
             guard let self else { return }
             do {
-                async let placeName = self.placeName(for: location)
-                async let weather = Self.weather(for: location)
-                let resolvedPlaceName = await placeName
-                let weatherSnapshot = try await weather
-                let resolvedSnapshot = weatherSnapshot.merging(locationName: resolvedPlaceName)
+                let weatherSnapshot = try await Self.weather(for: location)
                 guard !Task.isCancelled else { return }
                 await MainActor.run { [weak self] in
-                    self?.snapshot = resolvedSnapshot
+                    guard let self,
+                          self.weatherRequestGeneration == requestGeneration
+                    else { return }
+                    self.snapshot = weatherSnapshot
+                    self.resolvePlaceName(
+                        for: location,
+                        weatherSnapshot: weatherSnapshot,
+                        requestGeneration: requestGeneration
+                    )
                 }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -416,7 +425,9 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
             throw URLError(.badURL)
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse, 200..<300 ~= httpResponse.statusCode else {
             throw URLError(.badServerResponse)
@@ -439,15 +450,26 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
         )
     }
 
-    private func placeName(for location: CLLocation) async -> String {
-        await withCheckedContinuation { continuation in
-            geocoder.reverseGeocodeLocation(location) { placemarks, _ in
-                let placemark = placemarks?.first
-                let name = placemark?.locality
-                    ?? placemark?.subLocality
-                    ?? placemark?.administrativeArea
-                    ?? "当前位置"
-                continuation.resume(returning: name)
+    private func resolvePlaceName(
+        for location: CLLocation,
+        weatherSnapshot: WeatherSnapshot,
+        requestGeneration: UInt64
+    ) {
+        geocoder.cancelGeocode()
+        geocoder.reverseGeocodeLocation(location) { [weak self] placemarks, _ in
+            guard let self else { return }
+            let placemark = placemarks?.first
+            let name = placemark?.locality
+                ?? placemark?.subLocality
+                ?? placemark?.administrativeArea
+                ?? "当前位置"
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.weatherRequestGeneration == requestGeneration,
+                      self.snapshot.isLive
+                else { return }
+                self.snapshot = weatherSnapshot.merging(locationName: name)
             }
         }
     }

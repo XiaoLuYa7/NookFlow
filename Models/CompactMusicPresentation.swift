@@ -124,3 +124,45 @@ struct CompactMusicPresentation: Equatable {
         return text
     }
 }
+
+
+struct CompactLyricPair: Equatable {
+    let leftIndex: Int
+    let rightIndex: Int?
+
+    static func resolve(at sourceIndex: Int?, in lines: [LyricLine]) -> CompactLyricPair? {
+        guard let sourceIndex, lines.indices.contains(sourceIndex) else { return nil }
+        let visible = lines.indices.filter { !displayText(for: lines[$0]).isEmpty }
+        guard let active = visible.lastIndex(where: { $0 <= sourceIndex }) else { return nil }
+        let first = active - active % 2
+        return CompactLyricPair(leftIndex: visible[first],
+            rightIndex: visible.indices.contains(first + 1) ? visible[first + 1] : nil)
+    }
+
+    static func displayText(for line: LyricLine) -> String {
+        let words = line.words.trimmingCharacters(in: .whitespacesAndNewlines)
+        return words.isEmpty ? (line.translation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") : words
+    }
+}
+
+
+enum CapsuleLyricsLayout {
+    static let widthRange: ClosedRange<Double> = 400...650
+    static let fontSizeRange: ClosedRange<Double> = 9...13
+    static let defaultWidth: Double = 460
+    static let defaultFontSize: Double = 10.5
+
+    static func clampedWidth(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultWidth }
+        return min(max(value, widthRange.lowerBound), widthRange.upperBound)
+    }
+
+    static func clampedFontSize(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultFontSize }
+        return min(max(value, fontSizeRange.lowerBound), fontSizeRange.upperBound)
+    }
+
+    static func fittedWidth(_ preferredWidth: Double, cameraWidth: CGFloat, maximumWidth: CGFloat) -> CGFloat {
+        min(max(CGFloat(clampedWidth(preferredWidth)), cameraWidth + 80), maximumWidth)
+    }
+}

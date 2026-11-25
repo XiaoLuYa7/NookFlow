@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.dev.vars
+.license-keys.txt
+deploy/.env
+deploy/*.tar.gz
+server/target/

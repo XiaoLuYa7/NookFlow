@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="NookFlow 将天气、待办、音乐、快捷应用与设备状态自然带到 Mac 顶部。">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>NookFlow - 让 Mac 顶部更有用</title>
+  <link rel="icon" href="assets/nookflow-icon.png">
+  <script>
+    (() => {
+      const saved = localStorage.getItem("nookflow-theme");
+      const theme = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header" aria-label="NookFlow">
+    <a class="brand" href="#top" data-i18n-aria="homeAria" aria-label="NookFlow 首页">
+      <img src="assets/nookflow-icon.png" alt="" width="34" height="34">
+      <span>NookFlow</span>
+    </a>
+
+    <nav data-i18n-aria="navAria" aria-label="主导航">
+      <a href="#experience" data-i18n="navExperience">体验</a>
+      <a href="#features" data-i18n="navFeatures">功能</a>
+      <a href="#pro">Pro</a>
+      <a href="#questions" data-i18n="navQuestions">常见问题</a>
+    </nav>
+
+    <div class="header-actions">
+      <button class="icon-button theme-toggle" type="button" data-i18n-title="themeTitle" title="切换外观" aria-label="切换外观">
+        <svg class="sun-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="moon-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20.7 14.4A8.5 8.5 0 0 1 9.6 3.3 8.5 8.5 0 1 0 20.7 14.4Z"/></svg>
+      </button>
+      <button class="language-toggle" type="button" data-i18n-title="languageTitle" title="切换语言" aria-label="切换语言">EN</button>
+      <a class="header-download" href="downloads/NookFlow-1.0.4.dmg" download>
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg>
+        <span data-i18n="downloadShort">下载</span>
+      </a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow" data-i18n="heroEyebrow">为 macOS 而生</p>
+        <h1><span>NookFlow</span><strong data-i18n="heroTitle">把工作流，放回视线里。</strong></h1>
+        <p class="hero-description" data-i18n="heroDescription">天气、待办、音乐、快捷应用与设备状态，在需要时自然展开，安静时隐入 Mac 顶部。</p>
+        <div class="hero-actions">
+          <a class="primary-button" href="downloads/NookFlow-1.0.4.dmg" download>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg>
+            <span data-i18n="downloadMac">下载 Mac 版</span>
+          </a>
+          <a class="text-button" href="#experience">
+            <span data-i18n="seeItInAction">查看实际效果</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+          </a>
+        </div>
+        <p class="download-meta" data-i18n="downloadMeta">版本 1.0.4 · macOS 14 或更高版本 · Apple Silicon · 未公证测试版</p>
+      </div>
+
+      <figure class="hero-product" data-i18n-aria="heroDemoAria" aria-label="NookFlow 在 macOS 桌面展开的真实录屏">
+        <div class="display-bezel">
+          <video class="hero-demo" muted loop playsinline autoplay preload="metadata" poster="assets/nookflow-desktop-real.png">
+            <source src="assets/nookflow-desktop-demo.mp4" type="video/mp4">
+          </video>
+        </div>
+      </figure>
+    </section>
+
+    <section class="principles" aria-label="产品原则">
+      <div><strong data-i18n="nativeTitle">原生融入</strong><span data-i18n="nativeBody">熟悉的 macOS 交互</span></div>
+      <div><strong data-i18n="localTitle">本地优先</strong><span data-i18n="localBody">个人数据留在你的 Mac</span></div>
+      <div><strong data-i18n="lightTitle">轻量运行</strong><span data-i18n="lightBody">事件驱动，按需刷新</span></div>
+    </section>
+
+    <section id="experience" class="experience-section page-section">
+      <div class="section-heading">
+        <p class="eyebrow" data-i18n="experienceEyebrow">从顶部开始</p>
+        <h2 data-i18n="experienceTitle">真实的产品，不是概念图。</h2>
+        <p data-i18n="experienceBody">查看 NookFlow 当前版本的灵动岛与文件拖拽实录。没有概念渲染，只有正在使用的产品。</p>
+      </div>
+
+      <div class="view-switcher" role="group" data-i18n-aria="viewSwitcherAria" aria-label="界面预览选择">
+        <button type="button" data-view="island" aria-pressed="true" data-i18n="islandView">灵动岛</button>
+        <button type="button" data-view="drag" aria-pressed="false" data-i18n="dragView">文件拖拽</button>
+      </div>
+
+      <figure class="showcase" data-active-view="island">
+        <div class="showcase-chrome" aria-hidden="true"><i></i><i></i><i></i><span>NookFlow</span></div>
+        <div class="showcase-viewport">
+          <img class="showcase-media is-active" data-showcase="island" src="assets/nookflow-desktop-real.png" alt="NookFlow 在 macOS 桌面完整展开的真实界面" data-i18n-alt="islandAlt">
+          <video class="showcase-media showcase-video" data-showcase="drag" muted loop playsinline preload="metadata" poster="assets/nookflow-drag-real.png" data-i18n-aria="dragDemoAria" aria-label="将文件拖入 NookFlow 的真实演示">
+            <source src="assets/nookflow-drag-demo.mp4" type="video/mp4">
+          </video>
+        </div>
+      </figure>
+    </section>
+
+    <section id="features" class="features-section page-section">
+      <div class="section-heading left-heading">
+        <p class="eyebrow" data-i18n="featuresEyebrow">恰到好处</p>
+        <h2 data-i18n="featuresTitle">重要信息，就在视线边缘。</h2>
+        <p data-i18n="featuresBody">不把桌面变成仪表盘。每项能力都在需要时出现，不使用时安静退场。</p>
+      </div>
+
+      <div class="feature-list">
+        <article>
+          <div class="feature-symbol cyan-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 19h11a4 4 0 0 0 .7-7.9A6 6 0 0 0 6.2 9.7 4.6 4.6 0 0 0 6 19Z"/><path d="M8 4V2m-4 5-1.5-1.5M12 7l1.5-1.5"/></svg></div>
+          <div><h3 data-i18n="weatherTitle">天气，抬眼就知道</h3><p data-i18n="weatherBody">当前天气、体感温度与湿度留在视线边缘，不必再打开天气 App。</p><span class="feature-benefit" data-i18n="weatherBenefit">出门前，少一次切换</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol green-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12a9 9 0 1 1-5.3-8.2"/></svg></div>
+          <div><h3 data-i18n="todoTitle">待办，与系统保持同步</h3><p data-i18n="todoBody">快速新建、分类、设置优先级和到期提醒，并与 Apple 提醒事项同步。</p><span class="feature-benefit" data-i18n="todoBenefit">今天要做什么，一眼清楚</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol blue-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg></div>
+          <div><h3 data-i18n="playerTitle">播放控制，就在顶部</h3><p data-i18n="playerBody">封面、歌曲信息、播放进度与播控集中呈现，不用切回播放器。</p><span class="feature-benefit" data-i18n="playerBenefit">音乐不断，思路也不断</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol mint-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h13"/><path d="m17 14 3 3-3 3"/></svg></div>
+          <div><h3 data-i18n="lyricFeatureTitle">逐字歌词，随你放置</h3><p data-i18n="lyricFeatureBody">菜单栏、胶囊和桌面三种形态，让歌词出现，却不挡住正在做的事。</p><span class="feature-benefit" data-i18n="lyricFeatureBenefit">跟唱，也能保持专注</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol violet-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></div>
+          <div><h3 data-i18n="quickAppsTitle">常用应用，一步打开</h3><p data-i18n="quickAppsBody">把常用应用收进两列或三列网格，鼠标不必再绕到程序坞。</p><span class="feature-benefit" data-i18n="quickAppsBenefit">入口更近，切换更少</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol amber-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 9-12h-7l1-8Z"/></svg></div>
+          <div><h3 data-i18n="shortcutsTitle">快捷指令，随时运行</h3><p data-i18n="shortcutsBody">直接触发已配置的系统快捷指令，把重复操作留给自动化。</p><span class="feature-benefit" data-i18n="shortcutsBenefit">少走几步，多留一点专注</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol blue-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v3h16v-3"/></svg></div>
+          <div><h3 data-i18n="fileDropTitle">文件拖到顶部，就到位</h3><p data-i18n="fileDropBody">拖入文件后直接存入文稿或隔空投送，不再来回寻找目标窗口。</p><span class="feature-benefit" data-i18n="fileDropBenefit">从拿起文件到送达，只需一次拖拽</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol rose-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m5 18 5-5 3 3 2-2 4 4"/></svg></div>
+          <div><h3 data-i18n="imageTitle">一张重要图片，始终在眼前</h3><p data-i18n="imageBody">把参考图、二维码或临时素材固定在顶部，需要时立即展开查看。</p><span class="feature-benefit" data-i18n="imageBenefit">不用翻找，也不会打断</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol cyan-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg></div>
+          <div><h3 data-i18n="systemTitle">设备状态，不打扰</h3><p data-i18n="systemBody">CPU、内存与磁盘信息按需更新；界面不可见时停止不必要的刷新。</p><span class="feature-benefit" data-i18n="systemBenefit">异常负载，更早发现</span></div>
+        </article>
+        <article>
+          <div class="feature-symbol green-symbol"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M14.5 6 16 3h4l1 3"/><rect x="3" y="6" width="18" height="14" rx="3"/><circle cx="12" cy="13" r="4"/></svg></div>
+          <div><h3 data-i18n="mirrorTitle">开会前，快速看一眼</h3><p data-i18n="mirrorBody">从顶部开启镜子预览，快速确认状态，不必寻找相机应用。</p><span class="feature-benefit" data-i18n="mirrorBenefit">准备好，再进入镜头</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="lyrics-section page-section">
+      <div class="section-heading">
+        <p class="eyebrow" data-i18n="lyricsEyebrow">不打断视线</p>
+        <h2 data-i18n="lyricsTitle">歌词，出现在合适的位置。</h2>
+        <p data-i18n="lyricsBody">同一首歌可以轻量显示在菜单栏、胶囊或桌面。以下均为 NookFlow 当前版本的真实界面。</p>
+      </div>
+
+      <div class="lyrics-switcher" role="group" data-i18n-aria="lyricsSwitcherAria" aria-label="歌词显示形态选择">
+        <button type="button" data-lyrics-view="menubar" aria-pressed="true" data-i18n="lyricsMenubar">菜单栏</button>
+        <button type="button" data-lyrics-view="capsule" aria-pressed="false" data-i18n="lyricsCapsule">胶囊</button>
+        <button type="button" data-lyrics-view="desktop" aria-pressed="false" data-i18n="lyricsDesktop">桌面</button>
+      </div>
+
+      <figure class="lyrics-showcase" data-active-lyrics="menubar">
+        <div class="lyrics-viewport">
+          <img class="lyrics-media is-active" data-lyrics="menubar" src="assets/nookflow-lyrics-menubar.jpg" alt="NookFlow 菜单栏歌词真实界面" data-i18n-alt="lyricsMenubarAlt">
+          <img class="lyrics-media" data-lyrics="capsule" src="assets/nookflow-lyrics-capsule.jpg" alt="NookFlow 胶囊歌词真实界面" data-i18n-alt="lyricsCapsuleAlt">
+          <img class="lyrics-media" data-lyrics="desktop" src="assets/nookflow-lyrics-desktop.jpg" alt="NookFlow 桌面歌词真实界面" data-i18n-alt="lyricsDesktopAlt">
+        </div>
+        <figcaption><span data-i18n="lyricsCaption">三种形态 · 随时切换</span><span data-i18n="realScreenshot">真实桌面截图</span></figcaption>
+      </figure>
+    </section>
+
+    <section id="pro" class="pro-section">
+      <span id="pricing" class="section-anchor" aria-hidden="true"></span>
+      <div class="pro-inner">
+        <div class="pro-copy">
+          <p class="eyebrow">NookFlow Pro</p>
+          <h2 data-i18n="proTitle">一次下载，按需要解锁。</h2>
+          <p data-i18n="proBody">官网下载的是完整版本。免费功能无需登录；需要 Pro 时，在应用内输入激活码即可。</p>
+          <div class="pricing-display" aria-label="NookFlow Pro 定价">
+            <span data-i18n="pricingLabel">限时体验价</span>
+            <strong><small>¥</small><span id="pricingAmount">9.90</span></strong>
+            <del class="original-price" data-i18n="originalPrice">原价 ¥29.90</del>
+            <em data-i18n="pricingUnit">一次购买 · 一台 Mac</em>
+          </div>
+          <ul>
+            <li><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg><span data-i18n="proPointOne">一个激活码绑定一台 Mac</span></li>
+            <li><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg><span data-i18n="proPointTwo">旧设备停用后可以转移</span></li>
+            <li><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg><span data-i18n="proPointThree">使用本机密钥，不采集硬件序列号</span></li>
+          </ul>
+        </div>
+        <div class="license-panel">
+          <div class="license-header"><img src="assets/nookflow-icon.png" alt="" width="52" height="52"><div><strong>NookFlow Pro</strong><span data-i18n="deviceLicense">设备许可</span></div><em>PRO</em></div>
+          <p class="license-scope" data-i18n="proScope">解锁音乐与待办功能，其他模块继续免费使用。</p>
+          <label><span data-i18n="activationCode">激活码</span><b>NF-•••••-•••••-•••••</b></label>
+          <button class="license-button" id="openCheckout" type="button" disabled><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m12 12 8-8M15 7l3 3M18 4l2 2"/></svg><span data-i18n="buyPro">购买 NookFlow Pro</span></button>
+          <span class="license-price"><strong id="licensePrice">¥9.90</strong><del data-i18n="originalPrice">原价 ¥29.90</del></span>
+          <small data-i18n="activationPath">设置 → 许可</small>
+        </div>
+      </div>
+    </section>
+
+    <section id="questions" class="faq-section page-section">
+      <div class="section-heading">
+        <p class="eyebrow" data-i18n="faqEyebrow">常见问题</p>
+        <h2 data-i18n="faqTitle">下载之前，你可能想知道。</h2>
+      </div>
+      <div class="faq-list">
+        <details open><summary data-i18n="faqOneQuestion">为什么激活码只能绑定一台设备？</summary><p data-i18n="faqOneAnswer">激活时会在本机生成不可迁移的设备密钥。服务器只保存公钥摘要和绑定关系，不读取 Mac 序列号。</p></details>
+        <details><summary data-i18n="faqTwoQuestion">更换 Mac 或重装系统怎么办？</summary><p data-i18n="faqTwoAnswer">先在旧设备的许可页面停用，再在新设备激活。无法访问旧设备时，可以联系支持重置绑定。</p></details>
+        <details><summary data-i18n="faqThreeQuestion">NookFlow 会上传我的个人数据吗？</summary><p data-i18n="faqThreeAnswer">待办、应用列表和偏好设置以本地处理为主。许可服务只接收验证授权所需的设备公钥摘要与激活状态。</p></details>
+        <details><summary data-i18n="faqFourQuestion">系统版本有什么要求？</summary><p data-i18n="faqFourAnswer">当前版本需要 macOS 14 或更高版本，并面向 Apple Silicon Mac 提供下载。</p></details>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <img src="assets/nookflow-icon.png" alt="NookFlow" width="78" height="78">
+      <h2 data-i18n="finalTitle">让 Mac 顶部，真正为你所用。</h2>
+      <p data-i18n="finalBody">下载完整版本，免费开始使用。</p>
+      <a class="primary-button" href="downloads/NookFlow-1.0.4.dmg" download><span data-i18n="downloadVersion">下载 NookFlow 1.0.4</span></a>
+      <code>SHA-256: 19eb296f32b9304b105fc978c556b49da4cb67e066a75d7908e2e9c96a672eb0</code>
+    </section>
+  </main>
+
+  <div class="checkout-backdrop" id="checkoutBackdrop" hidden>
+    <section class="checkout-dialog" role="dialog" aria-modal="true" aria-labelledby="checkoutTitle">
+      <button class="checkout-close" id="checkoutClose" type="button" aria-label="关闭">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+      <div class="checkout-heading">
+        <img src="assets/nookflow-icon.png" alt="" width="58" height="58">
+        <div><span>NookFlow Pro</span><h2 id="checkoutTitle" data-i18n="checkoutTitle">解锁音乐与待办</h2></div>
+      </div>
+
+      <form id="checkoutForm">
+        <p class="checkout-description" data-i18n="checkoutDescription">支付成功后立即生成一个仅绑定一台 Mac 的激活码。</p>
+        <label class="checkout-field">
+          <span data-i18n="checkoutEmail">接收与找回邮箱</span>
+          <input id="checkoutEmail" name="email" type="email" autocomplete="email" required placeholder="name@example.com">
+          <small data-i18n="checkoutEmailHint">用于订单找回，不发送营销邮件。</small>
+        </label>
+        <fieldset class="payment-channels">
+          <legend data-i18n="paymentMethod">支付方式</legend>
+          <label><input type="radio" name="channel" value="alipay" checked><span class="channel-mark alipay-mark">支</span><b data-i18n="alipay">支付宝</b><i></i></label>
+          <label><input type="radio" name="channel" value="wxpay"><span class="channel-mark wechat-mark">微</span><b data-i18n="wechatPay">微信支付</b><i></i></label>
+        </fieldset>
+        <div class="checkout-summary"><span data-i18n="amountDue">应付金额</span><strong id="checkoutAmount">--</strong></div>
+        <p class="checkout-error" id="checkoutError" role="alert" hidden></p>
+        <button class="checkout-submit" id="checkoutSubmit" type="submit" disabled><span data-i18n="continuePayment">继续支付</span><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
+      </form>
+
+      <div class="checkout-result" id="checkoutResult" hidden>
+        <div class="checkout-spinner" id="checkoutSpinner" aria-hidden="true"></div>
+        <h3 id="checkoutResultTitle" data-i18n="waitingPayment">等待支付结果</h3>
+        <p id="checkoutResultBody" data-i18n="waitingPaymentBody">付款完成后，此页面会自动显示激活码。</p>
+        <div class="activation-result" id="activationResult" hidden>
+          <span data-i18n="yourActivationCode">你的激活码</span>
+          <code id="purchasedActivationCode"></code>
+          <button id="copyActivationCode" type="button" data-i18n="copyCode">复制激活码</button>
+        </div>
+        <button class="checkout-secondary" id="checkPaymentNow" type="button" data-i18n="checkPaymentNow">我已完成支付</button>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <div class="brand footer-brand"><img src="assets/nookflow-icon.png" alt="" width="30" height="30"><span>NookFlow</span></div>
+    <p>© 2026 NookFlow. <span data-i18n="madeForMac">Made for Mac.</span></p>
+    <div><a href="mailto:lujunfeng.lucky@foxmail.com" data-i18n="support">联系支持</a><a href="#questions" data-i18n="privacyLicense">隐私与许可</a><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">豫ICP备2024076922号</a></div>
+  </footer>
+
+  <script src="site.js"></script>
+</body>
+</html>

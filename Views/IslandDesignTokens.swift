@@ -75,6 +75,25 @@ enum IslandDesignTokens {
         duration: compactHoverRestoreDuration,
         extraBounce: 0
     )
+    static let foregroundPromptContentRevealDelay: TimeInterval = 0.055
+    static let foregroundPromptContentRevealDuration: TimeInterval = 0.18
+    static let foregroundPromptContentHideDuration: TimeInterval = 0.11
+    static let foregroundPromptShellOpenAnimation = Animation.spring(
+        response: 0.36,
+        dampingFraction: 0.96,
+        blendDuration: 0
+    )
+    static let foregroundPromptShellCloseAnimation = Animation.spring(
+        response: 0.32,
+        dampingFraction: 1,
+        blendDuration: 0
+    )
+    static let foregroundPromptContentRevealAnimation = Animation.easeOut(
+        duration: foregroundPromptContentRevealDuration
+    )
+    static let foregroundPromptContentHideAnimation = Animation.easeIn(
+        duration: foregroundPromptContentHideDuration
+    )
 
     static let compactCornerRadius: CGFloat = 21
     static let expandedCornerRadius: CGFloat = 34

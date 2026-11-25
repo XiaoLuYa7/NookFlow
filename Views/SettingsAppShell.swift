@@ -39,6 +39,7 @@ struct SidebarView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Binding var selection: SettingsPage
     @Binding var isCollapsed: Bool
+    let onLicenseRequested: () -> Void
     @State private var areLabelsVisible = true
     @State private var requestedCollapsed = false
     @State private var collapseAnimationTask: Task<Void, Never>?
@@ -78,8 +79,11 @@ struct SidebarView: View {
             }
             .scrollIndicators(.never)
 
-            collapseButton
-                .padding(AppSpacing.sm)
+            VStack(spacing: AppSpacing.xs) {
+                licenseButton
+                collapseButton
+            }
+            .padding(AppSpacing.sm)
         }
         .frame(width: isCollapsed ? 60 : 184)
         .background {
@@ -134,6 +138,17 @@ struct SidebarView: View {
         ) {
             toggleSidebar()
         }
+    }
+
+    private var licenseButton: some View {
+        SidebarItemView(
+            title: "许可",
+            systemName: "key",
+            isSelected: false,
+            isCollapsed: isCollapsed,
+            showsTitle: areLabelsVisible,
+            action: onLicenseRequested
+        )
     }
 
     private func toggleSidebar() {
@@ -221,7 +236,9 @@ struct SidebarItemView: View {
             .contentShape(RoundedRectangle(cornerRadius: AppRadius.row, style: .continuous))
         }
         .buttonStyle(SidebarPressButtonStyle())
-        .help(isCollapsed ? title : "")
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onHover { isHovering = $0 }
         .animation(AppMotion.resolved(AppMotion.settingsQuick, reduceMotion: reduceMotion), value: isHovering)
         .animation(AppMotion.resolved(AppMotion.settingsStandard, reduceMotion: reduceMotion), value: isSelected)
@@ -239,10 +256,9 @@ private struct SidebarPressButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.82 : 1)
             .animation(
-                AppMotion.resolved(AppMotion.settingsPress, reduceMotion: reduceMotion),
+                configuration.isPressed ? nil : AppMotion.resolved(AppMotion.instant, reduceMotion: reduceMotion),
                 value: configuration.isPressed
             )
     }

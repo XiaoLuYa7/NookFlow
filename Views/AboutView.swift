@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -10,7 +11,6 @@ final class AboutViewModel: ObservableObject {
     }
 
     @Published var presentedLegalInfo: LegalInfo?
-    @Published var isShowingUpdateInfo = false
 
     let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -26,7 +26,17 @@ final class AboutViewModel: ObservableObject {
     }
 
     func checkForUpdates() {
-        isShowingUpdateInfo = true
+        AppUpdateController.shared.checkForUpdates()
+    }
+
+    func copyDiagnosticInformation() {
+        let diagnostics = """
+        NookFlow: \(version) (\(build))
+        macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)
+        Architecture: \(architecture)
+        """
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(diagnostics, forType: .string)
     }
 }
 
@@ -46,11 +56,6 @@ struct AboutView: View {
             supportCard
             legalCard
             footer
-        }
-        .alert("当前版本 \(model.version)", isPresented: $model.isShowingUpdateInfo) {
-            Button("知道了", role: .cancel) {}
-        } message: {
-            Text("自动更新服务尚未接入。当前构建为 \(model.build)，后续接入更新源后会在这里检查新版本。")
         }
         .sheet(item: $model.presentedLegalInfo) { info in
             AboutLegalDocumentView(info: info)
@@ -81,7 +86,7 @@ struct AboutView: View {
                 .appShadow(AppShadowStyle.floating)
 
             VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                Text("NookFlow")
+                Text("NookFlow \(model.version)")
                     .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(AppColor.textPrimary)
 
@@ -89,10 +94,6 @@ struct AboutView: View {
                     .font(AppTypography.body)
                     .foregroundStyle(AppColor.textSecondary)
 
-                HStack(spacing: AppSpacing.sm) {
-                    AboutTag(text: "Version \(model.version)")
-                    AboutTag(text: "Build \(model.build)")
-                }
             }
         }
     }
@@ -112,6 +113,7 @@ struct AboutView: View {
             LazyVGrid(
                 columns: [
                     GridItem(.flexible(), spacing: AppSpacing.sm, alignment: .top),
+                    GridItem(.flexible(), spacing: AppSpacing.sm, alignment: .top),
                     GridItem(.flexible(), spacing: AppSpacing.sm, alignment: .top)
                 ],
                 spacing: AppSpacing.sm
@@ -122,6 +124,13 @@ struct AboutView: View {
                     subtitle: "查看当前版本状态",
                     actionTitle: "检查",
                     action: model.checkForUpdates
+                )
+                AboutSupportTile(
+                    icon: "doc.on.doc",
+                    title: "复制诊断信息",
+                    subtitle: "包含完整版本与系统信息",
+                    actionTitle: "复制",
+                    action: model.copyDiagnosticInformation
                 )
                 AboutSupportTile(
                     icon: "bubble.left.and.text.bubble.right",
@@ -477,22 +486,6 @@ private struct AboutLegalReference: Identifiable {
     let url: URL
 
     var id: String { url.absoluteString }
-}
-
-private struct AboutTag: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(AppTypography.caption.monospacedDigit())
-            .foregroundStyle(AppColor.textSecondary)
-            .padding(.horizontal, AppSpacing.sm)
-            .frame(height: 24)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(AppColor.controlFill)
-            }
-    }
 }
 
 private struct AboutMetric: View {
