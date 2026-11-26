@@ -521,6 +521,14 @@ final class IslandSettings: ObservableObject {
         didSet { save(imageCardBookmarkData, for: Keys.imageCardBookmarkData) }
     }
 
+    @Published var fileDataLocation: FileDataLocation {
+        didSet {
+            if let data = try? PropertyListEncoder().encode(fileDataLocation) {
+                save(data, for: Keys.fileDataLocation)
+            }
+        }
+    }
+
     @Published var quickAppsSettingsTrigger: Bool = false
     @Published var shortcutsSettingsTrigger: Bool = false
 
@@ -647,6 +655,8 @@ final class IslandSettings: ObservableObject {
         showMirrorModule = defaults.object(forKey: Keys.showMirrorModule) as? Bool ?? false
         imageCardPath = defaults.string(forKey: Keys.imageCardPath) ?? ""
         imageCardBookmarkData = defaults.data(forKey: Keys.imageCardBookmarkData) ?? Data()
+        fileDataLocation = defaults.data(forKey: Keys.fileDataLocation)
+            .flatMap { try? PropertyListDecoder().decode(FileDataLocation.self, from: $0) } ?? .defaultLocation
         let storedOpenSpeed = defaults.object(forKey: Keys.openSpeed) as? Double ?? 0.59
         let storedCloseSpeed = defaults.object(forKey: Keys.closeSpeed) as? Double ?? 0.59
         openSpeed = Self.migratedAnimationSpeed(storedOpenSpeed)
@@ -703,6 +713,7 @@ final class IslandSettings: ObservableObject {
     }
 
     // Test-window overrides are never persisted to user preferences.
+    @Published var expandedWidthLimit: CGFloat = .greatestFiniteMagnitude
     @Published var simulationExpandedSize: CGSize?
 
     var islandSize: CGSize {
@@ -796,6 +807,7 @@ final class IslandSettings: ObservableObject {
         static let showMirrorModule = "settings.showMirrorModule"
         static let imageCardPath = "settings.imageCardPath"
         static let imageCardBookmarkData = "settings.imageCardBookmarkData"
+        static let fileDataLocation = "settings.fileDataLocation"
         static let openSpeed = "settings.openSpeed"
         static let closeSpeed = "settings.closeSpeed"
         static let closeDelay = "settings.closeDelay"

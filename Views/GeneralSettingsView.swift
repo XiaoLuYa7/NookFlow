@@ -39,6 +39,8 @@ final class GeneralSettingsViewModel: ObservableObject {
 
 struct GeneralSettingsView: View {
     @ObservedObject var settings: IslandSettings
+    @State private var isSavingFileLocation = false
+    @State private var fileLocationError: String?
     @State private var availableScreens = NSScreen.screens
     @StateObject private var model = GeneralSettingsViewModel()
 
@@ -57,6 +59,7 @@ struct GeneralSettingsView: View {
                 }
             } content: {
                 basicSection
+                fileStorageSection
                 islandFoundationSection
                 animationSection
                 interactionSection
@@ -82,6 +85,76 @@ struct GeneralSettingsView: View {
             }
         } message: {
             Text("通用设置会立即恢复为默认值，灵动岛尺寸、动画和交互方式也会同步更新。")
+        }
+    }
+
+    private var fileStorageSection: some View {
+        GeneralSettingsGroup(
+            icon: "folder",
+            title: "文件存储",
+            subtitle: "文件页和拖入灵动岛的文件共用此目录。更换目录后，旧文件仍留在原位置。"
+        ) {
+            VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                Text(settings.fileDataLocation.url.path)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(AppColor.textPrimary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+
+                if !settings.fileDataLocation.hasAuthorization {
+                    Text("首次使用时，请授权当前用户的「文稿」或选择其他文件夹。")
+                        .font(AppTypography.supporting)
+                        .foregroundStyle(AppColor.textSecondary)
+                }
+                if let fileLocationError {
+                    Text(fileLocationError)
+                        .font(AppTypography.supporting)
+                        .foregroundStyle(.red)
+                }
+
+                HStack(spacing: AppSpacing.sm) {
+                    Button(settings.fileDataLocation.hasAuthorization ? "使用默认目录…" : "授权默认目录…") {
+                        selectFileDataFolder(useDefault: true)
+                    }
+                    .buttonStyle(AppButtonStyle())
+
+                    Button("选择文件夹…") {
+                        selectFileDataFolder(useDefault: false)
+                    }
+                    .buttonStyle(AppButtonStyle(role: .quiet))
+                }
+                .disabled(isSavingFileLocation)
+            }
+        }
+    }
+
+    private func selectFileDataFolder(useDefault: Bool) {
+        let panel = NSOpenPanel()
+        panel.title = useDefault ? "授权默认 FileData 目录" : "选择 FileData 文件夹"
+        panel.message = useDefault ? "请选择当前用户的「文稿」，NookFlow 会在其中创建 NookFlow/FileData。" : "选择文件页用于存储文件的目录。"
+        panel.prompt = "使用此文件夹"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = !useDefault
+        panel.directoryURL = useDefault
+            ? FileDataLocation.documentsDirectory.deletingLastPathComponent()
+            : settings.fileDataLocation.url
+        guard panel.runModal() == .OK, let selectedFolder = panel.url else { return }
+
+        isSavingFileLocation = true
+        fileLocationError = nil
+        Task { @MainActor in
+            defer { isSavingFileLocation = false }
+            do {
+                let location = try await Task.detached(priority: .userInitiated) {
+                    try FileDataLocation.authorizedSelection(selectedFolder, useDefault: useDefault)
+                }.value
+                settings.fileDataLocation = location
+            } catch {
+                fileLocationError = "无法使用所选文件夹：\(error.localizedDescription)"
+            }
         }
     }
 
@@ -225,7 +298,7 @@ struct GeneralSettingsView: View {
             AppSettingsToggleRow(
                 icon: nil,
                 title: "显示固定展开按钮",
-                subtitle: "控制右下角锁定与解锁按钮是否显示",
+                subtitle: "控制顶部栏锁定与解锁按钮是否显示",
                 showsDivider: false,
                 isOn: $settings.showPinButton
             )

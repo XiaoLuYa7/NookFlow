@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import ImageIO
 import QuickLookThumbnailing
@@ -187,45 +188,153 @@ enum FileSortOption: String, CaseIterable, Identifiable {
     }
 }
 
+struct FileDataLocation: Codable, Equatable, Sendable {
+    static let documentsDirectory: URL = {
+        // Foundation's current home can point to the app container. The account
+        // record supplies the real home used by Finder's Documents folder.
+        let accountHome = getpwuid(getuid()).map { String(cString: $0.pointee.pw_dir) }
+            ?? NSHomeDirectoryForUser(NSUserName())
+            ?? NSHomeDirectory()
+        return URL(fileURLWithPath: accountHome, isDirectory: true)
+            .appendingPathComponent("Documents", isDirectory: true)
+    }()
+
+    static let defaultLocation = Self(url: defaultFolder(in: documentsDirectory), bookmark: nil, usesDocumentsFolder: false)
+
+    let url: URL
+    private let bookmark: Data?
+    private let usesDocumentsFolder: Bool
+
+    var hasAuthorization: Bool { bookmark != nil }
+
+    static func authorizedSelection(_ selectedFolder: URL, useDefault: Bool) throws -> Self {
+        defer { selectedFolder.stopAccessingSecurityScopedResource() }
+        let folder = selectedFolder.resolvingSymlinksInPath().standardizedFileURL
+        let documents = documentsDirectory.resolvingSymlinksInPath().standardizedFileURL
+        let defaultURL = defaultFolder(in: documentsDirectory)
+        let usesDocumentsFolder = useDefault && folder.path == documents.path
+        if useDefault && !usesDocumentsFolder && folder.path != defaultURL.resolvingSymlinksInPath().path {
+            throw FileDataLocationError.invalidDefaultSelection
+        }
+
+        let bookmark = try selectedFolder.bookmarkData(
+            options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
+        )
+        let location = Self(
+            url: useDefault ? defaultURL : selectedFolder.standardizedFileURL,
+            bookmark: bookmark,
+            usesDocumentsFolder: usesDocumentsFolder
+        )
+        let access = try location.open()
+        try withExtendedLifetime(access) {
+            try FileManager.default.createDirectory(at: access.root, withIntermediateDirectories: true)
+            guard FileManager.default.isWritableFile(atPath: access.root.path) else {
+                throw FileDataLocationError.notWritable
+            }
+        }
+        return location
+    }
+
+    func open() throws -> FileDataAccess {
+        guard let bookmark else { throw FileDataLocationError.authorizationRequired }
+        var isStale = false
+        let folder: URL
+        do {
+            folder = try URL(
+                resolvingBookmarkData: bookmark, options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil, bookmarkDataIsStale: &isStale
+            )
+        } catch {
+            throw FileDataLocationError.authorizationRequired
+        }
+        guard folder.startAccessingSecurityScopedResource() else {
+            throw FileDataLocationError.authorizationRequired
+        }
+        let root = usesDocumentsFolder ? Self.defaultFolder(in: folder) : folder
+        guard FileDataAccess.contains(root, in: folder) else {
+            folder.stopAccessingSecurityScopedResource()
+            throw FileDataLocationError.outsideSelectedFolder
+        }
+        return FileDataAccess(scopedFolder: folder, root: root.standardizedFileURL)
+    }
+
+    private static func defaultFolder(in documents: URL) -> URL {
+        documents.appendingPathComponent("NookFlow", isDirectory: true)
+            .appendingPathComponent("FileData", isDirectory: true)
+    }
+}
+
+private enum FileDataLocationError: LocalizedError {
+    case authorizationRequired
+    case invalidDefaultSelection
+    case outsideSelectedFolder
+    case notWritable
+
+    var errorDescription: String? {
+        switch self {
+        case .authorizationRequired: "请在设置 → 通用 → 文件存储中授权 FileData 目录。"
+        case .invalidDefaultSelection: "请选择当前用户的「文稿」或「文稿/NookFlow/FileData」。"
+        case .outsideSelectedFolder: "目标路径超出了已选择的文件夹。"
+        case .notWritable: "所选文件夹不可写，请选择一个有读写权限的目录。"
+        }
+    }
+}
+
+final class FileDataAccess: Sendable {
+    let root: URL
+    private let scopedFolder: URL
+
+    fileprivate init(scopedFolder: URL, root: URL) {
+        self.scopedFolder = scopedFolder
+        self.root = root
+    }
+
+    deinit { scopedFolder.stopAccessingSecurityScopedResource() }
+
+    static func contains(_ candidate: URL, in directory: URL) -> Bool {
+        let rootPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        let targetPath = candidate.resolvingSymlinksInPath().standardizedFileURL.path
+        return targetPath == rootPath || targetPath.hasPrefix(rootPath == "/" ? "/" : rootPath + "/")
+    }
+}
+
 @MainActor
 final class FileDataProvider: ObservableObject {
 
     @Published private(set) var files: [StagingFileItem] = []
     @Published private(set) var isLoading = false
     @Published private(set) var loadError: String?
-    @Published private(set) var currentDirectory = FileDataProvider.stagingDirectory
+    @Published private(set) var currentDirectory = FileDataLocation.defaultLocation.url
+    private(set) var location = FileDataLocation.defaultLocation
+    private(set) var directoryAccess: FileDataAccess?
+    private var resolvedRoot: URL?
+    var rootDirectory: URL { resolvedRoot ?? location.url }
     @Published var searchText = ""
     @Published var category: FileCategory = .all
     @Published var sortOption: FileSortOption = .date
+    @Published var showsRemovedFiles = false
+    @Published private(set) var removedFileIDs = Set(
+        UserDefaults.standard.stringArray(forKey: FileDataProvider.removedFilesKey) ?? []
+    )
 
     /// Tracks manual file order per directory (directory path → [file ID]).
     private var customFileOrder: [String: [StagingFileItem.ID]] = [:]
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = 0
     private static let customOrderKey = "FileDataCustomOrder"
+    private static let removedFilesKey = "FileDataRemovedFilePaths"
     nonisolated private static let iconImageSize = NSSize(width: 48, height: 48)
     nonisolated private static let thumbnailImageSize = NSSize(width: 56, height: 56)
 
-    static let stagingDirectory: URL = {
-        stagingDirectoryURL()
-    }()
-
-    nonisolated private static func stagingDirectoryURL() -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let documents = home.appendingPathComponent("Documents", isDirectory: true)
-        let directory = documents
-            .appendingPathComponent("NookFlow", isDirectory: true)
-            .appendingPathComponent("FileData", isDirectory: true)
-        let previousBrandDirectoryName = ["L", "-", "Nook"].joined()
-        let previousDirectory = documents
-            .appendingPathComponent(previousBrandDirectoryName, isDirectory: true)
-            .appendingPathComponent("FileData", isDirectory: true)
-
-        if !FileManager.default.fileExists(atPath: directory.path),
-           FileManager.default.fileExists(atPath: previousDirectory.path) {
-            return previousDirectory
-        }
-        return directory
+    func useLocation(_ location: FileDataLocation) {
+        guard self.location != location else { return }
+        cancelLoading()
+        self.location = location
+        resolvedRoot = nil
+        currentDirectory = location.url
+        files = []
+        loadError = nil
+        searchText = ""
     }
 
     deinit {
@@ -240,6 +349,10 @@ final class FileDataProvider: ObservableObject {
 
     var filteredFiles: [StagingFileItem] {
         var result = files
+
+        if !showsRemovedFiles, !removedFileIDs.isEmpty {
+            result = result.filter { !removedFileIDs.contains($0.id) }
+        }
 
         if !searchText.isEmpty {
             result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
@@ -274,7 +387,7 @@ final class FileDataProvider: ObservableObject {
     }
 
     var pathSegments: [FilePathSegment] {
-        let root = Self.stagingDirectory.standardizedFileURL
+        let root = rootDirectory.standardizedFileURL
         let current = currentDirectory.standardizedFileURL
         guard current.path != root.path, current.path.hasPrefix(root.path + "/") else { return [] }
 
@@ -291,10 +404,12 @@ final class FileDataProvider: ObservableObject {
     }
 
     @discardableResult
-    nonisolated static func importFilesToStaging(_ urls: [URL]) -> FileImportResult {
+    nonisolated static func importFilesToStaging(_ urls: [URL], location: FileDataLocation) -> FileImportResult {
         let fm = FileManager.default
+        let access: FileDataAccess
         do {
-            try fm.createDirectory(at: stagingDirectoryURL(), withIntermediateDirectories: true)
+            access = try location.open()
+            try fm.createDirectory(at: access.root, withIntermediateDirectories: true)
         } catch {
             return FileImportResult(
                 importedCount: 0,
@@ -302,6 +417,8 @@ final class FileDataProvider: ObservableObject {
             )
         }
 
+        defer { withExtendedLifetime(access) {} }
+        let rootPath = access.root.resolvingSymlinksInPath().standardizedFileURL.path
         var importedCount = 0
         var failures: [String] = []
         for sourceURL in urls {
@@ -312,14 +429,20 @@ final class FileDataProvider: ObservableObject {
                 }
             }
 
-            let destinationURL = uniqueDestinationURL(for: sourceURL, fileManager: fm)
+            let sourceParent = sourceURL.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+            if sourceParent.path == rootPath {
+                importedCount += 1
+                continue
+            }
+            if FileDataAccess.contains(access.root, in: sourceURL) {
+                failures.append("无法将“\(sourceURL.lastPathComponent)”复制到自身或其子目录。")
+                continue
+            }
+
+            let destinationURL = uniqueDestinationURL(for: sourceURL, in: access.root, fileManager: fm)
             do {
-                if sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
-                    importedCount += 1
-                } else {
-                    try fm.copyItem(at: sourceURL, to: destinationURL)
-                    importedCount += 1
-                }
+                try fm.copyItem(at: sourceURL, to: destinationURL)
+                importedCount += 1
             } catch {
                 failures.append("\(sourceURL.lastPathComponent)：\(error.localizedDescription)")
             }
@@ -339,17 +462,24 @@ final class FileDataProvider: ObservableObject {
         isLoading = true
         loadError = nil
         let directory = currentDirectory
-        let rootDirectory = Self.stagingDirectory
+        let priorRoot = rootDirectory
+        let existingAccess = directoryAccess
+        let location = location
         loadTask?.cancel()
         loadGeneration += 1
         let generation = loadGeneration
 
-        loadTask = Task.detached(priority: .userInitiated) { [weak self, directory, rootDirectory, generation] in
-            let result: Result<[StagingFileItem], Error>
+        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let result: Result<(items: [StagingFileItem], access: FileDataAccess, directory: URL), Error>
             do {
-                // Only the staging root is created; missing child folders remain visible errors.
-                try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
-                result = .success(try await Self.scanDirectory(directory))
+                let access = try existingAccess ?? location.open()
+                let target = priorRoot.path != access.root.path || directory.path == priorRoot.path ? access.root : directory
+                guard FileDataAccess.contains(target, in: access.root) else {
+                    throw FileDataLocationError.outsideSelectedFolder
+                }
+                try FileManager.default.createDirectory(at: access.root, withIntermediateDirectories: true)
+                let items = try await Self.scanDirectory(target)
+                result = .success((items, access, target))
             } catch {
                 result = .failure(error)
             }
@@ -357,8 +487,13 @@ final class FileDataProvider: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self, self.loadGeneration == generation else { return }
                 switch result {
-                case .success(let items):
-                    self.files = items
+                case .success(let loaded):
+                    self.directoryAccess = loaded.access
+                    self.resolvedRoot = loaded.access.root
+                    if self.currentDirectory != loaded.directory {
+                        self.currentDirectory = loaded.directory
+                    }
+                    self.files = loaded.items
                     self.applyCustomOrderIfNeeded()
                 case .failure(let error):
                     self.files = []
@@ -375,12 +510,14 @@ final class FileDataProvider: ObservableObject {
         loadTask = nil
         loadGeneration += 1
         isLoading = false
+        directoryAccess = nil
     }
 
     func loadArtwork(for file: StagingFileItem) async {
-        guard !isLoading, !file.hasLoadedArtwork else { return }
+        guard !isLoading, !file.hasLoadedArtwork, let directoryAccess else { return }
         let generation = loadGeneration
         let task = Task.detached(priority: .utility) {
+            defer { withExtendedLifetime(directoryAccess) {} }
             let icon = await ThreadSafeImageCache.shared.icon(for: file.url, targetSize: Self.iconImageSize)
             guard !Task.isCancelled else { return (icon, Optional<NSImage>.none) }
             let thumbnail = file.isPreviewable
@@ -413,7 +550,7 @@ final class FileDataProvider: ObservableObject {
     }
 
     func goToDirectory(_ url: URL) {
-        let root = Self.stagingDirectory.standardizedFileURL
+        let root = rootDirectory.standardizedFileURL
         let target = url.standardizedFileURL
         guard target.path == root.path || target.path.hasPrefix(root.path + "/") else { return }
         guard target != currentDirectory.standardizedFileURL || isLoading else { return }
@@ -431,6 +568,39 @@ final class FileDataProvider: ObservableObject {
         clearManualOrder()
     }
 
+    func setRemovedFromList(_ removed: Bool, fileID: StagingFileItem.ID) {
+        guard removed != removedFileIDs.contains(fileID) else { return }
+        if removed {
+            removedFileIDs.insert(fileID)
+        } else {
+            removedFileIDs.remove(fileID)
+        }
+        UserDefaults.standard.set(removedFileIDs.sorted(), forKey: Self.removedFilesKey)
+    }
+
+    func trashFile(_ file: StagingFileItem) async -> FileOperationResult {
+        let parentPath = file.url.deletingLastPathComponent().standardizedFileURL.path
+        guard let access = directoryAccess, files.contains(where: { $0.id == file.id }),
+              parentPath == currentDirectory.standardizedFileURL.path
+        else { return .failure("无法访问“\(file.name)”。") }
+        defer { withExtendedLifetime(access) {} }
+
+        do {
+            let recycled = try await NSWorkspace.shared.recycle([file.url])
+            guard !recycled.isEmpty else {
+                return .failure("系统未能将“\(file.name)”移到废纸篓。")
+            }
+            setRemovedFromList(false, fileID: file.id)
+            if currentDirectory.standardizedFileURL.path == parentPath {
+                files.removeAll { $0.id == file.id }
+                if directoryAccess != nil || isLoading { load() }
+            }
+            return .success
+        } catch {
+            return .failure("无法将“\(file.name)”移到废纸篓：\(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Manual reorder
 
     /// Move a file from one visible index to another within the current directory.
@@ -446,7 +616,7 @@ final class FileDataProvider: ObservableObject {
         let insertionIndex = min(toIndex, reorderedVisibleFiles.count)
         reorderedVisibleFiles.insert(item, at: insertionIndex)
 
-        if searchText.isEmpty, category == .all {
+        if searchText.isEmpty, category == .all, visibleFiles.count == files.count {
             files = reorderedVisibleFiles
         } else {
             var visibleIterator = reorderedVisibleFiles.makeIterator()
@@ -474,7 +644,12 @@ final class FileDataProvider: ObservableObject {
         let currentDirKey = currentDirectory.standardizedFileURL.path
         let targetDirKey = folder.url.standardizedFileURL.path
 
+        guard let directoryAccess else { return .failure("请先授权 FileData 目录。") }
         let moveTask = Task.detached(priority: .userInitiated) { () -> (destinationURL: URL?, errorMessage: String?) in
+            defer { withExtendedLifetime(directoryAccess) {} }
+            guard FileDataAccess.contains(folderURL, in: directoryAccess.root) else {
+                return (nil, "目标路径超出了 FileData 目录。")
+            }
             let fm = FileManager.default
             var isDirectory: ObjCBool = false
             guard fm.fileExists(atPath: sourceURL.path),
@@ -613,10 +788,6 @@ final class FileDataProvider: ObservableObject {
         return items
     }
 
-    nonisolated private static func uniqueDestinationURL(for sourceURL: URL, fileManager: FileManager) -> URL {
-        uniqueDestinationURL(for: sourceURL, in: stagingDirectoryURL(), fileManager: fileManager)
-    }
-
     nonisolated private static func uniqueDestinationURL(for sourceURL: URL, in directory: URL, fileManager: FileManager) -> URL {
         let baseName = sourceURL.deletingPathExtension().lastPathComponent
         let fileExtension = sourceURL.pathExtension
@@ -665,6 +836,8 @@ actor ThreadSafeImageCache {
     private let thumbnailCache = NSCache<NSString, NSImage>()
     private let fallbackIconCache = NSCache<NSString, NSImage>()
     private let scale: CGFloat = 2
+    private let applicationIconSampleSize = 16
+    private var genericSystemIconSamples: Set<Data>?
 
     private init() {
         iconCache.countLimit = 400
@@ -692,6 +865,86 @@ actor ThreadSafeImageCache {
         let fallback = await fallbackIcon(for: url, targetSize: targetSize)
         iconCache.setObject(fallback, forKey: key, cost: cacheCost(for: fallback))
         return fallback
+    }
+
+    func applicationIcon(for url: URL, targetSize: NSSize) async -> NSImage {
+        let bundleURL = url.resolvingSymlinksInPath()
+        let key = cacheKey(for: bundleURL, targetSize: targetSize, variant: "application-icon")
+        if let cached = iconCache.object(forKey: key) { return cached }
+        guard !Task.isCancelled else { return await applicationPlaceholder() }
+
+        // Use the same application artwork when the same bundle is installed.
+        // Workspace covers app icons supplied only through an asset catalog.
+        if let image = bundledApplicationIcon(for: bundleURL, targetSize: targetSize)
+            ?? systemApplicationIcon(for: bundleURL, targetSize: targetSize) {
+            iconCache.setObject(image, forKey: key, cost: cacheCost(for: image))
+            return image
+        }
+        // A failed lookup can be retried on a later scan without pinning a placeholder.
+        return await applicationPlaceholder()
+    }
+
+    private func systemApplicationIcon(for url: URL, targetSize: NSSize) -> NSImage? {
+        guard !Task.isCancelled else { return nil }
+        let workspace = NSWorkspace.shared
+        if genericSystemIconSamples == nil {
+            let genericTypes: [UTType] = [.applicationBundle, .unixExecutable, .data, .folder, .item]
+            genericSystemIconSamples = Set(genericTypes.compactMap { type in
+                renderedSystemIcon(workspace.icon(for: type)).flatMap { applicationIconSample($0) }
+            })
+        }
+
+        guard let icon = renderedSystemIcon(workspace.icon(forFile: url.path)),
+              let sample = applicationIconSample(icon),
+              genericSystemIconSamples?.contains(sample) == false,
+              let normalized = visibleApplicationIcon(icon, sample: sample) else { return nil }
+
+        let size = fittedSize(for: normalized, targetSize: targetSize)
+        let width = max(1, Int((size.width * scale).rounded(.up)))
+        let height = max(1, Int((size.height * scale).rounded(.up)))
+        if normalized.width <= width, normalized.height <= height {
+            return NSImage(cgImage: normalized, size: size)
+        }
+
+        guard let canvas = applicationIconContext(width: width, height: height) else { return nil }
+        canvas.interpolationQuality = .high
+        canvas.setBlendMode(.copy)
+        canvas.draw(normalized, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let resized = canvas.makeImage() else { return nil }
+        return NSImage(cgImage: resized, size: size)
+    }
+
+    private func renderedSystemIcon(_ icon: NSImage) -> CGImage? {
+        var rect = CGRect(x: 0, y: 0, width: 128, height: 128)
+        return icon.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
+
+    private func applicationPlaceholder() async -> NSImage {
+        let key: NSString = "application-placeholder"
+        if let cached = fallbackIconCache.object(forKey: key) { return cached }
+
+        let image = await MainActor.run {
+            NSImage(systemSymbolName: "app", accessibilityDescription: "应用")
+                ?? NSWorkspace.shared.icon(for: .applicationBundle)
+        }
+        fallbackIconCache.setObject(image, forKey: key)
+        return image
+    }
+
+    private func bundledApplicationIcon(for url: URL, targetSize: NSSize) -> NSImage? {
+        guard let bundle = Bundle(url: url) else { return nil }
+        for key in ["CFBundleIconFile", "CFBundleIconName"] {
+            guard let name = bundle.object(forInfoDictionaryKey: key) as? String,
+                  !name.isEmpty, (name as NSString).lastPathComponent == name else { continue }
+
+            let pathExtension = (name as NSString).pathExtension
+            let resourceName = pathExtension.isEmpty ? name : (name as NSString).deletingPathExtension
+            if let resourceURL = bundle.url(forResource: resourceName, withExtension: pathExtension.isEmpty ? "icns" : pathExtension),
+               let image = imageIOThumbnail(for: resourceURL, targetSize: targetSize, isApplicationIcon: true) {
+                return image
+            }
+        }
+        return nil
     }
 
     func thumbnail(for url: URL, typeID: String, targetSize: NSSize) async -> NSImage? {
@@ -759,7 +1012,7 @@ actor ThreadSafeImageCache {
         }
     }
 
-    private func imageIOThumbnail(for url: URL, targetSize: NSSize) -> NSImage? {
+    private func imageIOThumbnail(for url: URL, targetSize: NSSize, isApplicationIcon: Bool = false) -> NSImage? {
         guard !Task.isCancelled,
               let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
 
@@ -771,10 +1024,62 @@ actor ThreadSafeImageCache {
             kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize.rounded(.up))
         ]
 
-        guard !Task.isCancelled,
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let representationCount = isApplicationIcon ? CGImageSourceGetCount(source) : 1
+        for index in 0..<representationCount {
+            guard !Task.isCancelled else { return nil }
+            guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else { continue }
+            let image = isApplicationIcon ? visibleApplicationIcon(thumbnail) : thumbnail
+            if let image {
+                return NSImage(cgImage: image, size: fittedSize(for: image, targetSize: targetSize))
+            }
+        }
+        return nil
+    }
 
-        return NSImage(cgImage: cgImage, size: fittedSize(for: cgImage, targetSize: targetSize))
+    private func applicationIconContext(width: Int, height: Int) -> CGContext? {
+        let format = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        return CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: format
+        )
+    }
+
+    private func applicationIconSample(_ image: CGImage) -> Data? {
+        let size = applicationIconSampleSize
+        guard let context = applicationIconContext(width: size, height: size),
+              let data = context.data else { return nil }
+        context.setBlendMode(.copy)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+        return Data(bytes: data, count: context.bytesPerRow * size)
+    }
+
+    private func visibleApplicationIcon(_ image: CGImage, sample: Data? = nil) -> CGImage? {
+        guard let pixels = sample ?? applicationIconSample(image) else { return nil }
+        let sampleSize = applicationIconSampleSize
+        func alpha(at x: Int, _ y: Int) -> UInt8 {
+            pixels[(y * sampleSize + x) * 4 + 3]
+        }
+
+        // An asset-catalog app can ship a fully transparent legacy .icns.
+        let allPixels = 0..<(sampleSize * sampleSize)
+        guard allPixels.contains(where: { alpha(at: $0 % sampleSize, $0 / sampleSize) > 0 }) else { return nil }
+
+        let last = sampleSize - 1
+        guard image.width == image.height,
+              [alpha(at: 0, 0), alpha(at: 0, last), alpha(at: last, 0), alpha(at: last, last)]
+                  .allSatisfy({ $0 >= 250 }),
+              let shaped = applicationIconContext(width: image.width, height: image.height) else { return image }
+
+        // Shape only raw square artwork. Images with their own mask pass through.
+        let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let inset = rect.width * 0.08
+        let iconRect = rect.insetBy(dx: inset, dy: inset)
+        let radius = iconRect.width * 0.22
+        shaped.clear(rect)
+        shaped.addPath(CGPath(roundedRect: iconRect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        shaped.clip()
+        shaped.draw(image, in: iconRect)
+        return shaped.makeImage()
     }
 
     private func pdfThumbnail(for url: URL, targetSize: NSSize) -> NSImage? {

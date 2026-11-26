@@ -2120,8 +2120,8 @@ final class ModuleFixedWidthContractTests: XCTestCase {
         XCTAssertTrue(tokens.contains("weatherModuleFixedWidth: CGFloat = 168"))
         XCTAssertTrue(tokens.contains("mediaModuleFixedWidth: CGFloat = 240"))
         XCTAssertTrue(tokens.contains("todoModuleFixedWidth: CGFloat = 188"))
-        XCTAssertTrue(tokens.contains("quickAppsTwoColumnFixedWidth: CGFloat = 126"))
-        XCTAssertTrue(tokens.contains("quickAppsThreeColumnFixedWidth: CGFloat = 156"))
+        XCTAssertTrue(tokens.contains("quickAppsTwoColumnFixedWidth: CGFloat = 138"))
+        XCTAssertTrue(tokens.contains("quickAppsThreeColumnFixedWidth: CGFloat = 168"))
         XCTAssertTrue(tokens.contains("shortcutsModuleFixedWidth: CGFloat = 156"))
         XCTAssertTrue(tokens.contains("imageCardModuleFixedWidth: CGFloat = 124"))
         XCTAssertTrue(tokens.contains("deviceInfoModuleFixedWidth: CGFloat = 168"))
@@ -2139,10 +2139,10 @@ final class ModuleFixedWidthContractTests: XCTestCase {
             "IslandDesignTokens.fourColumnsMinimumExpandedWidth,\n            fixedContentWidth"
         ))
         XCTAssertTrue(layout.contains(
-            "case .applications:\n            return CGSize(\n                width: settings.islandSize.width"
+            "case .applications:\n            requestedSize = CGSize(\n                width: settings.islandSize.width"
         ))
         XCTAssertTrue(layout.contains(
-            "case .files:\n            return CGSize(\n                width: settings.islandSize.width"
+            "case .files:\n            requestedSize = CGSize(\n                width: settings.islandSize.width"
         ))
         XCTAssertTrue(expanded.contains("private var fixedModuleRow: some View"))
         XCTAssertTrue(expanded.contains("let w = moduleCardWidth(module)"))
@@ -2224,7 +2224,9 @@ final class QuickAppsColumnLayoutTests: XCTestCase {
         XCTAssertTrue(layout.contains("quickAppsColumnCount: settings.quickAppsColumnCount"))
         XCTAssertTrue(card.contains("private var columnCount: Int { settings.quickAppsColumnCount.rawValue }"))
         XCTAssertTrue(card.contains("private var pageSize: Int { settings.quickAppsColumnCount.pageSize }"))
-        XCTAssertTrue(card.contains("ZStack(alignment: .leading)"))
+        XCTAssertTrue(card.contains("VStack(spacing: pageGap)"))
+        XCTAssertTrue(card.contains("PageSwipeDetector(axis: .vertical, wheelTarget: wheelTarget)"))
+        XCTAssertTrue(card.contains(".offset(y: -CGFloat(currentPage)"))
         XCTAssertTrue(card.contains(".compositingGroup()"))
         XCTAssertTrue(card.contains(
             ".frame(width: proxy.size.width, height: pageHeight)"
@@ -2363,7 +2365,7 @@ final class ShortcutsCardPresentationContractTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("Text(\"\\(configuredShortcutCount)/\\(ShortcutsStore.slotCount)\")"))
+        XCTAssertFalse(source.contains("Text(\"\\(configuredShortcutCount)/\\(ShortcutsStore.slotCount)\")"))
         XCTAssertTrue(source.contains("shortcutSymbol(for: item.name)"))
         XCTAssertTrue(source.contains("([\"音乐\", \"识别\"], \"waveform\")"))
         XCTAssertTrue(source.contains("StrokeStyle(lineWidth: 1, dash: [4, 3])"))
@@ -3062,7 +3064,7 @@ final class FileDropExclusivePresentationContractTests: XCTestCase {
             "shellRect.height >= IslandFileDropLayout.size.height"
         ))
         XCTAssertTrue(controller.contains(
-            "let shellRect = visualShellRect(for: IslandFileDropLayout.size)"
+            "return visualShellRect(for: IslandFileDropLayout.size)"
         ))
         XCTAssertTrue(controller.contains("fileDropExitWorkItem"))
         XCTAssertTrue(controller.contains("scheduleFileDropExit()"))
@@ -3152,11 +3154,15 @@ final class FileDropExclusivePresentationContractTests: XCTestCase {
     }
 }
 
-final class ExternalPinButtonAnchorContractTests: XCTestCase {
-    func testPinButtonUsesFinalContentAnchorDuringShellBounce() throws {
+final class TopBarPinButtonContractTests: XCTestCase {
+    func testPinIsInsideTheTopBarAndUsesTheStandardShellHitArea() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        let expanded = try String(
+            contentsOf: root.appendingPathComponent("Views/ExpandedIslandView.swift"),
+            encoding: .utf8
+        )
         let rootView = try String(
             contentsOf: root.appendingPathComponent("Views/IslandRootView.swift"),
             encoding: .utf8
@@ -3166,23 +3172,16 @@ final class ExternalPinButtonAnchorContractTests: XCTestCase {
             encoding: .utf8
         )
 
-        let overlay = try XCTUnwrap(
-            rootView.components(separatedBy: "private func externalPinButtonOverlay").dropFirst().first?
-                .components(separatedBy: "private var sideStatusContext").first
+        let topBar = try XCTUnwrap(
+            expanded.components(separatedBy: "private var topBar").dropFirst().first?
+                .components(separatedBy: "private var contentSize").first
         )
-        XCTAssertTrue(overlay.contains("let anchorSize = IslandShellLayout.contentSize("))
-        XCTAssertTrue(overlay.contains("canvasSize.width / 2"))
-        XCTAssertTrue(overlay.contains("anchorSize.width / 2"))
-        XCTAssertTrue(overlay.contains("y: anchorSize.height"))
-        XCTAssertFalse(overlay.contains("x: 20 + canvasSize.width -"))
-
-        let hitTesting = try XCTUnwrap(
-            windowController.components(separatedBy: "private func interactiveShellRect").dropFirst().first?
-                .components(separatedBy: "private func externalPinButtonHitRect").first
-        )
-        XCTAssertTrue(hitTesting.contains("let pinAnchorSize = IslandShellLayout.contentSize("))
-        XCTAssertTrue(hitTesting.contains("let pinAnchorRect = visualShellRect(for: pinAnchorSize)"))
-        XCTAssertTrue(hitTesting.contains("externalPinButtonHitRect(attachedTo: pinAnchorRect)"))
+        let pin = try XCTUnwrap(topBar.range(of: "PinButton(isPinned: viewModel.isPinned"))
+        let settings = try XCTUnwrap(topBar.range(of: "settingsButton"))
+        XCTAssertTrue(topBar.contains("if settings.showPinButton"))
+        XCTAssertLessThan(pin.lowerBound, settings.lowerBound)
+        XCTAssertFalse(rootView.contains("externalPinButtonOverlay"))
+        XCTAssertFalse(windowController.contains("externalPinButtonHitRect"))
     }
 }
 
@@ -3253,14 +3252,14 @@ final class MirrorCardContractTests: XCTestCase {
         ))
         XCTAssertTrue(layout.contains("case .mirror:     settings.showMirrorModule"))
         XCTAssertTrue(expanded.contains(
-            "MirrorCardView(isActive: isContentReady && runtimeIsActive)"
+            "MirrorCardView(isActive: isContentReady && runtimeIsActive && isInViewport)"
         ))
         XCTAssertTrue(card.contains("AVCaptureDevice.requestAccess(for: .video)"))
         XCTAssertTrue(card.contains("session.startRunning()"))
         XCTAssertTrue(card.contains("session.stopRunning()"))
         XCTAssertTrue(card.contains("@State private var isCameraEnabled = false"))
-        XCTAssertTrue(card.contains("Button(action: toggleCamera)"))
-        XCTAssertTrue(card.contains("isCameraEnabled ? deactivateCamera() : activateCamera()"))
+        XCTAssertTrue(card.contains("Button(action: activateCamera)"))
+        XCTAssertTrue(card.contains("Button(action: deactivateCamera)"))
         XCTAssertTrue(card.contains("if isActive, isCameraEnabled"))
         XCTAssertTrue(card.contains(".onDisappear { deactivateCamera() }"))
         XCTAssertTrue(card.contains("private var latestRequestID: UInt64 = 0"))
@@ -3298,13 +3297,14 @@ final class MirrorCardContractTests: XCTestCase {
             .deletingLastPathComponent()
         let expanded = try source("Views/ExpandedIslandView.swift", root: root)
 
-        XCTAssertTrue(expanded.contains(".frame(width: visibleTopBarWidth)"))
-        XCTAssertTrue(expanded.contains("screenWidth - 72"))
-        XCTAssertTrue(expanded.contains("ZStack(alignment: .trailing)"))
-        XCTAssertTrue(expanded.contains(
-            "settingsButton\n                .padding(.trailing, 10)\n                .zIndex(2)"
-        ))
-        XCTAssertTrue(expanded.contains(".padding(.trailing, 58)"))
+        let layout = try source("Views/IslandShellLayout.swift", root: root)
+        let controller = try source("Panel/IslandWindowController.swift", root: root)
+
+        XCTAssertTrue(expanded.contains(".frame(width: contentSize.width)"))
+        XCTAssertTrue(layout.contains("width: min(requestedSize.width, settings.expandedWidthLimit)"))
+        XCTAssertTrue(controller.contains("NotchGeometryProvider.expandedWidthLimit("))
+        XCTAssertTrue(expanded.contains("ScrollView(.horizontal)"))
+        XCTAssertTrue(expanded.contains(".scrollBounceBehavior(.basedOnSize, axes: .horizontal)"))
     }
 
     func testMirrorSettingsPreviewDoesNotOpenTheCamera() throws {

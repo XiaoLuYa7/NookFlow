@@ -1,17 +1,19 @@
 import AppKit
+import QuickLookUI
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct FilesGridView: View {
 
     @ObservedObject var provider: FileDataProvider
+    let location: FileDataLocation
+    let acceptsKeyboard: Bool
     let onExternalDragStateChanged: (Bool, String?) -> Void
     @StateObject private var externalDragController = ExternalFileDragController()
     @StateObject private var autoScrollController = EdgeAutoScrollController()
     @StateObject private var revealScheduler = GridRevealScheduler()
     @State private var previewFile: StagingFileItem?
-    @State private var previewImage: NSImage?
-    @State private var previewTask: Task<Void, Never>?
+    @State private var trashCandidate: StagingFileItem?
     @State private var hasAnimatedInitialLoad = false
     @State private var selectedFileIDs = Set<StagingFileItem.ID>()
     @State private var isAirDropTargeted = false
@@ -35,6 +37,10 @@ struct FilesGridView: View {
     @FocusState private var isSearchFocused: Bool
 
     private static let gridTopPadding: CGFloat = 14
+    private static let toolbarHeight: CGFloat = 40
+    private static let toolbarTopPadding: CGFloat = 10
+    private static let toolbarGridSpacing: CGFloat = 14
+    static let gridTopInset = toolbarTopPadding + toolbarHeight + toolbarGridSpacing
     private static let gridBottomPadding: CGFloat = 18
     private static let cellWidth: CGFloat = 92
     private static let cellHeight: CGFloat = 94
@@ -61,6 +67,8 @@ struct FilesGridView: View {
     private static let dragStartThreshold: CGFloat = 4
     private static let dragRenderMinDistance: CGFloat = 8
     private static let geometryFrameEpsilon: CGFloat = 0.5
+    private static let spaceKeyCode: UInt16 = 49
+    private static let escapeKeyCode: UInt16 = 53
     private static let selectionFeedbackAnimation = Animation.easeOut(duration: 0.045)
     private static let externalDragLaunchMargin: CGFloat = 28
     private static let externalDragTopAllowance: CGFloat = 68
@@ -79,9 +87,13 @@ struct FilesGridView: View {
 
     init(
         provider: FileDataProvider,
+        location: FileDataLocation,
+        acceptsKeyboard: Bool,
         onExternalDragStateChanged: @escaping (Bool, String?) -> Void = { _, _ in }
     ) {
         self.provider = provider
+        self.location = location
+        self.acceptsKeyboard = acceptsKeyboard
         self.onExternalDragStateChanged = onExternalDragStateChanged
     }
 
@@ -91,7 +103,7 @@ struct FilesGridView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Self.toolbarGridSpacing) {
                     toolbar
 
                     if let error = provider.loadError {
@@ -148,6 +160,10 @@ struct FilesGridView: View {
                             if visibleFiles.isEmpty && !provider.isLoading && provider.loadError == nil {
                                 if !provider.searchText.isEmpty || provider.category != .all {
                                     emptySearchState
+                                } else if !provider.files.isEmpty {
+                                    Button("显示已移除项目") { provider.showsRemovedFiles = true }
+                                        .buttonStyle(.bordered)
+                                        .frame(maxWidth: .infinity, minHeight: 140)
                                 } else {
                                     emptyDirectoryState
                                 }
@@ -155,8 +171,12 @@ struct FilesGridView: View {
                         }
                         .opacity(directoryContentOpacity)
                         .background(
-                            ExternalFileDragHost(controller: externalDragController)
-                                .allowsHitTesting(false)
+                            ExternalFileDragHost(
+                                controller: externalDragController,
+                                capturesKeys: acceptsKeyboard && (!selectedFileIDs.isEmpty || previewFile != nil),
+                                onKey: handlePreviewKey
+                            )
+                            .allowsHitTesting(false)
                         )
                         .onAppear {
                             gridAreaSize = proxy.size
@@ -176,6 +196,7 @@ struct FilesGridView: View {
             }
         }
         .onAppear {
+            provider.useLocation(location)
             externalDragController.onDragStateChanged = onExternalDragStateChanged
             if !provider.files.isEmpty {
                 hasShownFileContent = true
@@ -188,9 +209,19 @@ struct FilesGridView: View {
             selectedFileIDs.formIntersection(Set(newIDs))
             revealFilesAfterChange(from: oldIDs, to: newIDs)
         }
+        .onChange(of: location) { _, location in
+            directoryTransitionTask?.cancel()
+            closePreview()
+            provider.useLocation(location)
+            provider.load()
+        }
         .onChange(of: provider.currentDirectory) { _, _ in
             selectedFileIDs.removeAll()
+            closePreview()
             cancelDrag()
+        }
+        .onChange(of: acceptsKeyboard) { _, acceptsKeyboard in
+            if !acceptsKeyboard { closePreview() }
         }
         .onChange(of: provider.isLoading) { _, isLoading in
             guard !isLoading else { return }
@@ -219,6 +250,19 @@ struct FilesGridView: View {
         } message: {
             Text(fileOperationError ?? "")
         }
+        .alert(
+            "移到废纸篓？",
+            isPresented: Binding(
+                get: { trashCandidate != nil },
+                set: { if !$0 { trashCandidate = nil } }
+            ),
+            presenting: trashCandidate
+        ) { file in
+            Button("取消", role: .cancel) { }
+            Button("移到废纸篓", role: .destructive) { trashFile(file) }
+        } message: { file in
+            Text("“\(file.name)”将移出 FileData，并可从废纸篓恢复。")
+        }
         .overlay {
             if let file = previewFile {
                 previewOverlay(file)
@@ -233,12 +277,11 @@ struct FilesGridView: View {
             let isCompact = proxy.size.width < 760
             let spacing: CGFloat = isCompact ? 8 : 12
             let searchWidth: CGFloat = isCompact ? 132 : 230
-            let categoryWidth: CGFloat = isCompact ? 40 : 74
-            let sortWidth: CGFloat = isCompact ? 40 : 74
+            let menuWidth: CGFloat = isCompact ? 40 : 88
             let spacerWidth: CGFloat = isCompact ? 8 : 16
             let pathWidth = max(
                 180,
-                proxy.size.width - searchWidth - categoryWidth - sortWidth - spacing * 3 - spacerWidth
+                proxy.size.width - searchWidth - menuWidth * 2 - spacing * 3 - spacerWidth
             )
 
             HStack(spacing: spacing) {
@@ -254,15 +297,15 @@ struct FilesGridView: View {
                 sortMenu(showTitle: !isCompact)
             }
         }
-        .frame(height: 40)
+        .frame(height: Self.toolbarHeight)
         .padding(.horizontal, Self.gridConfiguration.horizontalPadding)
-        .padding(.top, 10)
+        .padding(.top, Self.toolbarTopPadding)
     }
 
     private func breadcrumb(isCompact: Bool) -> some View {
         HStack(spacing: isCompact ? 5 : 8) {
             breadcrumbButton(icon: "externaldrive.fill", text: "FileData", isCompact: isCompact, isActive: provider.pathSegments.isEmpty) {
-                navigateToDirectory(FileDataProvider.stagingDirectory)
+                navigateToDirectory(provider.rootDirectory)
             }
             .fixedSize()
 
@@ -337,20 +380,15 @@ struct FilesGridView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.90))
 
-            ZStack(alignment: .leading) {
-                if provider.searchText.isEmpty {
-                    Text("Search...")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                        .foregroundColor(Color.white.opacity(0.42))
-                        .allowsHitTesting(false)
-                }
-
-                TextField("", text: $provider.searchText)
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundColor(.white)
-                    .textFieldStyle(.plain)
-                    .focused($isSearchFocused)
-            }
+            TextField(
+                "搜索文件",
+                text: $provider.searchText,
+                prompt: Text("搜索文件…").foregroundStyle(Color.white.opacity(0.42))
+            )
+            .font(.system(size: 14, weight: .medium, design: .rounded))
+            .foregroundColor(.white)
+            .textFieldStyle(.plain)
+            .focused($isSearchFocused)
 
             if !provider.searchText.isEmpty {
                 Button(action: {
@@ -393,6 +431,8 @@ struct FilesGridView: View {
                     Label(cat.title, systemImage: cat.systemName)
                 }
             }
+            Divider()
+            Toggle("显示已移除项目", isOn: $provider.showsRemovedFiles)
         } label: {
             fileToolbarMenuLabel(
                 systemName: provider.category.systemName,
@@ -403,6 +443,7 @@ struct FilesGridView: View {
         .accessibilityLabel("分类：\(provider.category.title)")
         .help("分类：\(provider.category.title)")
         .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .fixedSize(horizontal: true, vertical: false)
         .handCursor()
     }
@@ -437,6 +478,7 @@ struct FilesGridView: View {
         .accessibilityLabel("排序：\(provider.sortOption.title)")
         .help("排序：\(provider.sortOption.title)")
         .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .fixedSize(horizontal: true, vertical: false)
         .handCursor()
     }
@@ -464,9 +506,12 @@ struct FilesGridView: View {
                     .foregroundColor(.white)
                     .lineLimit(1)
             }
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
+                .accessibilityHidden(true)
         }
-        .padding(.horizontal, showTitle ? 12 : 0)
-        .frame(width: showTitle ? nil : 40, height: 34)
+        .frame(width: showTitle ? 88 : 40, height: 34)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.white.opacity(0.10))
@@ -655,7 +700,7 @@ struct FilesGridView: View {
                 .accessibilityHidden(true)
             Text("这里还没有文件")
                 .font(.system(size: 13, weight: .medium))
-            Text("将文件拖入灵动岛，即可添加到 FileData")
+            Text("将文件拖到这里，即可复制到 FileData")
                 .font(.system(size: 12))
                 .multilineTextAlignment(.center)
         }
@@ -681,10 +726,10 @@ struct FilesGridView: View {
             .frame(width: Self.thumbSize + 18, height: Self.thumbSize + 16)
 
             Text(file.name)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(IslandDesignTokens.primaryText)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
+                .lineLimit(1)
+                .truncationMode(.middle)
                 .frame(width: Self.cellWidth)
         }
         .animation(Self.dragReorderAnimation, value: folderMoveHighlighted)
@@ -742,7 +787,8 @@ struct FilesGridView: View {
                     updateRenderedDragLocation(value.location)
 
                     if shouldStartExternalFileDrag(at: value.location),
-                       externalDragController.startDragging(file) {
+                       let access = provider.directoryAccess,
+                       externalDragController.startDragging(file, access: access) {
                         autoScrollController.stop()
                         cancelDrag()
                         return
@@ -775,8 +821,17 @@ struct FilesGridView: View {
                     handleDragEnd(file: file, at: value.location)
                 }
         )
+        .contextMenu {
+            if provider.removedFileIDs.contains(file.id) {
+                Button("恢复到列表") { provider.setRemovedFromList(false, fileID: file.id) }
+            } else {
+                Button("从列表移除") { provider.setRemovedFromList(true, fileID: file.id) }
+            }
+            Divider()
+            Button("移到废纸篓…", role: .destructive) { trashCandidate = file }
+        }
         .help(file.name)
-        .opacity(isRevealed ? (isSource ? 0 : 1) : 0)
+        .opacity(isRevealed && !isSource ? (provider.removedFileIDs.contains(file.id) ? 0.55 : 1) : 0)
         .scaleEffect(isRevealed ? 1 : Self.entryScale)
         .offset(y: isRevealed ? 0 : Self.entryOffsetY)
         .transition(
@@ -1061,6 +1116,9 @@ struct FilesGridView: View {
 
     private func selectFile(_ file: StagingFileItem) {
         clearSearchFocus()
+        if acceptsKeyboard, let window = externalDragController.hostView?.window, !window.isKeyWindow {
+            window.makeKey()
+        }
 
         guard selectedFileIDs != [file.id] else { return }
 
@@ -1074,13 +1132,9 @@ struct FilesGridView: View {
 
         isSearchFocused = false
 
-        DispatchQueue.main.async {
-            if let textWindow = NSApp.windows.first(where: { $0.firstResponder is NSText }) {
-                textWindow.makeFirstResponder(nil)
-            } else {
-                NSApp.keyWindow?.makeFirstResponder(nil)
-            }
-
+        let window = externalDragController.hostView?.window
+        DispatchQueue.main.async { [weak window] in
+            if window?.firstResponder is NSTextView { window?.makeFirstResponder(nil) }
             if resetCursor {
                 NSCursor.arrow.set()
             }
@@ -1096,9 +1150,36 @@ struct FilesGridView: View {
         }
 
         if file.isPreviewable {
-            loadPreview(for: file)
+            showPreview(for: file)
         } else {
-            NSWorkspace.shared.open(file.url)
+            openInWorkspace(file)
+        }
+    }
+
+    private func handlePreviewKey(_ event: NSEvent) -> Bool {
+        if previewFile != nil, event.keyCode == Self.escapeKeyCode || event.keyCode == Self.spaceKeyCode {
+            if !event.isARepeat { closePreview() }
+            return true
+        }
+        guard event.keyCode == Self.spaceKeyCode, !isSearchFocused, !isDraggingFile,
+              !(event.window?.firstResponder is NSTextView),
+              let file = visibleFiles.first(where: { selectedFileIDs.contains($0.id) })
+        else { return false }
+        if !event.isARepeat { showPreview(for: file) }
+        return true
+    }
+
+    private func trashFile(_ file: StagingFileItem) {
+        Task { @MainActor in
+            let result = await provider.trashFile(file)
+            if let error = result.errorMessage { fileOperationError = error }
+        }
+    }
+
+    private func openInWorkspace(_ file: StagingFileItem) {
+        guard let access = provider.directoryAccess else { return }
+        if !withExtendedLifetime(access, { NSWorkspace.shared.open(file.url) }) {
+            fileOperationError = "无法打开“\(file.name)”。"
         }
     }
 
@@ -1185,13 +1266,13 @@ struct FilesGridView: View {
 
                     Spacer()
 
-                    Button(action: { NSWorkspace.shared.open(file.url) }) {
+                    Button(action: { openInWorkspace(file) }) {
                         Image(systemName: "arrow.up.forward.square")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.white.opacity(0.7))
                     }
                     .buttonStyle(.plain)
-                    .help("在 Finder 中打开")
+                    .help("在默认应用中打开")
 
                     Button(action: {
                         withAnimation(.easeOut(duration: 0.2)) {
@@ -1207,16 +1288,11 @@ struct FilesGridView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
 
-                if let image = previewImage {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let access = provider.directoryAccess {
+                    NativeFilePreview(url: file.url, access: access)
+                        .id(file.id)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .padding(.horizontal, 16)
-                } else {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
                 HStack {
@@ -1242,51 +1318,104 @@ struct FilesGridView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: previewFile != nil)
     }
 
-    // MARK: - Preview loading
-
-    private func loadPreview(for file: StagingFileItem) {
-        previewTask?.cancel()
+    private func showPreview(for file: StagingFileItem) {
+        guard provider.directoryAccess != nil else { return }
         previewFile = file
-        previewImage = nil
-
-        previewTask = Task { @MainActor in
-            let image = await ThreadSafeImageCache.shared.preview(
-                for: file.url,
-                targetSize: NSSize(width: 388, height: 260)
-            )
-            guard AsyncResultIdentity.matches(
-                currentID: previewFile?.id,
-                requestedID: file.id,
-                isCancelled: Task.isCancelled
-            ) else { return }
-
-            withAnimation(.easeOut(duration: 0.15)) {
-                previewImage = image
-            }
-            previewTask = nil
-        }
     }
 
     private func closePreview() {
-        previewTask?.cancel()
-        previewTask = nil
         previewFile = nil
-        previewImage = nil
+    }
+}
+
+private struct NativeFilePreview: NSViewRepresentable {
+    let url: URL
+    let access: FileDataAccess
+
+    final class Coordinator {
+        var access: FileDataAccess?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        guard let preview = QLPreviewView(frame: container.bounds, style: .normal) else {
+            let label = NSTextField(labelWithString: "无法打开快速查看。")
+            label.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                label.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+            ])
+            return container
+        }
+        context.coordinator.access = access
+        preview.autoresizingMask = [.width, .height]
+        preview.autostarts = true
+        preview.previewItem = url as NSURL
+        container.addSubview(preview)
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        (nsView.subviews.first as? QLPreviewView)?.close()
+        coordinator.access = nil
     }
 }
 
 private struct ExternalFileDragHost: NSViewRepresentable {
     let controller: ExternalFileDragController
+    let capturesKeys: Bool
+    let onKey: (NSEvent) -> Bool
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
+    func makeNSView(context: Context) -> HostView {
+        let view = HostView(frame: .zero)
         controller.hostView = view
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: HostView, context: Context) {
         if controller.hostView !== nsView {
             controller.hostView = nsView
+        }
+        nsView.onKey = capturesKeys ? onKey : nil
+        nsView.updateMonitor()
+    }
+
+    static func dismantleNSView(_ nsView: HostView, coordinator: ()) {
+        nsView.onKey = nil
+        nsView.updateMonitor()
+    }
+
+    final class HostView: NSView {
+        var onKey: ((NSEvent) -> Bool)?
+        private var keyMonitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            updateMonitor()
+        }
+
+        func updateMonitor() {
+            guard onKey != nil, window != nil else {
+                if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+                keyMonitor = nil
+                return
+            }
+            guard keyMonitor == nil else { return }
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window, window.isKeyWindow, event.window === window,
+                      event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+                else { return event }
+                return onKey?(event) == true ? nil : event
+            }
+        }
+
+        deinit {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         }
     }
 }
@@ -1546,9 +1675,10 @@ private final class ExternalFileDragController: NSObject, ObservableObject, NSDr
     weak var hostView: NSView?
     var onDragStateChanged: ((Bool, String?) -> Void)?
     @Published private(set) var isDragging = false
+    private var directoryAccess: FileDataAccess?
 
     @discardableResult
-    func startDragging(_ file: StagingFileItem) -> Bool {
+    func startDragging(_ file: StagingFileItem, access: FileDataAccess) -> Bool {
         guard !isDragging,
               let hostView,
               let event = NSApp.currentEvent else {
@@ -1558,7 +1688,7 @@ private final class ExternalFileDragController: NSObject, ObservableObject, NSDr
         let pasteboardItem = NSPasteboardItem()
         pasteboardItem.setString(file.url.absoluteString, forType: .fileURL)
         pasteboardItem.setString(file.url.absoluteString, forType: .URL)
-        pasteboardItem.setString(file.name, forType: .string)
+        pasteboardItem.setString(file.url.path, forType: .string)
         pasteboardItem.setPropertyList(
             [file.url.path],
             forType: NSPasteboard.PasteboardType("NSFilenamesPboardType")
@@ -1577,6 +1707,7 @@ private final class ExternalFileDragController: NSObject, ObservableObject, NSDr
 
         draggingItem.setDraggingFrame(frame, contents: dragImage(for: file, size: iconSize))
 
+        directoryAccess = access
         isDragging = true
         onDragStateChanged?(true, file.name)
         let session = hostView.beginDraggingSession(with: [draggingItem], event: event, source: self)
@@ -1597,6 +1728,7 @@ private final class ExternalFileDragController: NSObject, ObservableObject, NSDr
         endedAt screenPoint: NSPoint,
         operation: NSDragOperation
     ) {
+        directoryAccess = nil
         isDragging = false
         onDragStateChanged?(false, nil)
     }

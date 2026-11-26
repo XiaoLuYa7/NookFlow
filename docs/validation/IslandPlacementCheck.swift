@@ -43,6 +43,26 @@ struct IslandPlacementCheck {
             let restored = NotchGeometryProvider.windowServerScreenRect(for: server, primaryScreenFrame: primary)
             precondition(restored == external)
         }
+        let notched = CGRect(x: -1440, y: 100, width: 1440, height: 900)
+        let cameraCenterX = notched.midX + 14
+        let overshoot = 1.055
+        let notchedLimit = NotchGeometryProvider.expandedWidthLimit(
+            screenFrame: notched, visibleFrame: notched, cameraCenterX: cameraCenterX,
+            backingScaleFactor: 2, openingOvershoot: overshoot
+        )
+        let animatedHalfWidth = (notchedLimit * overshoot + 40) / 2
+        precondition(cameraCenterX - animatedHalfWidth >= notched.minX + 16)
+        precondition(cameraCenterX + animatedHalfWidth <= notched.maxX - 240)
+        precondition(notchedLimit > 800 && notchedLimit < 1440)
+
+        let visibleAfterDock = CGRect(x: -1880, y: 100, width: 1880, height: 1056)
+        let floatingLimit = NotchGeometryProvider.expandedWidthLimit(
+            screenFrame: screen, visibleFrame: visibleAfterDock, cameraCenterX: nil,
+            backingScaleFactor: 1, openingOvershoot: overshoot
+        )
+        precondition(floatingLimit * overshoot + 40 <= visibleAfterDock.width - 32)
+        precondition(floatingLimit > notchedLimit)
+
         let fallback = NotchGeometryProvider.geometry(for: nil, capsuleWidth: 220, capsuleHeight: 36)
         precondition(!fallback.hasNotch && fallback.cameraZoneWidth == 0 && fallback.sideWidth == 110)
         print("PASS: negative screen origins, edge clamping, 1x/2x scaling, stable center/top anchor, vertical bounds, notch-free geometry")

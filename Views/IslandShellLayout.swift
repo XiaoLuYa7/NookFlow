@@ -4,11 +4,26 @@ import SwiftUI
 enum IslandShellLayout {
     static let moduleCardLayoutSpacing: CGFloat = 6
 
+    private static func orderedModules(settings: IslandSettings) -> [IslandPanelModule] {
+        var seen: Set<IslandPanelModule> = []
+        let saved = settings.moduleOrder.compactMap(IslandPanelModule.init(rawValue:))
+        return (saved + IslandPanelModule.allCases).filter { seen.insert($0).inserted }
+    }
+
+    static func saveVisibleModuleOrder(_ modules: [IslandPanelModule], settings: IslandSettings) {
+        let visible = Set(visibleModules(settings: settings))
+        guard modules.count == visible.count, Set(modules) == visible else { return }
+
+        // Leave disabled cards in their slots so re-enabling one keeps its place.
+        var remaining = modules[...]
+        let order = orderedModules(settings: settings).map { module in
+            visible.contains(module) ? remaining.removeFirst() : module
+        }
+        settings.moduleOrder = order.map(\.rawValue)
+    }
+
     static func visibleModules(settings: IslandSettings) -> [IslandPanelModule] {
-        let saved = settings.moduleOrder.compactMap { IslandPanelModule(rawValue: $0) }
-        let defaults = IslandPanelModule.allCases
-        let missing = defaults.filter { !saved.contains($0) }
-        let order = saved.isEmpty ? defaults : saved + missing
+        let order = orderedModules(settings: settings)
         let isProUnlocked = LicenseManager.shared.isProUnlocked
 
         return order.filter { module in
@@ -50,17 +65,10 @@ enum IslandShellLayout {
             )
         }
 
-        let spacing = moduleCardLayoutSpacing
-        let cardsWidth = modules.reduce(CGFloat(0)) { partial, module in
-            partial + moduleFixedWidth(
-                module,
-                quickAppsColumnCount: settings.quickAppsColumnCount
-            )
-        }
-        let totalSpacing = spacing * CGFloat(max(0, modules.count - 1))
-        let fixedContentWidth = cardsWidth
-            + totalSpacing
-            + IslandDesignTokens.expandedPadding * 2
+        let fixedContentWidth = moduleRowWidth(
+            modules: modules,
+            quickAppsColumnCount: settings.quickAppsColumnCount
+        ) + IslandDesignTokens.expandedPadding * 2
 
         return max(
             IslandDesignTokens.fourColumnsMinimumExpandedWidth,
@@ -68,25 +76,44 @@ enum IslandShellLayout {
         )
     }
 
+    static func moduleRowWidth(
+        modules: [IslandPanelModule],
+        quickAppsColumnCount: QuickAppsColumnCount
+    ) -> CGFloat {
+        let cardsWidth = modules.reduce(CGFloat(0)) { partial, module in
+            partial + moduleFixedWidth(module, quickAppsColumnCount: quickAppsColumnCount)
+        }
+        return cardsWidth + moduleCardLayoutSpacing * CGFloat(max(0, modules.count - 1))
+    }
+
+    private static var gridPageHeight: CGFloat {
+        IslandDesignTokens.expandedTopBarTopPadding + IslandDesignTokens.expandedTopBarControlHeight
+            + ApplicationsGridView.threeRowPageHeight
+    }
+
     static func contentSize(settings: IslandSettings, selectedTopTab: IslandTopTab) -> CGSize {
         if let simulated = settings.simulationExpandedSize { return simulated }
+
+        let requestedSize: CGSize
         switch selectedTopTab {
         case .applications:
-            return CGSize(
+            requestedSize = CGSize(
                 width: settings.islandSize.width,
-                height: IslandDesignTokens.applicationsExpandedHeight
+                height: gridPageHeight
             )
         case .files:
-            return CGSize(
+            requestedSize = CGSize(
                 width: settings.islandSize.width,
-                height: IslandDesignTokens.filesExpandedHeight
+                height: gridPageHeight
             )
         case .home:
-            return CGSize(
-                width: effectiveIslandWidth(settings: settings),
-                height: effectiveIslandHeight(settings: settings)
-            )
+            requestedSize = effectiveIslandSize(settings: settings)
         }
+
+        return CGSize(
+            width: min(requestedSize.width, settings.expandedWidthLimit),
+            height: requestedSize.height
+        )
     }
 
     static func windowSize(settings: IslandSettings, selectedTopTab: IslandTopTab) -> CGSize {

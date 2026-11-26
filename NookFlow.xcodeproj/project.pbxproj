@@ -32,6 +32,7 @@
 		A1000032 /* music.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* music.png */; };
 		A1000033 /* spotify.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000033 /* spotify.png */; };
 		A1000034 /* finder_icon.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000034 /* finder_icon.png */; };
+		A1000035 /* wyy_miusc.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* wyy_miusc.png */; };
 		A1000015 /* WeatherProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015 /* WeatherProvider.swift */; };
 		A1000017 /* ReminderProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000017 /* ReminderProvider.swift */; };
 		A1000018 /* PlaybackProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000018 /* PlaybackProvider.swift */; };
@@ -130,6 +131,7 @@
 		A2000032 /* music.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/music.png; sourceTree = "<group>"; };
 		A2000033 /* spotify.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/spotify.png; sourceTree = "<group>"; };
 		A2000034 /* finder_icon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/finder_icon.png; sourceTree = "<group>"; };
+		A2000035 /* wyy_miusc.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/wyy_miusc.png; sourceTree = "<group>"; };
 		A2000015 /* WeatherProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherProvider.swift; sourceTree = "<group>"; };
 		A2000017 /* ReminderProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderProvider.swift; sourceTree = "<group>"; };
 		A2000018 /* PlaybackProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackProvider.swift; sourceTree = "<group>"; };
@@ -219,6 +221,7 @@
 				A2000032 /* music.png */,
 				A2000033 /* spotify.png */,
 				A2000034 /* finder_icon.png */,
+				A2000035 /* wyy_miusc.png */,
 			);
 			sourceTree = "<group>";
 		};
@@ -428,6 +431,7 @@
 				A1000032 /* music.png in Resources */,
 				A1000033 /* spotify.png in Resources */,
 				A1000034 /* finder_icon.png in Resources */,
+				A1000035 /* wyy_miusc.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -38,12 +38,6 @@ struct ShortcutsCardView: View {
                 .foregroundStyle(Color.white.opacity(0.66))
 
             Spacer(minLength: 4)
-
-            Text("\(configuredShortcutCount)/\(ShortcutsStore.slotCount)")
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(Color.white.opacity(0.34))
-                .contentTransition(.numericText())
         }
         .frame(height: 15)
         .accessibilityElement(children: .combine)
@@ -88,6 +82,7 @@ struct ShortcutsCardView: View {
                     .foregroundStyle(Color.white.opacity(0.72))
                     .lineLimit(2)
                     .truncationMode(.tail)
+                    .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Image(systemName: isRunning ? "ellipsis" : "play.fill")
@@ -96,7 +91,7 @@ struct ShortcutsCardView: View {
                     .frame(width: 12, height: 20)
             }
             .padding(.horizontal, 7)
-            .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36)
+            .frame(maxWidth: .infinity, minHeight: 40, maxHeight: 40)
             .background {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color.white.opacity(0.045))

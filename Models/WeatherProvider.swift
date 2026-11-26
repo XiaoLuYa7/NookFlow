@@ -48,6 +48,7 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
     private let manager = CLLocationManager()
     private let geocoder = CLGeocoder()
     private var hasStarted = false
+    private var lastSuccessfulRefresh: Date?
     private var weatherTask: Task<Void, Never>?
     private var refreshTimer: Timer?
     private var scheduledRefreshInterval: TimeInterval?
@@ -77,8 +78,11 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
         manager.delegate = nil
     }
 
-    func start(autoRefreshInterval: TimeInterval? = defaultRefreshInterval) {
-        let shouldRequestLocation = !hasStarted || (!snapshot.isLive && !isLocationUpdateActive)
+    func start(autoRefreshInterval: TimeInterval? = defaultRefreshInterval, reuseRecentSnapshot: Bool = false) {
+        let snapshotIsRecent = reuseRecentSnapshot && snapshot.isLive
+            && (lastSuccessfulRefresh?.timeIntervalSinceNow ?? -.infinity) > -60
+        let shouldRequestLocation = (!hasStarted && !snapshotIsRecent)
+            || (!snapshot.isLive && !isLocationUpdateActive)
         hasStarted = true
         if shouldRequestLocation {
             requestLocationIfPossible()
@@ -340,6 +344,7 @@ final class WeatherProvider: NSObject, ObservableObject, CLLocationManagerDelega
                     guard let self,
                           self.weatherRequestGeneration == requestGeneration
                     else { return }
+                    self.lastSuccessfulRefresh = Date()
                     self.snapshot = weatherSnapshot
                     self.resolvePlaceName(
                         for: location,

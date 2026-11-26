@@ -1,3 +1,5 @@
+import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 private enum ApplicationFilter: String, CaseIterable, Identifiable {
@@ -35,12 +37,17 @@ private enum ApplicationFilter: String, CaseIterable, Identifiable {
 struct ApplicationsGridView: View {
 
     @ObservedObject var provider: ApplicationsProvider
+    let acceptsKeyboard: Bool
+    let contentWidth: CGFloat
     @StateObject private var autoScrollController = EdgeAutoScrollController()
     @StateObject private var revealScheduler = GridRevealScheduler()
 
     @State private var searchText = ""
     @State private var selectedFilter: ApplicationFilter = .all
-    @State private var selectedSort: ApplicationSortOption = .name
+    @State private var showsHiddenApplications = false
+    @State private var selectedSort: ApplicationSortOption = .recent
+    @State private var usageScoreSnapshot: [ApplicationItem.ID: Double] = [:]
+    @State private var keyboardSelection: ApplicationItem.ID?
     @State private var hasAnimatedInitialLoad = false
     @State private var isDraggingItem = false
     @State private var dragSourceItem: ApplicationItem?
@@ -53,17 +60,30 @@ struct ApplicationsGridView: View {
     @State private var gridFrameInArea: CGRect = .zero
     @FocusState private var isSearchFocused: Bool
 
+    private static let toolbarTopPadding: CGFloat = 8
+    private static let toolbarControlHeight: CGFloat = 34
+    private static let toolbarGridSpacing: CGFloat = 12
     private static let gridTopPadding: CGFloat = 6
     private static let gridBottomPadding: CGFloat = 18
     private static let cellWidth: CGFloat = 82
+    fileprivate static let iconSize: CGFloat = 46
     private static let cellHeight: CGFloat = 84
     private static let gridConfiguration = AdaptiveGridConfiguration(
         minimumItemWidth: 84,
         maximumItemWidth: 116,
         horizontalSpacing: 14,
-        verticalSpacing: 36,
+        verticalSpacing: 18,
         horizontalPadding: 24
     )
+    static var threeRowPageHeight: CGFloat {
+        toolbarTopPadding + toolbarControlHeight + toolbarGridSpacing
+            + gridTopPadding + 3 * cellHeight + 2 * gridConfiguration.verticalSpacing + gridBottomPadding
+    }
+
+    static func leadingIconInset(for width: CGFloat) -> CGFloat {
+        gridConfiguration.horizontalPadding + (gridConfiguration.metrics(for: width).columnWidth - iconSize) / 2
+    }
+
     private static let entryScale: CGFloat = 0.72
     private static let removalScale: CGFloat = 0.18
     private static let entryOffsetY: CGFloat = 10
@@ -85,28 +105,34 @@ struct ApplicationsGridView: View {
     private static let autoScrollFastVelocity: CGFloat = 780
 
     var body: some View {
-        Group {
-            if provider.isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    toolbar
+        let items = visibleItems
+        let itemIDs = items.map(\.id)
+        let duplicateNames = Set(Dictionary(grouping: items, by: { $0.name.folding(options: .caseInsensitive, locale: .current) })
+            .filter { $0.value.count > 1 }.keys)
+        let presentedItems = displayedItems(from: items)
 
+        return ScrollViewReader { scrollProxy in
+            VStack(alignment: .leading, spacing: Self.toolbarGridSpacing) {
+                toolbar
+
+                if provider.isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
                     GeometryReader { proxy in
                         ScrollView {
                             LazyVGrid(
-                                columns: Self.gridConfiguration.columns,
+                                columns: gridColumns,
                                 alignment: .leading,
                                 spacing: Self.gridConfiguration.verticalSpacing
                             ) {
-                                ForEach(displayedItems) { item in
-                                    itemCell(item)
+                                ForEach(presentedItems) { item in
+                                    itemCell(item, showsPath: duplicateNames.contains(item.name.folding(options: .caseInsensitive, locale: .current)))
                                         .frame(maxWidth: .infinity, alignment: .top)
                                 }
                             }
-                            .animation(Self.gridReflowAnimation, value: visibleItemIDs)
-                            .animation(Self.dragReorderAnimation, value: displayedItemIDs)
+                            .animation(Self.gridReflowAnimation, value: itemIDs)
+                            .animation(Self.dragReorderAnimation, value: presentedItems.map(\.id))
                             .padding(.horizontal, Self.gridConfiguration.horizontalPadding)
                             .padding(.top, Self.gridTopPadding)
                             .padding(.bottom, Self.gridBottomPadding)
@@ -128,10 +154,11 @@ struct ApplicationsGridView: View {
                                 }
                             }
 
-                            if visibleItems.isEmpty {
+                            if items.isEmpty {
                                 emptyState
                             }
                         }
+                        .mask { gridEdgeMask(height: proxy.size.height) }
                         .onAppear {
                             gridAreaSize = proxy.size
                         }
@@ -148,13 +175,27 @@ struct ApplicationsGridView: View {
                     }
                 }
             }
+            .background {
+                ApplicationGridKeyboardCapture(
+                    isEnabled: acceptsKeyboard,
+                    onFocus: { isSearchFocused = true },
+                    onKey: { handleKey($0, scrollProxy: scrollProxy) }
+                )
+            }
+            .onChange(of: searchText) { _, _ in
+                keyboardSelection = nil
+            }
         }
         .onAppear {
             provider.load()
-            revealItemsAfterChange(from: [], to: visibleItemIDs)
+            usageScoreSnapshot = provider.usageScores()
+            revealItemsAfterChange(from: [], to: itemIDs)
         }
-        .onChange(of: visibleItemIDs) { oldIDs, newIDs in
+        .onChange(of: itemIDs) { oldIDs, newIDs in
             revealItemsAfterChange(from: oldIDs, to: newIDs)
+            if let keyboardSelection, !newIDs.contains(keyboardSelection) {
+                self.keyboardSelection = nil
+            }
             if isDraggingItem,
                let sourceID = dragSourceItem?.id,
                !newIDs.contains(sourceID) {
@@ -162,6 +203,7 @@ struct ApplicationsGridView: View {
             }
         }
         .onDisappear {
+            provider.stopBrowsing()
             cancelDrag()
             revealScheduler.cancel()
             isSearchFocused = false
@@ -171,16 +213,17 @@ struct ApplicationsGridView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Spacer(minLength: 0)
-
             searchField
+
+            Spacer(minLength: 8)
 
             categoryMenu
 
             sortMenu
         }
-        .padding(.horizontal, Self.gridConfiguration.horizontalPadding)
-        .padding(.top, 8)
+        .padding(.leading, Self.leadingIconInset(for: contentWidth))
+        .padding(.trailing, Self.gridConfiguration.horizontalPadding)
+        .padding(.top, Self.toolbarTopPadding)
     }
 
     private var categoryMenu: some View {
@@ -194,12 +237,15 @@ struct ApplicationsGridView: View {
                     Label(filter.title, systemImage: filter.systemName)
                 }
             }
+            Divider()
+            Toggle("显示隐藏的应用", isOn: $showsHiddenApplications)
         } label: {
             toolbarMenuLabel(
                 systemName: selectedFilter.systemName,
                 title: selectedFilter.title
             )
         }
+        .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .handCursor()
@@ -211,20 +257,15 @@ struct ApplicationsGridView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.90))
 
-            ZStack(alignment: .leading) {
-                if searchText.isEmpty {
-                    Text("Search...")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color.white.opacity(0.42))
-                        .allowsHitTesting(false)
-                }
-
-                TextField("", text: $searchText)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white)
-                    .textFieldStyle(.plain)
-                    .focused($isSearchFocused)
-            }
+            TextField(
+                "搜索应用",
+                text: $searchText,
+                prompt: Text("搜索应用…").foregroundStyle(Color.white.opacity(0.42))
+            )
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.white)
+            .textFieldStyle(.plain)
+            .focused($isSearchFocused)
 
             if !searchText.isEmpty {
                 Button {
@@ -241,7 +282,8 @@ struct ApplicationsGridView: View {
             }
         }
         .padding(.horizontal, 12)
-        .frame(width: 240, height: 34)
+        .frame(maxWidth: 240)
+        .frame(height: Self.toolbarControlHeight)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.white.opacity(0.10))
@@ -282,6 +324,7 @@ struct ApplicationsGridView: View {
                 iconImage: selectedSort == .name ? SortNameIcon.image : nil
             )
         }
+        .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .handCursor()
@@ -303,14 +346,72 @@ struct ApplicationsGridView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.white)
                 .lineLimit(1)
+
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.52))
         }
         .padding(.horizontal, 12)
-        .frame(height: 34)
+        .frame(height: Self.toolbarControlHeight)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.white.opacity(0.10))
         }
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func gridEdgeMask(height: CGFloat) -> some View {
+        let fade = min(0.2, 18 / max(1, height))
+        return LinearGradient(
+            stops: [
+                .init(color: gridFrameInArea.minY < -1 ? .clear : .white, location: 0),
+                .init(color: .white, location: fade),
+                .init(color: .white, location: 1 - fade),
+                .init(color: gridFrameInArea.maxY > height + 1 ? .clear : .white, location: 1)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private func handleKey(_ keyCode: UInt16, scrollProxy: ScrollViewProxy) -> Bool {
+        if keyCode == UInt16(kVK_Escape) {
+            guard !searchText.isEmpty || keyboardSelection != nil else { return false }
+            searchText = ""
+            keyboardSelection = nil
+            return true
+        }
+
+        let offset: Int
+        switch keyCode {
+        case UInt16(kVK_Return), UInt16(kVK_ANSI_KeypadEnter):
+            let items = visibleItems
+            if let item = items.first(where: { $0.id == keyboardSelection }) ?? items.first {
+                open(item)
+            }
+            return true
+        case UInt16(kVK_LeftArrow): offset = -1
+        case UInt16(kVK_RightArrow): offset = 1
+        case UInt16(kVK_DownArrow): offset = currentColumnCount
+        case UInt16(kVK_UpArrow): offset = -currentColumnCount
+        default: return false
+        }
+
+        let items = visibleItems
+        guard !items.isEmpty else { return true }
+        let selectionIndex = items.firstIndex { $0.id == keyboardSelection }
+        let index = selectionIndex.map { min(max($0 + offset, 0), items.count - 1) } ?? 0
+        let id = items[index].id
+        keyboardSelection = id
+        scrollProxy.scrollTo(id)
+        return true
+    }
+
+    private func open(_ item: ApplicationItem) {
+        if NSWorkspace.shared.open(item.url) {
+            let fromSearch = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            provider.recordLaunch(item, fromSearch: fromSearch)
+        }
     }
 
     private var visibleItems: [ApplicationItem] {
@@ -319,42 +420,36 @@ struct ApplicationsGridView: View {
         let filteredItems = provider.applications
             .filter { item in
                 selectedFilter.matches(item.kind)
+                    && (showsHiddenApplications || !provider.hiddenApplicationIdentities.contains(item.catalogIdentity))
                     && (query.isEmpty || item.name.localizedCaseInsensitiveContains(query))
             }
 
         if provider.hasManualOrder,
            query.isEmpty,
            selectedFilter == .all {
-            return filteredItems
+            guard selectedSort == .recent, !provider.pinnedApplicationIDs.isEmpty else { return filteredItems }
+            let pins = provider.pinnedApplicationIDs
+            return filteredItems.filter { pins.contains($0.id) } + filteredItems.filter { !pins.contains($0.id) }
         }
 
         return filteredItems.sorted(by: sortItems)
     }
 
-    private var visibleItemIDs: [ApplicationItem.ID] {
-        visibleItems.map(\.id)
-    }
-
-    private var displayedItems: [ApplicationItem] {
+    private func displayedItems(from items: [ApplicationItem]) -> [ApplicationItem] {
         guard isDraggingItem,
               let sourceIdx = dragSourceIndex,
               let targetIdx = dropTargetIndex,
-              visibleItems.indices.contains(sourceIdx),
+              items.indices.contains(sourceIdx),
               targetIdx >= 0,
-              targetIdx <= visibleItems.count,
+              targetIdx <= items.count,
               sourceIdx != targetIdx else {
-            return visibleItems
+            return items
         }
 
-        var items = visibleItems
-        let sourceItem = items.remove(at: sourceIdx)
-        let insertionIndex = min(targetIdx, items.count)
-        items.insert(sourceItem, at: insertionIndex)
-        return items
-    }
-
-    private var displayedItemIDs: [ApplicationItem.ID] {
-        displayedItems.map(\.id)
+        var reordered = items
+        let sourceItem = reordered.remove(at: sourceIdx)
+        reordered.insert(sourceItem, at: min(targetIdx, reordered.count))
+        return reordered
     }
 
     private var emptyState: some View {
@@ -365,7 +460,15 @@ struct ApplicationsGridView: View {
     }
 
     private var gridMetrics: AdaptiveGridMetrics {
-        Self.gridConfiguration.metrics(for: gridFrameInArea.width)
+        Self.gridConfiguration.metrics(for: contentWidth)
+    }
+
+    private var gridColumns: [GridItem] {
+        let metrics = gridMetrics
+        return Array(
+            repeating: GridItem(.fixed(metrics.columnWidth), spacing: Self.gridConfiguration.horizontalSpacing, alignment: .top),
+            count: metrics.columnCount
+        )
     }
 
     private var currentColumnCount: Int {
@@ -402,7 +505,7 @@ struct ApplicationsGridView: View {
     }
 
     private func itemFrame(for item: ApplicationItem) -> CGRect? {
-        guard let index = displayedItems.firstIndex(where: { $0.id == item.id }) else { return nil }
+        guard let index = displayedItems(from: visibleItems).firstIndex(where: { $0.id == item.id }) else { return nil }
         return itemFrame(at: index)
     }
 
@@ -417,40 +520,37 @@ struct ApplicationsGridView: View {
         return row * currentColumnCount + column
     }
 
-    private func itemCellContent(_ item: ApplicationItem) -> some View {
-        VStack(spacing: 6) {
-            Image(nsImage: item.icon)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 46, height: 46)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-            Text(item.name)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(IslandDesignTokens.primaryText)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(width: Self.cellWidth)
-        }
+    private func itemCellContent(
+        _ item: ApplicationItem,
+        isInteractive: Bool = false,
+        showsPath: Bool = false
+    ) -> some View {
+        ApplicationGridCellContent(
+            item: item,
+            size: CGSize(width: Self.cellWidth, height: Self.cellHeight),
+            isInteractive: isInteractive,
+            isSelected: isInteractive && keyboardSelection == item.id,
+            showsNameHelp: isInteractive && !showsPath
+        )
     }
 
-    private func itemCell(_ item: ApplicationItem) -> some View {
+    private func itemCell(_ item: ApplicationItem, showsPath: Bool) -> some View {
         let isRevealed = revealScheduler.revealedIDs.contains(item.id)
-        let itemIndex = visibleItems.firstIndex(of: item)
         let isSource = isDraggingItem && dragSourceItem?.id == item.id
+        let hidden = provider.hiddenApplicationIdentities.contains(item.catalogIdentity)
 
-        return itemCellContent(item)
+        return itemCellContent(item, isInteractive: !isDraggingItem, showsPath: showsPath)
+        .modifier(ApplicationPathHelp(path: showsPath ? item.url.path : nil))
         .frame(width: Self.cellWidth, height: Self.cellHeight, alignment: .top)
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onTapGesture {
-            isSearchFocused = false
-            NSWorkspace.shared.open(item.url)
+            open(item)
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: Self.dragStartThreshold, coordinateSpace: .named("applicationsGridArea"))
                 .onChanged { value in
                     if !isDraggingItem {
-                        guard let idx = itemIndex else { return }
+                        guard let idx = visibleItems.firstIndex(of: item) else { return }
                         isSearchFocused = false
                         isDraggingItem = true
                         dragSourceItem = item
@@ -486,9 +586,28 @@ struct ApplicationsGridView: View {
                     handleDragEnd(item: item, at: value.location)
                 }
         )
+        .contextMenu {
+            if item.kind == .application {
+                Button(provider.pinnedApplicationIDs.contains(item.id) ? "取消置顶" : "置顶") {
+                    provider.togglePin(item)
+                }
+                Button(hidden ? "取消隐藏" : "隐藏此应用") {
+                    provider.setHidden(!hidden, for: item)
+                }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if provider.pinnedApplicationIDs.contains(item.id) {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .padding(4)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .handCursor()
-        .help(item.name)
-        .opacity(isRevealed ? (isSource ? 0 : 1) : 0)
+        .opacity(isRevealed && !isSource ? (hidden ? 0.55 : 1) : 0)
         .scaleEffect(isRevealed ? 1 : Self.entryScale)
         .offset(y: isRevealed ? 0 : Self.entryOffsetY)
         .transition(
@@ -630,7 +749,7 @@ struct ApplicationsGridView: View {
         }
 
         revealScheduler.schedule(
-            ids: visibleItems.map(\.id),
+            ids: newIDs,
             staggered: shouldStagger,
             revealAnimation: Self.cellRevealAnimation,
             exitAnimation: Self.cellExitAnimation,
@@ -641,6 +760,22 @@ struct ApplicationsGridView: View {
 
     private func sortItems(_ left: ApplicationItem, _ right: ApplicationItem) -> Bool {
         switch selectedSort {
+        case .recent:
+            let leftPinned = provider.pinnedApplicationIDs.contains(left.id)
+            let rightPinned = provider.pinnedApplicationIDs.contains(right.id)
+            if leftPinned != rightPinned { return leftPinned }
+
+            let leftScore = usageScoreSnapshot[left.id] ?? 0
+            let rightScore = usageScoreSnapshot[right.id] ?? 0
+            if leftScore != rightScore { return leftScore > rightScore }
+
+            let leftIsSystem = left.url.path.hasPrefix("/System/")
+            let rightIsSystem = right.url.path.hasPrefix("/System/")
+            if leftIsSystem != rightIsSystem { return !leftIsSystem }
+
+            let comparison = left.phoneticSortName.localizedStandardCompare(right.phoneticSortName)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            return compareNames(left, right)
         case .name:
             return compareNames(left, right)
         case .kind:
@@ -671,5 +806,141 @@ struct ApplicationsGridView: View {
 
     private func compareNames(_ left: ApplicationItem, _ right: ApplicationItem) -> Bool {
         left.name.localizedStandardCompare(right.name) == .orderedAscending
+    }
+}
+
+private struct ApplicationPathHelp: ViewModifier {
+    let path: String?
+
+    func body(content: Content) -> some View {
+        if let path {
+            content.help(path)
+        } else {
+            content
+        }
+    }
+}
+
+private struct ApplicationGridCellContent: View {
+    let item: ApplicationItem
+    let size: CGSize
+    let isInteractive: Bool
+    let isSelected: Bool
+    let showsNameHelp: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
+
+    var body: some View {
+        let highlightsHover = isInteractive && isHovered
+        VStack(spacing: 6) {
+            Image(nsImage: item.icon)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: ApplicationsGridView.iconSize, height: ApplicationsGridView.iconSize)
+                .scaleEffect(highlightsHover && !reduceMotion ? 1.04 : 1)
+
+            ViewThatFits(in: .vertical) {
+                Text(item.name)
+                    .fixedSize(horizontal: false, vertical: true)
+                if showsNameHelp {
+                    Text(item.name)
+                        .lineLimit(2)
+                        .help(item.name)
+                } else {
+                    Text(item.name)
+                        .lineLimit(2)
+                }
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(IslandDesignTokens.primaryText)
+            .multilineTextAlignment(.center)
+            .frame(width: size.width, height: 26, alignment: .top)
+        }
+        .frame(width: size.width, height: size.height)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(isSelected ? 0.15 : highlightsHover ? 0.08 : 0))
+        }
+        .onHover { isHovered = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: highlightsHover)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct ApplicationGridKeyboardCapture: NSViewRepresentable {
+    let isEnabled: Bool
+    let onFocus: () -> Void
+    let onKey: (UInt16) -> Bool
+
+    func makeNSView(context: Context) -> KeyboardView { KeyboardView() }
+
+    func updateNSView(_ view: KeyboardView, context: Context) {
+        view.onFocus = onFocus
+        view.onKey = onKey
+        view.isEnabled = isEnabled
+        view.updateCapture()
+    }
+
+    static func dismantleNSView(_ view: KeyboardView, coordinator: ()) {
+        view.stopCapture()
+    }
+
+    final class KeyboardView: NSView {
+        var isEnabled = false
+        var onFocus: (() -> Void)?
+        var onKey: ((UInt16) -> Bool)?
+        private var monitor: Any?
+        private weak var captureWindow: NSWindow?
+        private var madeWindowKey = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            updateCapture()
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        func updateCapture() {
+            guard isEnabled, let window else {
+                stopCapture()
+                return
+            }
+            guard captureWindow !== window else { return }
+
+            stopCapture()
+            captureWindow = window
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.captureWindow,
+                      window.isKeyWindow, event.window === window,
+                      event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+                      (window.firstResponder as? NSTextView)?.hasMarkedText() != true else { return event }
+                return self.onKey?(event.keyCode) == true ? nil : event
+            }
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.isEnabled, self.captureWindow === window,
+                      window.isVisible else { return }
+                if !window.isKeyWindow {
+                    window.makeKey()
+                    self.madeWindowKey = window.isKeyWindow
+                }
+                self.onFocus?()
+            }
+        }
+
+        func stopCapture() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            if madeWindowKey, let captureWindow, captureWindow.isKeyWindow {
+                captureWindow.resignKey()
+            }
+            madeWindowKey = false
+            captureWindow = nil
+        }
     }
 }

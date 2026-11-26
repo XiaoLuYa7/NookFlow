@@ -196,10 +196,10 @@ struct QuickAppsSettingsView: View {
                         }
                 )
                 .background {
-                    HorizontalSwipeDetector(supportsAuxiliaryButtons: false) { direction in
+                    PageSwipeDetector(supportsAuxiliaryButtons: false) { direction in
                         switch direction {
-                        case .left: goToNextPage()
-                        case .right: goToPreviousPage()
+                        case .next: goToNextPage()
+                        case .previous: goToPreviousPage()
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

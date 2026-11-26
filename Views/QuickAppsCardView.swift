@@ -8,9 +8,12 @@ struct QuickAppsCardView: View {
     @State private var unavailableAlertItem: QuickAppItem?
     @State private var currentPage = 0
 
-    private let columnSpacing: CGFloat = 10
-    private let rowSpacing: CGFloat = 10
-    private let iconSize: CGFloat = 42
+    let wheelTarget: PageSwipeDetector.WheelTarget
+    let acceptsPagingEvents: Bool
+
+    private let columnSpacing: CGFloat = 14
+    private let rowSpacing: CGFloat = 14
+    private let maximumIconSize: CGFloat = 36
     private let pageHeight: CGFloat = 94
     private let pageGap: CGFloat = 4
     private let pageHorizontalInset: CGFloat = 8
@@ -25,20 +28,20 @@ struct QuickAppsCardView: View {
     }
 
     var body: some View {
-        VStack {
-            Spacer(minLength: 0)
-
+        HStack(spacing: 2) {
             GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    HStack(spacing: pageGap) {
+                ZStack(alignment: .top) {
+                    VStack(spacing: pageGap) {
                         ForEach(0..<pageCount, id: \.self) { page in
                             pageView(page)
                                 .frame(width: proxy.size.width, height: pageHeight)
+                                .allowsHitTesting(page == currentPage)
+                                .accessibilityHidden(page != currentPage)
                         }
                     }
-                    .offset(x: -CGFloat(currentPage) * (proxy.size.width + pageGap))
+                    .offset(y: -CGFloat(currentPage) * (pageHeight + pageGap))
                 }
-                .frame(width: proxy.size.width, height: pageHeight, alignment: .leading)
+                .frame(width: proxy.size.width, height: pageHeight, alignment: .top)
                 .compositingGroup()
                 .mask {
                     Rectangle()
@@ -51,29 +54,39 @@ struct QuickAppsCardView: View {
             .animation(pageAnimation, value: currentPage)
 
             if pageCount > 1 {
-                HStack(spacing: 5) {
+                VStack(spacing: 0) {
                     ForEach(0..<pageCount, id: \.self) { page in
-                        Circle()
-                            .fill(page == currentPage ? Color.white.opacity(0.82) : Color.white.opacity(0.24))
-                            .frame(width: 4.5, height: 4.5)
+                        Button {
+                            selectPage(page)
+                        } label: {
+                            Circle()
+                                .fill(page == currentPage ? Color.white.opacity(0.82) : Color.white.opacity(0.24))
+                                .frame(width: 4.5, height: 4.5)
+                                .frame(width: 14, height: 12)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("第 \(page + 1) 页")
+                        .accessibilityAddTraits(page == currentPage ? .isSelected : [])
                     }
                 }
             }
-
-            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .contentShape(Rectangle())
         .overlay {
-            HorizontalSwipeDetector { direction in
-                switch direction {
-                case .left: goToNextPage()
-                case .right: goToPreviousPage()
+            if acceptsPagingEvents {
+                PageSwipeDetector(axis: .vertical, wheelTarget: wheelTarget) { direction in
+                    switch direction {
+                    case .next: selectPage(currentPage + 1)
+                    case .previous: selectPage(currentPage - 1)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .highPriorityGesture(horizontalPageDragGesture)
         .onChange(of: store.items.count) { _, _ in
             currentPage = min(currentPage, pageCount - 1)
         }
@@ -105,7 +118,8 @@ struct QuickAppsCardView: View {
             let contentWidth = max(1, proxy.size.width - pageHorizontalInset * 2)
             let totalColumnSpacing = columnSpacing * CGFloat(max(0, columnCount - 1))
             let cellWidth = max(1, (contentWidth - totalColumnSpacing) / CGFloat(columnCount))
-            let cellHeight = max(iconSize, (pageHeight - rowSpacing) / 2)
+            let cellHeight = (pageHeight - rowSpacing) / 2
+            let iconSize = min(maximumIconSize, cellWidth, cellHeight)
             let indexes = pageIndexes(for: page)
             let rows = stride(from: 0, to: indexes.count, by: columnCount).map { start in
                 Array(indexes[start..<min(start + columnCount, indexes.count)])
@@ -115,7 +129,7 @@ struct QuickAppsCardView: View {
                 ForEach(0..<rows.count, id: \.self) { row in
                     HStack(spacing: columnSpacing) {
                         ForEach(rows[row], id: \.self) { index in
-                            slotView(for: index)
+                            slotView(for: index, iconSize: iconSize)
                                 .frame(width: cellWidth, height: cellHeight)
                         }
                     }
@@ -127,29 +141,21 @@ struct QuickAppsCardView: View {
     }
 
     @ViewBuilder
-    private func slotView(for index: Int) -> some View {
+    private func slotView(for index: Int, iconSize: CGFloat) -> some View {
         if index < store.items.count {
-            appCell(item: store.items[index])
+            appCell(item: store.items[index], iconSize: iconSize)
         } else if index == store.items.count && store.items.count < QuickAppsStore.maxCount {
-            addButton
+            addButton(iconSize: iconSize)
         } else {
             Color.clear
         }
     }
 
-    private func goToNextPage() {
-        guard currentPage < pageCount - 1 else { return }
+    private func selectPage(_ page: Int) {
+        guard (0..<pageCount).contains(page), currentPage != page else { return }
         TrackpadHapticFeedback.perform(settings.trackpadFeedbackMode)
         withAnimation(pageAnimation) {
-            currentPage += 1
-        }
-    }
-
-    private func goToPreviousPage() {
-        guard currentPage > 0 else { return }
-        TrackpadHapticFeedback.perform(settings.trackpadFeedbackMode)
-        withAnimation(pageAnimation) {
-            currentPage -= 1
+            currentPage = page
         }
     }
 
@@ -157,24 +163,9 @@ struct QuickAppsCardView: View {
         .smooth(duration: QuickAppsPageTiming.pageTurnDuration, extraBounce: 0)
     }
 
-    private var horizontalPageDragGesture: some Gesture {
-        DragGesture(minimumDistance: 18)
-            .onEnded { value in
-                let width = value.translation.width
-                let height = value.translation.height
-                guard abs(width) > abs(height), abs(width) > 28 else { return }
-
-                if width < 0 {
-                    goToNextPage()
-                } else {
-                    goToPreviousPage()
-                }
-            }
-    }
-
     // MARK: - App Cell
 
-    private func appCell(item: QuickAppItem) -> some View {
+    private func appCell(item: QuickAppItem, iconSize: CGFloat) -> some View {
         let available = store.isAppAvailable(item)
 
         return Button {
@@ -193,7 +184,7 @@ struct QuickAppsCardView: View {
                         .frame(width: iconSize, height: iconSize)
                 } else {
                     Image(systemName: "questionmark.app.fill")
-                        .font(.system(size: 32))
+                        .font(.system(size: iconSize * 0.76))
                         .foregroundStyle(Color.white.opacity(0.25))
                         .frame(width: iconSize, height: iconSize)
                 }
@@ -205,13 +196,13 @@ struct QuickAppsCardView: View {
 
     // MARK: - Add Button
 
-    private var addButton: some View {
+    private func addButton(iconSize: CGFloat) -> some View {
         Button {
             openQuickAppsSettings()
         } label: {
             VStack(spacing: 0) {
                 Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 32))
+                    .font(.system(size: iconSize * 0.76))
                     .foregroundStyle(Color.white.opacity(0.25))
                     .frame(width: iconSize, height: iconSize)
             }
@@ -244,35 +235,60 @@ private enum QuickAppsPageTiming {
     }
 }
 
-enum HorizontalSwipeDirection {
-    case left
-    case right
+enum PageSwipeDirection {
+    case next
+    case previous
 }
 
-struct HorizontalSwipeDetector: NSViewRepresentable {
+struct PageSwipeDetector: NSViewRepresentable {
+    var axis: Axis = .horizontal
     var supportsAuxiliaryButtons = true
     var threshold: CGFloat = 18
-    var onSwipe: (HorizontalSwipeDirection) -> Void
+    var wheelTarget: WheelTarget?
+    var onSwipe: (PageSwipeDirection) -> Void
 
     func makeNSView(context: Context) -> SwipeView {
         let view = SwipeView()
         view.supportsAuxiliaryButtons = supportsAuxiliaryButtons
+        view.axis = axis
         view.threshold = threshold
         view.onSwipe = onSwipe
+        wheelTarget?.view = view
+        view.wheelTarget = wheelTarget
         return view
     }
 
     func updateNSView(_ nsView: SwipeView, context: Context) {
         nsView.onSwipe = onSwipe
         nsView.supportsAuxiliaryButtons = supportsAuxiliaryButtons
+        nsView.axis = axis
         nsView.threshold = threshold
     }
 
+    static func dismantleNSView(_ view: SwipeView, coordinator: ()) {
+        if view.wheelTarget?.view === view { view.wheelTarget?.view = nil }
+        view.stopMonitoring()
+    }
+
+    @MainActor
+    final class WheelTarget {
+        fileprivate weak var view: SwipeView?
+
+        func contains(_ event: NSEvent) -> Bool {
+            view?.isEventInsideCard(event) == true
+        }
+    }
+
     final class SwipeView: NSView {
-        var onSwipe: ((HorizontalSwipeDirection) -> Void)?
+        var onSwipe: ((PageSwipeDirection) -> Void)?
         var supportsAuxiliaryButtons = true
+        var axis: Axis = .horizontal
         var threshold: CGFloat = 18
-        private var accumulatedDeltaX: CGFloat = 0
+        weak var wheelTarget: WheelTarget?
+        private var lastWheelPageTime: TimeInterval = -.infinity
+        private var lastWheelDirection: PageSwipeDirection?
+        private var scrollAxis: Axis?
+        private var accumulatedDelta: CGFloat = 0
         private var hasTriggeredSwipe = false
         private var localMonitor: Any?
 
@@ -292,10 +308,7 @@ struct HorizontalSwipeDetector: NSViewRepresentable {
             super.viewDidMoveToWindow()
 
             if window == nil {
-                if let localMonitor {
-                    NSEvent.removeMonitor(localMonitor)
-                    self.localMonitor = nil
-                }
+                stopMonitoring()
             } else if localMonitor == nil {
                 let eventTypes: NSEvent.EventTypeMask = supportsAuxiliaryButtons
                     ? [.scrollWheel, .otherMouseDown]
@@ -303,82 +316,94 @@ struct HorizontalSwipeDetector: NSViewRepresentable {
                 localMonitor = NSEvent.addLocalMonitorForEvents(
                     matching: eventTypes
                 ) { [weak self] event in
-                    self?.handleLocalEvent(event) ?? event
+                    guard let self else { return event }
+                    return self.handleLocalEvent(event)
                 }
             }
         }
 
-        private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
-            guard isEventInsideCard(event) else { return event }
+        fileprivate func stopMonitoring() {
+            guard let localMonitor else { return }
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
+        }
 
+        private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
             switch event.type {
             case .scrollWheel:
-                return handleTrackpadScroll(event)
+                return handleScroll(event)
             case .otherMouseDown:
-                return supportsAuxiliaryButtons ? handleAuxiliaryMouseButton(event) : event
+                guard supportsAuxiliaryButtons, isEventInsideCard(event) else { return event }
+                return handleAuxiliaryMouseButton(event)
             default:
                 return event
             }
         }
 
-        private func handleTrackpadScroll(_ event: NSEvent) -> NSEvent? {
-            let horizontal = event.scrollingDeltaX
-            let vertical = event.scrollingDeltaY
-
-            if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
-                accumulatedDeltaX = 0
-                hasTriggeredSwipe = false
-            }
-
-            if event.phase == .ended || event.momentumPhase == .ended {
+        private func handleScroll(_ event: NSEvent) -> NSEvent? {
+            guard event.window === window else { return event }
+            if axis == .vertical, !event.hasPreciseScrollingDeltas {
+                guard isEventInsideCard(event),
+                      abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) else { return event }
+                let direction: PageSwipeDirection = event.scrollingDeltaY > 0 ? .previous : .next
+                // Coalesce a fast flick while allowing an immediate change of direction.
+                if direction != lastWheelDirection || event.timestamp - lastWheelPageTime >= 0.24 {
+                    lastWheelDirection = direction
+                    lastWheelPageTime = event.timestamp
+                    onSwipe?(direction)
+                }
                 return nil
             }
 
-            guard abs(horizontal) > abs(vertical), abs(horizontal) > 1 else {
-                return event
+            let startsGesture = event.phase.contains(.began) || event.phase.contains(.mayBegin)
+            if startsGesture || (event.phase.isEmpty && event.momentumPhase.isEmpty) {
+                scrollAxis = nil
+                accumulatedDelta = 0
+                hasTriggeredSwipe = false
+                if !isEventInsideCard(event) {
+                    scrollAxis = axis == .vertical ? .horizontal : .vertical
+                }
             }
 
+            if event.phase.contains(.ended) || event.phase.contains(.cancelled) || !event.momentumPhase.isEmpty {
+                return scrollAxis == axis ? nil : event
+            }
+
+            let horizontal = event.scrollingDeltaX
+            let vertical = event.scrollingDeltaY
+            if scrollAxis == nil {
+                guard isEventInsideCard(event), max(abs(horizontal), abs(vertical)) > 1 else { return event }
+                scrollAxis = abs(horizontal) >= abs(vertical) ? .horizontal : .vertical
+            }
+            guard scrollAxis == axis else { return event }
+
             if !hasTriggeredSwipe {
-                accumulatedDeltaX += horizontal
-                if abs(accumulatedDeltaX) >= threshold {
-                    let direction: HorizontalSwipeDirection = accumulatedDeltaX > 0 ? .right : .left
+                accumulatedDelta += axis == .horizontal ? horizontal : vertical
+                if abs(accumulatedDelta) >= threshold {
                     hasTriggeredSwipe = true
-                    accumulatedDeltaX = 0
-                    onSwipe?(direction)
+                    onSwipe?(accumulatedDelta > 0 ? .previous : .next)
                 }
             }
 
             return nil
         }
 
-        private func isEventInsideCard(_ event: NSEvent) -> Bool {
-            guard event.window === window else { return false }
+        fileprivate func isEventInsideCard(_ event: NSEvent) -> Bool {
+            guard let window, event.window === window else { return false }
             let point = convert(event.locationInWindow, from: nil)
-            return bounds.insetBy(dx: -2, dy: -2).contains(point)
+            return visibleRect.contains(point)
         }
 
         private func handleAuxiliaryMouseButton(_ event: NSEvent) -> NSEvent? {
             switch event.buttonNumber {
             case 3:
-                onSwipe?(.right)
+                onSwipe?(.previous)
                 return nil
             case 4:
-                onSwipe?(.left)
+                onSwipe?(.next)
                 return nil
             default:
                 return event
-            }
-        }
-
-        override func scrollWheel(with event: NSEvent) {
-            if handleTrackpadScroll(event) != nil {
-                super.scrollWheel(with: event)
-            }
-        }
-
-        override func otherMouseDown(with event: NSEvent) {
-            if handleAuxiliaryMouseButton(event) != nil {
-                super.otherMouseDown(with: event)
             }
         }
     }

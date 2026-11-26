@@ -112,9 +112,6 @@ enum IslandDesignTokens {
     static let expandedTopBarControlHeight: CGFloat = 30
     static let expandedTopBarTopPadding: CGFloat = 0
     static let expandedTopBarHeightReduction: CGFloat = 20
-    static let pinButtonSize: CGFloat = 38
-    static let externalPinButtonTrailingOverlap: CGFloat = 8
-    static let externalPinButtonBottomOverlap: CGFloat = 8
 
     static let panelColor = AppColor.islandBackground
     static let moduleSurface = AppColor.islandSurface
@@ -124,8 +121,6 @@ enum IslandDesignTokens {
     static let secondaryText = AppColor.islandTextSecondary
     static let iconColor = Color.white.opacity(0.76)
 
-    static let applicationsExpandedHeight: CGFloat = 500
-    static let filesExpandedHeight: CGFloat = 500
     static let applicationsWindowVerticalPadding: CGFloat = 40
     static let moduleHeightCompressionRatio: CGFloat = 0.82
     static let fourColumnsMinimumExpandedWidth: CGFloat = defaultExpandedSize.width
@@ -136,8 +131,8 @@ enum IslandDesignTokens {
     // from roughly 75pt to 125pt (about two thirds wider).
     static let mediaModuleFixedWidth: CGFloat = 240
     static let todoModuleFixedWidth: CGFloat = 188
-    static let quickAppsTwoColumnFixedWidth: CGFloat = 126
-    static let quickAppsThreeColumnFixedWidth: CGFloat = 156
+    static let quickAppsTwoColumnFixedWidth: CGFloat = 138
+    static let quickAppsThreeColumnFixedWidth: CGFloat = 168
     static let shortcutsModuleFixedWidth: CGFloat = 156
     static let imageCardModuleFixedWidth: CGFloat = 124
     static let deviceInfoModuleFixedWidth: CGFloat = 168

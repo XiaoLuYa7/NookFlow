@@ -19,6 +19,7 @@ struct ExpandedIslandView: View {
     let onOpenSettings: () -> Void
     let onOpenTodoSettings: () -> Void
     let onOpenFeedback: () -> Void
+    let onVisibleModulesChanged: (Set<IslandPanelModule>) -> Void
 
     @State private var todoSyncTask: Task<Void, Never>?
     @State private var isScrubbingPlayback = false
@@ -32,7 +33,10 @@ struct ExpandedIslandView: View {
     @State private var lyricsStatusText = ""
 
     @State private var playbackScrubProgress = 0.0
-    @State private var containerFrame: CGRect = .zero
+    @Environment(\.pixelLength) private var pixelLength
+    @GestureState private var moduleDragGestureActive = false
+    @State private var quickAppsWheelTarget = PageSwipeDetector.WheelTarget()
+    @State private var moduleViewport = ModuleViewport(edges: [.trailing], modules: [])
     @State private var imageCardImage: NSImage?
     @State private var imageCardImagePath = ""
     @State private var imageCardImageIdentifier = ""
@@ -70,9 +74,24 @@ struct ExpandedIslandView: View {
                 }
             }
             .onChange(of: viewModel.presentationPhase) { _, phase in
+                if phase != .expanded { dragController.reset() }
                 if phase == .collapsed {
                     stopContentProviders()
                     stopImageCardLoading()
+                }
+            }
+            .onChange(of: moduleViewport.modules) { previous, visible in
+                onVisibleModulesChanged(visible)
+                if previous.contains(.todo) != visible.contains(.todo) {
+                    if !visible.contains(.todo) { closeTodoFloatingPanel() }
+                    refreshContentProviders()
+                }
+                if previous.contains(.imageCard) != visible.contains(.imageCard) {
+                    if visible.contains(.imageCard) {
+                        loadImageCardIfNeeded()
+                    } else if imageCardIsSlideshow || imageCardLoadTask != nil {
+                        stopImageCardLoading()
+                    }
                 }
             }
             .onChange(of: settings.showTodoModule) { _, enabled in
@@ -86,7 +105,7 @@ struct ExpandedIslandView: View {
                 loadImageCardIfNeeded()
             }
             .onChange(of: viewModel.fileDataRefreshToken) { _, _ in
-                if runtimeIsActive {
+                if runtimeIsActive, viewModel.selectedTopTab == .files {
                     fileProvider.load()
                 }
             }
@@ -109,6 +128,8 @@ struct ExpandedIslandView: View {
                 playbackDiagnosticText = text
             }
             .onDisappear {
+                dragController.reset()
+                onVisibleModulesChanged([])
                 closeTodoFloatingPanel()
                 stopContentProviders()
                 todoSyncTask?.cancel()
@@ -160,11 +181,20 @@ struct ExpandedIslandView: View {
             case .home:
                 stablePage(moduleGrid, tab: .home)
             case .applications:
-                stablePage(ApplicationsGridView(provider: applicationsProvider), tab: .applications)
+                stablePage(
+                    ApplicationsGridView(
+                        provider: applicationsProvider,
+                        acceptsKeyboard: viewModel.presentationPhase == .expanded && viewModel.enablesLiveServices,
+                        contentWidth: contentSize.width
+                    ),
+                    tab: .applications
+                )
             case .files:
                 stablePage(
                     FilesGridView(
                         provider: fileProvider,
+                        location: settings.fileDataLocation,
+                        acceptsKeyboard: viewModel.presentationPhase == .expanded && runtimeIsActive,
                         onExternalDragStateChanged: { isDragging, fileName in
                             if isDragging {
                                 viewModel.beginFileDrop(previewName: fileName)
@@ -227,36 +257,34 @@ struct ExpandedIslandView: View {
     }
 
     private var topBar: some View {
-        ZStack(alignment: .trailing) {
-            HStack(spacing: 8) {
-                ForEach(IslandTopTab.allCases) { tab in
-                    topTabButton(tab)
-                }
+        HStack(spacing: 8) {
+            ForEach(IslandTopTab.allCases) { tab in
+                topTabButton(tab)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 10)
-            .padding(.trailing, 58)
 
+            Spacer(minLength: 0)
+
+            if settings.showPinButton {
+                PinButton(isPinned: viewModel.isPinned, action: viewModel.togglePin)
+            }
             settingsButton
-                .padding(.trailing, 10)
-                .zIndex(2)
         }
-        .padding(.horizontal, 22)
-        .frame(width: visibleTopBarWidth)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .frame(height: IslandDesignTokens.expandedTopBarControlHeight, alignment: .center)
+        .padding(.leading, topBarLeadingPadding)
+        .padding(.trailing, 32)
+        .frame(width: contentSize.width)
+        .frame(height: IslandDesignTokens.expandedTopBarControlHeight)
         .padding(.top, IslandDesignTokens.expandedTopBarTopPadding)
         .zIndex(2)
     }
 
-    /// Home modules can be wider than the active display. Keep navigation
-    /// controls inside the visible screen instead of anchoring them to the
-    /// off-screen trailing edge of the card row.
-    private var visibleTopBarWidth: CGFloat {
-        guard let screenWidth = NSScreen.main?.frame.width else {
-            return contentSize.width
-        }
-        return min(contentSize.width, max(320, screenWidth - 72))
+    private var topBarLeadingPadding: CGFloat {
+        // The pages resize around the same center. Anchor the tabs within the
+        // narrowest page so their positions stay fixed as the shell changes width.
+        let sharedWidth = IslandTopTab.allCases.map {
+            IslandShellLayout.contentSize(settings: settings, selectedTopTab: $0).width
+        }.min() ?? contentSize.width
+        let leadingInset = ApplicationsGridView.leadingIconInset(for: sharedWidth) - TopTabButton.homeLabelInset
+        return (contentSize.width - sharedWidth) / 2 + leadingInset
     }
 
     private var contentSize: CGSize {
@@ -265,14 +293,6 @@ struct ExpandedIslandView: View {
 
     private var windowSize: CGSize {
         IslandShellLayout.windowSize(settings: settings, selectedTopTab: viewModel.selectedTopTab)
-    }
-
-    private var effectiveIslandSize: CGSize {
-        IslandShellLayout.effectiveIslandSize(settings: settings)
-    }
-
-    private var effectiveIslandWidth: CGFloat {
-        IslandShellLayout.effectiveIslandWidth(settings: settings)
     }
 
     private var effectiveIslandHeight: CGFloat {
@@ -337,63 +357,88 @@ struct ExpandedIslandView: View {
 
     private var fixedModuleRow: some View {
         let modules = visibleModules
+        let cardsWidth = IslandShellLayout.moduleRowWidth(
+            modules: modules,
+            quickAppsColumnCount: settings.quickAppsColumnCount
+        )
 
         return GeometryReader { proxy in
-            let containerWidth = proxy.size.width
+            let viewportWidth = proxy.size.width
+            let containerWidth = max(cardsWidth, viewportWidth)
+            let overflows = cardsWidth > viewportWidth + 0.5
             let layout = currentDragLayout(modules: modules, containerWidth: containerWidth)
 
-            ZStack(alignment: .topLeading) {
-                // Cards — rearranged positions during drag; source card hidden.
-                // No .animation() modifier here — card rearrangement is animated
-                // explicitly via withAnimation in ModuleDragController.updateDrag().
-                ForEach(Array(modules.enumerated()), id: \.element) { idx, module in
-                    moduleCard(module)
-                        .frame(width: layout.widths[idx], height: moduleCardHeight, alignment: .topLeading)
-                        .offset(x: layout.offsets[idx])
-                        .opacity(
-                            dragController.isDragging && dragController.sourceIndex == idx
-                                ? 0
-                                : contentRevealProgress
-                        )
-                        .islandContentMaterialized(
-                            isVisible: idx + 1 < viewModel.visibleCardCount,
-                            reduceMotion: viewModel.reduceMotionEnabled
-                        )
-                        .allowsHitTesting(idx + 1 < viewModel.visibleCardCount)
-                        .simultaneousGesture(moduleCardDragGesture(
-                            cardIndex: idx,
-                            cardOrigin: CGPoint(
-                                x: layout.midXs[idx],
-                                y: moduleCardHeight / 2
-                            ),
-                            layout: layout,
-                            containerWidth: containerWidth
-                        ))
-                }
+            ScrollView(.horizontal) {
+                ZStack(alignment: .topLeading) {
+                    ForEach(Array(modules.enumerated()), id: \.element) { idx, module in
+                        moduleCard(module, isInViewport: moduleViewport.modules.contains(module))
+                            .frame(width: layout.widths[idx], height: moduleCardHeight, alignment: .topLeading)
+                            .offset(x: layout.offsets[idx])
+                            .opacity(
+                                dragController.isDragging && dragController.sourceIndex == idx
+                                    ? 0
+                                    : contentRevealProgress
+                            )
+                            .islandContentMaterialized(
+                                isVisible: idx + 1 < viewModel.visibleCardCount,
+                                reduceMotion: viewModel.reduceMotionEnabled
+                            )
+                            .allowsHitTesting(idx + 1 < viewModel.visibleCardCount)
+                            .simultaneousGesture(moduleCardDragGesture(
+                                cardIndex: idx,
+                                layout: layout,
+                                viewportSize: proxy.size
+                            ))
+                    }
 
-                // Drag preview — isolated from the card layout above.
-                // Uses .id() for stable identity so SwiftUI never re-creates it mid-drag.
-                // Position is always computed from the raw cursor, never from layout offsets.
-                dragPreview(modules: modules, containerWidth: containerWidth)
-            }
-            .frame(width: containerWidth, height: moduleCardHeight, alignment: .topLeading)
-            .background {
-                GeometryReader { containerGeo in
-                    Color.clear
-                        .onAppear {
-                            containerFrame = containerGeo.frame(in: .named("moduleRow"))
-                        }
-                        .onChange(of: containerGeo.frame(in: .named("moduleRow"))) { _, newFrame in
-                            containerFrame = newFrame
-                        }
+                    dragPreview(modules: modules, containerWidth: containerWidth)
                 }
+                .frame(width: containerWidth, height: moduleCardHeight, alignment: .topLeading)
+                .background {
+                    if overflows {
+                        ModuleScrollViewBridge(
+                            controller: dragController,
+                            quickAppsWheelTarget: quickAppsWheelTarget
+                        )
+                    }
+                }
+                .onGeometryChange(for: ModuleViewport.self) { geometry in
+                    let frame = geometry.frame(in: .named("moduleViewport"))
+                    var edges: HorizontalScrollEdges = []
+                    if frame.minX < -0.5 { edges.insert(.leading) }
+                    if frame.maxX > viewportWidth + 0.5 { edges.insert(.trailing) }
+                    let visible = modules.indices.filter { index in
+                        let leading = frame.minX + layout.offsets[index]
+                        return leading < viewportWidth && leading + layout.widths[index] > 0
+                    }
+                    return ModuleViewport(edges: edges, modules: Set(visible.map { modules[$0] }))
+                } action: { viewport in
+                    moduleViewport = viewport
+                }
+            }
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .coordinateSpace(name: "moduleViewport")
+            .mask {
+                horizontalEdgeMask(
+                    edges: overflows ? moduleViewport.edges : [],
+                    fadeFraction: min(0.12, 16 / max(1, viewportWidth))
+                )
             }
         }
         .frame(height: moduleCardHeight)
-        .coordinateSpace(name: "moduleRow")
         .onChange(of: visibleModules) { _, _ in
-            if dragController.isActive { dragController.reset() }
-            refreshContentProviders()
+            if dragController.isDragging { dragController.reset() }
+        }
+        .onChange(of: settings.quickAppsColumnCount) { _, _ in
+            if dragController.isDragging { dragController.reset() }
+        }
+        .onChange(of: moduleDragGestureActive) { _, active in
+            if !active && dragController.isDragging { dragController.reset() }
+        }
+        .onDisappear {
+            dragController.reset()
+            moduleViewport = ModuleViewport(edges: [.trailing], modules: [])
         }
     }
 
@@ -403,7 +448,7 @@ struct ExpandedIslandView: View {
             return
         }
 
-        if settings.showTodoModule && visibleModules.contains(.todo) {
+        if settings.showTodoModule && moduleViewport.modules.contains(.todo) {
             syncTodoTasksIfNeeded(force: forceTodoSync)
         } else {
             reminderProvider.stop()
@@ -430,9 +475,8 @@ struct ExpandedIslandView: View {
 
         todoSyncTask = Task { @MainActor in
             let tasks = await reminderProvider.loadTodoTasksForSync(includeCompleted: true)
-            if !Task.isCancelled {
-                viewModel.setTodoTasks(tasks)
-            }
+            guard !Task.isCancelled else { return }
+            viewModel.setTodoTasks(tasks)
             todoSyncTask = nil
         }
     }
@@ -445,30 +489,32 @@ struct ExpandedIslandView: View {
            let srcIdx = dragController.sourceIndex,
            modules.indices.contains(srcIdx) {
 
-            let w = dragController.sourceWidth
-            let dropping = dragController.isDropping
-            let dropOffset = dragController.dropTargetOffset
-            let cursor = dragController.cursorPosition
-            let previewX = dropping
-                ? dropOffset + w / 2
-                : min(max(cursor.x, w / 2), containerWidth - w / 2)
+            let width = moduleCardWidth(modules[srcIdx])
 
-            moduleCard(modules[srcIdx])
-                .frame(width: w, height: moduleCardHeight, alignment: .topLeading)
-                .scaleEffect(1.04)
-                .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
-                .position(x: previewX, y: moduleCardHeight / 2)
-                .allowsHitTesting(false)
-                .zIndex(1)
-                .id("drag-preview-\(srcIdx)")
-                .animation(nil, value: dragController.targetIndex)
-                .animation(nil, value: dragController.dragOffset)
+            ModuleDragPreviewView(
+                position: dragController.previewPosition,
+                cardSize: CGSize(width: width, height: moduleCardHeight),
+                rowWidth: containerWidth,
+                reduceMotion: viewModel.reduceMotionEnabled
+            ) {
+                moduleCard(modules[srcIdx], isInViewport: false, isDragPreview: true)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .zIndex(1)
+            .id(modules[srcIdx])
+            .animation(nil, value: dragController.targetIndex)
         }
     }
 
     // MARK: - Module Layout
 
-    private struct ModuleLayout {
+    private struct ModuleViewport: Equatable, Sendable {
+        let edges: HorizontalScrollEdges
+        let modules: Set<IslandPanelModule>
+    }
+
+    private struct ModuleLayout: Sendable {
         let offsets: [CGFloat]
         let widths: [CGFloat]
         let midXs: [CGFloat]
@@ -509,7 +555,7 @@ struct ExpandedIslandView: View {
         modules: [IslandPanelModule],
         containerWidth: CGFloat
     ) -> ModuleLayout {
-        guard dragController.isActive else {
+        guard dragController.isDragging else {
             return computeModuleLayout(modules: modules, containerWidth: containerWidth)
         }
 
@@ -521,7 +567,6 @@ struct ExpandedIslandView: View {
 
         let result = dragController.rearrangedLayout(
             modules: modules,
-            containerWidth: containerWidth,
             spacing: spacing
         ) { moduleCardWidth($0) }
         let offsets = result.offsets.map { $0 + leadingInset }
@@ -538,77 +583,41 @@ struct ExpandedIslandView: View {
 
     private func moduleCardDragGesture(
         cardIndex: Int,
-        cardOrigin: CGPoint,
         layout: ModuleLayout,
-        containerWidth: CGFloat
+        viewportSize: CGSize
     ) -> some Gesture {
         LongPressGesture(minimumDuration: ModuleDragController.longPressDuration)
-            .sequenced(before: DragGesture(minimumDistance: ModuleDragController.dragMinDistance))
+            .sequenced(before: DragGesture(minimumDistance: 3, coordinateSpace: .named("moduleViewport")))
+            .updating($moduleDragGestureActive) { value, active, _ in
+                if case .second(true, _) = value { active = true }
+            }
             .onChanged { value in
-                switch value {
-                case .second(true, let drag):
-                    guard let drag else { return }
-                    if !dragController.isActive {
-                        dragController.startDrag(
-                            sourceIndex: cardIndex,
-                            sourceOrigin: cardOrigin,
-                            midXs: layout.midXs,
-                            widths: layout.widths
-                        )
-                    } else {
-                        let translation = CGSize(
-                            width: drag.translation.width,
-                            height: drag.translation.height
-                        )
-                        dragController.updateDrag(translation: translation)
-                    }
-                default:
-                    break
+                guard case .second(true, let drag?) = value,
+                      viewModel.presentationPhase == .expanded,
+                      !isScrubbingPlayback,
+                      layout.midXs.count > 1 else { return }
+                if !dragController.isDragging {
+                    dragController.startDrag(
+                        sourceIndex: cardIndex,
+                        sourceCenterX: layout.midXs[cardIndex],
+                        startLocation: drag.startLocation,
+                        midXs: layout.midXs,
+                        viewportSize: viewportSize,
+                        reduceMotion: viewModel.reduceMotionEnabled
+                    )
+                    TrackpadHapticFeedback.perform(settings.trackpadFeedbackMode)
+                }
+                dragController.updateDrag(location: drag.location)
+            }
+            .onEnded { value in
+                guard dragController.sourceIndex == cardIndex,
+                      case .second(true, _) = value else { return }
+                let reordered = dragController.commitDrop(visibleModules)
+                dragController.reset()
+                if let reordered {
+                    IslandShellLayout.saveVisibleModuleOrder(reordered, settings: settings)
                 }
             }
-            .onEnded { _ in
-                handleModuleDrop(modules: visibleModules)
-            }
-    }
-
-    private func handleModuleDrop(modules: [IslandPanelModule]) {
-        // Compute the final layout to determine where the preview should snap
-        let spacing = moduleCardLayoutSpacing
-        let containerWidth = containerFrame.width > 0 ? containerFrame.width : 900
-        let leadingInset = moduleRowLeadingInset(
-            modules: modules,
-            containerWidth: containerWidth
-        )
-
-        let finalLayout = dragController.rearrangedLayout(
-            modules: modules,
-            containerWidth: containerWidth,
-            spacing: spacing
-        ) { moduleCardWidth($0) }
-
-        // Determine the snap target x-offset (top-leading)
-        let snapTargetX: CGFloat
-        if let srcIdx = dragController.sourceIndex {
-            snapTargetX = finalLayout.offsets[srcIdx] + leadingInset
-        } else {
-            snapTargetX = leadingInset
-        }
-
-        // Animate preview to the target slot
-        withAnimation(ModuleDragController.dropAnimation) {
-            dragController.beginDropAnimation(targetOffset: snapTargetX)
-        }
-
-        // Commit the reorder if a real move happened
-        if let reordered = dragController.commitDrop(modules) {
-            settings.moduleOrder = reordered.map(\.rawValue)
-        }
-
-        // Reset after the snap animation completes
-        let controller = dragController
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            controller.reset()
-        }
     }
 
     private func moduleCardWidth(_ module: IslandPanelModule) -> CGFloat {
@@ -758,12 +767,15 @@ struct ExpandedIslandView: View {
     }
 
     @ViewBuilder
-    private func moduleCard(_ module: IslandPanelModule) -> some View {
-        let cornerRadius = module == .todo ? TodoScheduleCardMetrics.cornerRadius : AppRadius.largeCard
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    private func moduleCard(
+        _ module: IslandPanelModule,
+        isInViewport: Bool,
+        isDragPreview: Bool = false
+    ) -> some View {
+        let shape = RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
 
         ZStack(alignment: .topLeading) {
-            moduleCardBackground(module)
+            shape.fill(IslandDesignTokens.moduleSurface)
 
             VStack(alignment: .leading, spacing: moduleCardSpacing(for: module)) {
                 if shouldShowModuleHeader(for: module) {
@@ -776,9 +788,14 @@ struct ExpandedIslandView: View {
                 case .todo:
                     todoModuleContent
                 case .media:
-                    mediaModuleContent
+                    if isInViewport || isDragPreview {
+                        mediaModuleContent(animatesText: isInViewport)
+                    }
                 case .quickApps:
-                    quickAppsModuleContent
+                    QuickAppsCardView(
+                        wheelTarget: quickAppsWheelTarget,
+                        acceptsPagingEvents: isInViewport && !dragController.isDragging
+                    )
                 case .shortcuts:
                     shortcutsModuleContent
                 case .imageCard:
@@ -786,7 +803,7 @@ struct ExpandedIslandView: View {
                 case .deviceInfo:
                     deviceInfoModuleContent
                 case .mirror:
-                    MirrorCardView(isActive: isContentReady && runtimeIsActive)
+                    MirrorCardView(isActive: isContentReady && runtimeIsActive && isInViewport)
                 }
             }
             .padding(.horizontal, moduleCardHorizontalPadding(for: module))
@@ -805,30 +822,10 @@ struct ExpandedIslandView: View {
             alignment: .topLeading
         )
         .overlay {
-            unifiedModuleCardBorder(shape)
+            shape.strokeBorder(IslandDesignTokens.moduleBorder, lineWidth: pixelLength)
+                .allowsHitTesting(false)
         }
         .moduleCardClip(shape, isEnabled: true)
-    }
-
-    private func unifiedModuleCardBorder(_ shape: RoundedRectangle) -> some View {
-        shape
-            .stroke(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.20),
-                        Color.white.opacity(0.055),
-                        Color.white.opacity(0.13)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 0.9
-            )
-            .overlay {
-                shape
-                    .stroke(Color.black.opacity(0.52), lineWidth: 2)
-                    .blendMode(.overlay)
-            }
     }
 
     private func shouldShowModuleHeader(for module: IslandPanelModule) -> Bool {
@@ -847,91 +844,29 @@ struct ExpandedIslandView: View {
         ShortcutsCardView()
     }
 
-    @ViewBuilder
     private var imageCardModuleContent: some View {
         GeometryReader { proxy in
-            let rotationDegrees: CGFloat = 12
-            let rotationRadians = rotationDegrees * .pi / 180
-            let rotationSine = sin(rotationRadians)
-            let rotationCosine = cos(rotationRadians)
-            let visualWidthRatio = 1 + rotationSine
-            let visualHeightRatio = rotationSine + rotationCosine
-            let cardSide = min(
-                proxy.size.width * 0.96 / visualWidthRatio,
-                proxy.size.height * 0.88 / visualHeightRatio
-            ) + 2
-            let visualWidth = cardSide * visualWidthRatio
-            let visualHeight = cardSide * visualHeightRatio
-            let visualOffsetX = cardSide * rotationSine
-            let visualOffsetY = cardSide * (visualHeightRatio - 1)
-            let cornerRadius = min(28, cardSide * 0.18)
+            let cardSide = max(1, min(proxy.size.width, proxy.size.height) - 20)
 
-            ZStack(alignment: .topLeading) {
-                ZStack(alignment: .bottomLeading) {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: .clear, location: 0.04),
-                                    .init(color: Color(red: 0.43, green: 0.96, blue: 0.78).opacity(0.36), location: 0.34),
-                                    .init(color: Color(red: 0.20, green: 0.65, blue: 1.00).opacity(0.28), location: 0.68),
-                                    .init(color: .clear, location: 0.96)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: cardSide, height: cardSide)
-                        .rotationEffect(.degrees(-rotationDegrees), anchor: .bottomLeading)
-                        .blur(radius: max(8, cardSide * 0.085))
-                        .offset(x: -cardSide * 0.025, y: cardSide * 0.035)
+            IslandImageCardArtwork(size: cardSide) {
+                Image("ImageCardDefault")
+                    .resizable()
+                    .scaledToFill()
 
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.24, green: 0.25, blue: 0.27),
-                                    Color(red: 0.10, green: 0.11, blue: 0.13)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: cardSide, height: cardSide)
-
-                    ZStack {
-                        Image("ImageCardDefault")
-                            .resizable()
-                            .scaledToFill()
-
-                        if let image = imageCardImage {
-                            Image(nsImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .id(imageCardImageIdentifier)
-                                .transition(imageCardTransition)
-                        }
-                    }
-                    .frame(width: cardSide, height: cardSide)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
-                    }
-                    .rotationEffect(.degrees(-rotationDegrees), anchor: .bottomLeading)
-                    .shadow(color: Color(red: 0.14, green: 0.61, blue: 1.00).opacity(0.14), radius: 8, x: -2, y: 2)
-                    .shadow(color: .black.opacity(0.36), radius: 10, x: 4, y: 7)
+                if let image = imageCardImage {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .id(imageCardImageIdentifier)
+                        .transition(imageCardTransition)
                 }
-                .offset(x: visualOffsetX, y: visualOffsetY)
             }
-            .frame(width: visualWidth, height: visualHeight, alignment: .topLeading)
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
-            .offset(x: -2)
         }
     }
 
     private func loadImageCardIfNeeded() {
-        guard isContentReady, runtimeIsActive else { return }
+        guard isContentReady, runtimeIsActive, moduleViewport.modules.contains(.imageCard) else { return }
 
         let path = settings.imageCardPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else {
@@ -973,12 +908,11 @@ struct ExpandedIslandView: View {
                 let urls = ImageCardSourceAccess.imageURLs(in: sourceURL)
                 return urls.count > 1 ? urls.shuffled() : urls
             }.value
-            guard !imageURLs.isEmpty, !Task.isCancelled else {
-                if imageCardImagePath == path {
-                    imageCardIsSlideshow = false
-                    imageCardImage = nil
-                    imageCardLoadTask = nil
-                }
+            guard !Task.isCancelled else { return }
+            guard !imageURLs.isEmpty else {
+                imageCardIsSlideshow = false
+                imageCardImage = nil
+                imageCardLoadTask = nil
                 return
             }
 
@@ -998,6 +932,7 @@ struct ExpandedIslandView: View {
                     lastURL = url
                 }
 
+                guard !Task.isCancelled else { return }
                 guard imageURLs.count > 1 else {
                     imageCardLoadTask = nil
                     return
@@ -1066,17 +1001,17 @@ struct ExpandedIslandView: View {
         VStack(spacing: 12) {
             HStack(spacing: 10) {
                 deviceMetricColumn(
-                    value: "\(deviceInfoProvider.snapshot.cpuPercent)%",
+                    percent: deviceInfoProvider.snapshot.cpuPercent,
                     label: "CPU",
                     systemName: "waveform.path.ecg"
                 )
                 deviceMetricColumn(
-                    value: "\(deviceInfoProvider.snapshot.memoryPercent)%",
+                    percent: deviceInfoProvider.snapshot.memoryPercent,
                     label: "RAM",
                     systemName: "chart.bar.fill"
                 )
                 deviceMetricColumn(
-                    value: "\(deviceInfoProvider.snapshot.diskPercent)%",
+                    percent: deviceInfoProvider.snapshot.diskPercent,
                     label: "DISK",
                     systemName: "internaldrive"
                 )
@@ -1105,14 +1040,11 @@ struct ExpandedIslandView: View {
                             Capsule()
                                 .fill(Color.white.opacity(0.14))
                             Capsule()
-                                .fill(AppColor.accent)
+                                .fill(deviceMetricAlertColor(for: deviceInfoProvider.snapshot.diskPercent) ?? AppColor.accent)
                                 .frame(
-                                    width: max(
-                                        3,
-                                        proxy.size.width
-                                            * CGFloat(min(max(deviceInfoProvider.snapshot.diskPercent, 0), 100))
-                                            / 100
-                                    )
+                                    width: proxy.size.width
+                                        * CGFloat(min(max(deviceInfoProvider.snapshot.diskPercent, 0), 100))
+                                        / 100
                                 )
                         }
                     }
@@ -1129,16 +1061,18 @@ struct ExpandedIslandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func deviceMetricColumn(value: String, label: String, systemName: String) -> some View {
-        VStack(spacing: 3) {
+    private func deviceMetricColumn(percent: Int, label: String, systemName: String) -> some View {
+        let alertColor = deviceMetricAlertColor(for: percent)
+
+        return VStack(spacing: 3) {
             Image(systemName: systemName)
                 .font(.system(size: 11, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(AppColor.accent)
+                .foregroundStyle(alertColor ?? AppColor.accent)
 
-            Text(value)
+            Text("\(percent)%")
                 .font(.system(size: 13.5, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.96))
+                .foregroundStyle(alertColor ?? Color.white.opacity(0.96))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
@@ -1149,56 +1083,10 @@ struct ExpandedIslandView: View {
         .frame(maxWidth: .infinity)
     }
 
-    @ViewBuilder
-    private func moduleCardBackground(_: IslandPanelModule) -> some View {
-        let cornerRadius: CGFloat = 16
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-
-        unifiedModuleCardBackground(shape: shape)
-    }
-
-    private func unifiedModuleCardBackground(shape: RoundedRectangle) -> some View {
-        shape
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.035, green: 0.036, blue: 0.040).opacity(0.96),
-                        Color.black.opacity(0.92),
-                        Color(red: 0.015, green: 0.016, blue: 0.019).opacity(0.98)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .overlay(alignment: .topLeading) {
-                shape
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.white.opacity(0.075),
-                                Color.white.opacity(0.018),
-                                Color.clear
-                            ],
-                            center: .topLeading,
-                            startRadius: 0,
-                            endRadius: 190
-                        )
-                    )
-            }
-            .overlay {
-                shape
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.blue.opacity(0.07),
-                                Color.clear
-                            ],
-                            center: .bottomTrailing,
-                            startRadius: 0,
-                            endRadius: 150
-                        )
-                    )
-            }
+    private func deviceMetricAlertColor(for percent: Int) -> Color? {
+        if percent > 90 { return Color(red: 1.0, green: 0.36, blue: 0.36) }
+        if percent > 80 { return Color(red: 1.0, green: 0.73, blue: 0.29) }
+        return nil
     }
 
     private func moduleCardSpacing(for module: IslandPanelModule) -> CGFloat {
@@ -1231,7 +1119,7 @@ struct ExpandedIslandView: View {
         }
 
         if module == .quickApps {
-            return 12
+            return 0
         }
 
         if module == .imageCard {
@@ -1262,11 +1150,7 @@ struct ExpandedIslandView: View {
             return TodoScheduleCardMetrics.verticalPadding
         }
 
-        if module == .quickApps {
-            return 8
-        }
-
-        if module == .imageCard || module == .deviceInfo || module == .mirror {
+        if module == .quickApps || module == .imageCard || module == .deviceInfo || module == .mirror {
             return 0
         }
 
@@ -1369,10 +1253,6 @@ struct ExpandedIslandView: View {
         return true
     }
 
-    private var quickAppsModuleContent: some View {
-        QuickAppsCardView()
-    }
-
     private var weatherModuleContent: some View {
         let weather = weatherProvider.snapshot
 
@@ -1415,7 +1295,7 @@ struct ExpandedIslandView: View {
         .help("日程待办")
     }
 
-    private var mediaModuleContent: some View {
+    private func mediaModuleContent(animatesText: Bool) -> some View {
         let playback = currentSnapshot
         let displayedProgress = displayedPlaybackProgress(playback)
 
@@ -1427,6 +1307,7 @@ struct ExpandedIslandView: View {
             availableHeight: moduleCardHeight - moduleCardVerticalPadding(for: .media) * 2,
             showsTrackName: settings.showMusicTrackName,
             showsLyrics: settings.showMusicLyrics,
+            animatesText: animatesText,
             onScrubStarted: {
                 beginPlaybackScrub(ifNeeded: playback)
             },
@@ -1598,6 +1479,7 @@ private struct WeatherCardView: View {
                             symbolName: weather.symbolName,
                             condition: weather.condition
                         )
+                        .frame(width: iconSize * 0.88, height: iconSize * 0.88)
                         .frame(width: iconSize, height: iconSize)
                         .offset(x: isCompact ? 4 : 5, y: isCompact ? -1 : -2)
                         .allowsHitTesting(false)
@@ -2303,7 +2185,6 @@ private struct WeatherInfoChipView: View {
 }
 
 private enum TodoScheduleCardMetrics {
-    static let cornerRadius: CGFloat = 22
     static let horizontalPadding: CGFloat = 12
     static let verticalPadding: CGFloat = 12
     static let headerSpacing: CGFloat = 5
@@ -4684,9 +4565,9 @@ private struct TodoListPreviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: isCompact ? 6 : TodoScheduleCardMetrics.rowSpacing) {
             if items.isEmpty {
-                Text("暂无已安排待办")
-                    .font(.system(size: isCompact ? 11 : 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.34))
+                Label("暂无已安排待办", systemImage: "checklist")
+                    .font(.system(size: isCompact ? 11 : 13, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.64))
                     .lineLimit(1)
                     .minimumScaleFactor(0.76)
                     .padding(.top, isCompact ? 1 : 5)
@@ -5319,7 +5200,7 @@ private extension Comparable {
     }
 }
 
-enum IslandPanelModule: String, CaseIterable, Identifiable {
+enum IslandPanelModule: String, CaseIterable, Identifiable, Sendable {
     case weather
     case todo
     case media
@@ -5362,6 +5243,10 @@ enum AppCachedImageAssets {
     static let finderIcon: NSImage? = Bundle.main
         .path(forResource: "finder_icon", ofType: "png")
         .flatMap(NSImage.init(contentsOfFile:))
+
+    static let netEaseMusicIcon: NSImage? = Bundle.main
+        .url(forResource: "wyy_miusc", withExtension: "png")
+        .flatMap(NSImage.init(contentsOf:))
 }
 
 private struct FinderGlyph: View {
@@ -5428,6 +5313,8 @@ enum IslandTopTab: CaseIterable, Identifiable {
 }
 
 struct TopTabButton: View {
+    static let homeLabelInset: CGFloat = 18
+
     let tab: IslandTopTab
     let isSelected: Bool
     let action: () -> Void
@@ -5437,9 +5324,14 @@ struct TopTabButton: View {
     var body: some View {
         Button(action: action) {
             tabContent
-                .frame(height: IslandDesignTokens.expandedTopBarControlHeight)
+                .frame(height: 24)
                 .padding(.horizontal, horizontalPadding)
-                .contentShape(Capsule())
+                .background(
+                    Color.white.opacity(isSelected ? 0.14 : (isHovering ? 0.07 : 0)),
+                    in: Capsule()
+                )
+                .frame(height: IslandDesignTokens.expandedTopBarControlHeight)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -5449,10 +5341,12 @@ struct TopTabButton: View {
         .animation(IslandDesignTokens.tabSwitchAnimation, value: isSelected)
         .animation(AppMotion.quick, value: isHovering)
         .help(tab.title)
+        .accessibilityLabel(tab.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var horizontalPadding: CGFloat {
-        tab == .home ? 18 : 8
+        tab == .home ? Self.homeLabelInset : 8
     }
 
     @ViewBuilder
@@ -5508,6 +5402,7 @@ private struct MusicLyricsPlaybackCard: View {
     let availableHeight: CGFloat
     let showsTrackName: Bool
     let showsLyrics: Bool
+    let animatesText: Bool
     let onScrubStarted: () -> Void
     let onScrubChanged: (Double) -> Void
     let onScrubEnded: (Double) -> Void
@@ -5598,7 +5493,8 @@ private struct MusicLyricsPlaybackCard: View {
                             color: Color.white.opacity(playback.isLive ? 0.96 : 0.55),
                             speed: 28,
                             startDelay: 1.5,
-                            endDelay: 1.5
+                            endDelay: 1.5,
+                            isAnimationEnabled: animatesText
                         )
                         .frame(maxWidth: .infinity, minHeight: ceil(titleFontSize * 1.24), alignment: .leading)
                         .layoutPriority(1)
@@ -5620,7 +5516,8 @@ private struct MusicLyricsPlaybackCard: View {
                         MusicLyricMarqueeText(
                             text: lyricText,
                             fontSize: lyricFontSize,
-                            color: Color.white.opacity(0.78)
+                            color: Color.white.opacity(0.78),
+                            isAnimationEnabled: animatesText
                         )
                             .frame(maxWidth: .infinity, minHeight: ceil(lyricFontSize * 1.28), alignment: .leading)
                             .padding(.top, 5)
@@ -5810,6 +5707,9 @@ private enum MusicLaunchTarget: CaseIterable, Identifiable {
     }
 
     var icon: NSImage? {
+        if self == .netEaseMusic, let icon = AppCachedImageAssets.netEaseMusicIcon {
+            return icon
+        }
         if let installedIcon = bundleIdentifiers.compactMap(installedAppIcon).first {
             return installedIcon
         }
@@ -5855,7 +5755,11 @@ private struct MusicLaunchAppIconButton: View {
     @State private var isShowingMissingAppAlert = false
 
     private var iconContentSize: CGFloat {
-        floor(size - 2)
+        // The bundled NetEase artwork fills its canvas, unlike Finder app icons.
+        if target == .netEaseMusic, AppCachedImageAssets.netEaseMusicIcon != nil {
+            return floor(size * 0.78)
+        }
+        return floor(size - 2)
     }
 
     var body: some View {
@@ -5903,7 +5807,9 @@ private struct MusicLyricMarqueeText: View {
     let text: String
     let fontSize: CGFloat
     let color: Color
+    let isAnimationEnabled: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var containerWidth: CGFloat = 0
     @State private var textWidth: CGFloat = 0
     @State private var horizontalOffset: CGFloat = 0
@@ -5942,6 +5848,9 @@ private struct MusicLyricMarqueeText: View {
         .onChange(of: text) { _, _ in
             restartScrolling()
         }
+        .onChange(of: reduceMotion) { _, _ in
+            restartScrolling()
+        }
         .onDisappear {
             scrollTask?.cancel()
             scrollTask = nil
@@ -5963,7 +5872,7 @@ private struct MusicLyricMarqueeText: View {
         }
 
         let overflow = max(0, textWidth - containerWidth)
-        guard overflow > 2 else { return }
+        guard overflow > 2, isAnimationEnabled, !reduceMotion else { return }
 
         let duration = min(9, max(3.2, Double(overflow / 18)))
         scrollTask = Task { @MainActor in
@@ -5984,12 +5893,12 @@ private struct MarqueeText: View {
     let speed: CGFloat
     let startDelay: TimeInterval
     let endDelay: TimeInterval
+    let isAnimationEnabled: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var containerWidth: CGFloat = 0
     @State private var textWidth: CGFloat = 0
     @State private var horizontalOffset: CGFloat = 0
-    @State private var isActivelyScrolling = false
     @State private var scrollTask: Task<Void, Never>?
 
     var body: some View {
@@ -6017,20 +5926,10 @@ private struct MarqueeText: View {
                 }
         }
         .mask {
-            if isActivelyScrolling {
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .white, location: 0.035),
-                        .init(color: .white, location: 0.965),
-                        .init(color: .clear, location: 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            } else {
-                Rectangle().fill(.white)
-            }
+            horizontalEdgeMask(
+                edges: textWidth > containerWidth + 1 && isAnimationEnabled && !reduceMotion ? [.leading, .trailing] : [],
+                fadeFraction: min(0.10, 8 / max(1, containerWidth))
+            )
         }
         .clipped()
         .onPreferenceChange(MarqueeTextWidthKey.self) { width in
@@ -6059,7 +5958,7 @@ private struct MarqueeText: View {
         cancelScrolling(reset: true)
 
         let overflow = max(0, textWidth - containerWidth)
-        guard overflow > 1, !reduceMotion else { return }
+        guard overflow > 1, isAnimationEnabled, !reduceMotion else { return }
 
         let scrollingDuration = max(2.2, Double(overflow / max(speed, 1)))
         scrollTask = Task { @MainActor in
@@ -6067,7 +5966,6 @@ private struct MarqueeText: View {
                 try? await Task.sleep(for: .seconds(startDelay))
                 guard !Task.isCancelled else { return }
 
-                isActivelyScrolling = true
                 withAnimation(.linear(duration: scrollingDuration)) {
                     horizontalOffset = -overflow
                 }
@@ -6079,8 +5977,6 @@ private struct MarqueeText: View {
                     horizontalOffset = 0
                 }
                 try? await Task.sleep(for: .seconds(scrollingDuration))
-                guard !Task.isCancelled else { return }
-                isActivelyScrolling = false
             }
         }
     }
@@ -6094,7 +5990,164 @@ private struct MarqueeText: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             horizontalOffset = 0
-            isActivelyScrolling = false
+        }
+    }
+}
+
+private struct ModuleDragPreviewView<Content: View>: View {
+    @ObservedObject var position: ModuleDragPreviewPosition
+    let cardSize: CGSize
+    let rowWidth: CGFloat
+    let reduceMotion: Bool
+    @ViewBuilder let content: Content
+    @Environment(\.pixelLength) private var pixelLength
+
+    var body: some View {
+        let halfWidth = cardSize.width / 2
+        let centerX = min(max(position.centerX, halfWidth), rowWidth - halfWidth)
+
+        content
+            .frame(width: cardSize.width, height: cardSize.height, alignment: .topLeading)
+            .overlay {
+                RoundedRectangle(cornerRadius: AppRadius.largeCard, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.48), lineWidth: pixelLength)
+            }
+            .scaleEffect(reduceMotion ? 1 : 1.03)
+            .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+            .position(x: centerX, y: cardSize.height / 2)
+            .animation(nil, value: position.centerX)
+    }
+}
+
+/// SwiftUI owns the scrolling view. Use its native clip view for precise,
+/// incremental offsets during drag and for mice with vertical-only wheels.
+private struct ModuleScrollViewBridge: NSViewRepresentable {
+    let controller: ModuleDragController
+    let quickAppsWheelTarget: PageSwipeDetector.WheelTarget
+
+    func makeNSView(context: Context) -> ScrollAnchor {
+        let view = ScrollAnchor()
+        view.controller = controller
+        view.quickAppsWheelTarget = quickAppsWheelTarget
+        return view
+    }
+
+    func updateNSView(_ view: ScrollAnchor, context: Context) {
+        view.connect()
+    }
+
+    static func dismantleNSView(_ view: ScrollAnchor, coordinator: ()) {
+        view.disconnect()
+    }
+
+    final class ScrollAnchor: NSView {
+        weak var controller: ModuleDragController?
+        weak var quickAppsWheelTarget: PageSwipeDetector.WheelTarget?
+        private weak var connectedScrollView: NSScrollView?
+        private var eventMonitor: Any?
+
+        deinit {
+            if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            connect()
+        }
+
+        override func layout() {
+            super.layout()
+            connect()
+        }
+
+        func connect() {
+            guard window != nil, let scrollView = enclosingScrollView else {
+                disconnect()
+                return
+            }
+            guard connectedScrollView !== scrollView else { return }
+
+            disconnect()
+            connectedScrollView = scrollView
+            controller?.attachScrollView(scrollView)
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseUp]) { [weak self] event in
+                guard let self else { return event }
+                if event.type == .leftMouseUp {
+                    self.controller?.stopEdgeScrolling()
+                    return event
+                }
+                return self.handleWheel(event)
+            }
+        }
+
+        func disconnect() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+            if let connectedScrollView {
+                controller?.detachScrollView(connectedScrollView)
+                self.connectedScrollView = nil
+            }
+        }
+
+        private func handleWheel(_ event: NSEvent) -> NSEvent? {
+            guard let window, event.window === window,
+                  let scrollView = connectedScrollView else { return event }
+            let clip = scrollView.contentView
+            guard clip.bounds.contains(clip.convert(event.locationInWindow, from: nil)) else { return event }
+
+            if controller?.isDragging == true { return nil }
+            guard !event.hasPreciseScrollingDeltas,
+                  abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX),
+                  quickAppsWheelTarget?.contains(event) != true else { return event }
+
+            let pointsPerLine = max(16, scrollView.horizontalLineScroll)
+            ModuleDragController.scroll(scrollView, by: -event.scrollingDeltaY * pointsPerLine)
+            return nil
+        }
+    }
+}
+
+private struct HorizontalScrollEdges: OptionSet, Sendable {
+    let rawValue: Int
+
+    static let leading = Self(rawValue: 1)
+    static let trailing = Self(rawValue: 2)
+}
+
+private func horizontalEdgeMask(edges: HorizontalScrollEdges, fadeFraction: CGFloat) -> some View {
+    LinearGradient(
+        stops: [
+            .init(color: edges.contains(.leading) ? .clear : .white, location: 0),
+            .init(color: .white, location: fadeFraction),
+            .init(color: .white, location: 1 - fadeFraction),
+            .init(color: edges.contains(.trailing) ? .clear : .white, location: 1)
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
+}
+
+struct IslandImageCardArtwork<Content: View>: View {
+    let size: CGFloat
+    @ViewBuilder let content: Content
+    @Environment(\.pixelLength) private var pixelLength
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: min(18, size * 0.16), style: .continuous)
+
+        ZStack {
+            content
+        }
+        .frame(width: size, height: size)
+        .overlay { Color.black.opacity(0.12).allowsHitTesting(false) }
+        .clipShape(shape)
+        .overlay {
+            shape.strokeBorder(IslandDesignTokens.moduleBorder, lineWidth: pixelLength)
+                .allowsHitTesting(false)
         }
     }
 }
@@ -6351,6 +6404,9 @@ private enum MusicPlayerAppIcon {
         } else if normalized.contains("qq") || normalized.contains("腾讯") {
             bundleIdentifier = "com.tencent.QQMusicMac"
         } else if normalized.contains("网易") || normalized.contains("netease") {
+            if let icon = AppCachedImageAssets.netEaseMusicIcon {
+                return icon
+            }
             bundleIdentifier = SystemNowPlayingMetadataParser.netEaseMusicBundleIdentifiers.first {
                 NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
             }
@@ -6699,7 +6755,7 @@ private final class PlaybackArtworkImageCache {
     }
 }
 
-private struct SettingsButtonLabel: View {
+struct SettingsButtonLabel: View {
     @State private var isHovering = false
 
     var body: some View {

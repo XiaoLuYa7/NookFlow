@@ -361,13 +361,21 @@ struct MirrorCardView: View {
     let isActive: Bool
 
     var body: some View {
-        VStack(spacing: 6) {
-            header
-            previewSurface
+        Group {
+            if isCameraEnabled {
+                cardContent
+            } else {
+                Button(action: activateCamera) {
+                    cardContent
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(MirrorControlButtonStyle(reduceMotion: reduceMotion))
+                .handCursor()
+                .disabled(!isActive)
+                .help("开启镜子 · 仅实时预览，不会保存")
+                .accessibilityLabel("开启镜子")
+            }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white.opacity(0.025))
         .onChange(of: isActive) { _, active in
             if active {
                 updateCameraActivity()
@@ -378,6 +386,15 @@ struct MirrorCardView: View {
         .onDisappear { deactivateCamera() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("镜子卡片")
+    }
+
+    private var cardContent: some View {
+        VStack(spacing: 6) {
+            header
+            previewSurface
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var header: some View {
@@ -395,20 +412,20 @@ struct MirrorCardView: View {
 
             Spacer(minLength: 4)
 
-            Button(action: toggleCamera) {
-                Image(systemName: "power")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.86))
-                    .frame(width: 26, height: 22)
-                    .background(
-                        Color.white.opacity(isCameraEnabled ? 0.10 : 0.05),
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    )
+            if isCameraEnabled {
+                Button(action: deactivateCamera) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.86))
+                        .frame(width: 26, height: 22)
+                        .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(MirrorControlButtonStyle(reduceMotion: reduceMotion))
+                .handCursor()
+                .help("关闭镜子")
+                .accessibilityLabel("关闭镜子")
+                .accessibilityValue(statusText)
             }
-            .buttonStyle(MirrorControlButtonStyle(reduceMotion: reduceMotion))
-            .help("\(isCameraEnabled ? "关闭镜子" : "开启镜子") · 仅实时预览，不会保存")
-            .accessibilityLabel(isCameraEnabled ? "关闭镜子" : "开启镜子")
-            .accessibilityValue(statusText)
         }
         .frame(height: 22)
     }
@@ -417,12 +434,14 @@ struct MirrorCardView: View {
         ZStack {
             Color.white.opacity(0.045)
 
-            MirrorCameraPreview(
-                session: camera.session,
-                refreshToken: camera.previewGeneration
-            )
-            .opacity(camera.state == .running && isCameraEnabled ? 1 : 0)
-            .allowsHitTesting(false)
+            if isCameraEnabled {
+                MirrorCameraPreview(
+                    session: camera.session,
+                    refreshToken: camera.previewGeneration
+                )
+                .opacity(camera.state == .running ? 1 : 0)
+                .allowsHitTesting(false)
+            }
 
             previewContent
         }
@@ -432,7 +451,11 @@ struct MirrorCardView: View {
 
     @ViewBuilder
     private var previewContent: some View {
-        if camera.state == .running, isCameraEnabled {
+        if !isCameraEnabled {
+            Label("开启镜子", systemImage: "camera")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.82))
+        } else if camera.state == .running {
             if !camera.isPreviewReady {
                 VStack(spacing: 6) {
                     ProgressView()
@@ -444,7 +467,7 @@ struct MirrorCardView: View {
                 }
                 .transition(.opacity)
             }
-        } else if camera.state == .denied, isCameraEnabled {
+        } else if camera.state == .denied {
             mirrorMessage(
                 symbol: "camera.fill.badge.ellipsis",
                 title: "需要摄像头权限",
@@ -467,22 +490,6 @@ struct MirrorCardView: View {
                     .font(.system(size: 9.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.white.opacity(0.72))
             }
-        } else {
-            Button(action: activateCamera) {
-                Label("开启镜子", systemImage: "camera")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.82))
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .background(
-                        Color.white.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(MirrorControlButtonStyle(reduceMotion: reduceMotion))
-            .help("开启镜子 · 仅实时预览，不会保存")
         }
     }
 
@@ -530,10 +537,6 @@ struct MirrorCardView: View {
         case .denied, .unavailable, .failed: return .orange
         default: return Color.white.opacity(0.55)
         }
-    }
-
-    private func toggleCamera() {
-        isCameraEnabled ? deactivateCamera() : activateCamera()
     }
 
     private func activateCamera() {

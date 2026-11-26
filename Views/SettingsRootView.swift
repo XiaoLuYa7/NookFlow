@@ -672,6 +672,7 @@ struct SettingsRootView: View {
             previewArea
             sideIconConfigurationCard
             widgetsCard
+            moduleOrderSection
         }
     }
 
@@ -1109,12 +1110,18 @@ struct SettingsRootView: View {
             Text("NookFlow")
                 .font(.system(size: max(8, 15 * scale), weight: .bold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.94))
+                .padding(.horizontal, max(4, 8 * scale))
+                .frame(height: 24 * scale)
+                .background(Color.white.opacity(0.14), in: Capsule())
 
             Image(systemName: "appstore")
             Image(systemName: "folder")
 
             Spacer(minLength: 0)
 
+            if settings.showPinButton {
+                Image(systemName: "lock.open")
+            }
             Image(systemName: "gearshape.fill")
         }
         .font(.system(size: max(7, 12 * scale), weight: .semibold))
@@ -1133,29 +1140,10 @@ struct SettingsRootView: View {
     @ViewBuilder
     private func previewWidgetCard(_ module: IslandPanelModule, height: CGFloat) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.035, green: 0.036, blue: 0.040).opacity(0.96),
-                            Color.black.opacity(0.92),
-                            Color(red: 0.015, green: 0.016, blue: 0.019).opacity(0.98)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.20), Color.white.opacity(0.055)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 0.8
-                        )
-                }
+            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+            shape
+                .fill(IslandDesignTokens.moduleSurface)
+                .overlay { shape.strokeBorder(IslandDesignTokens.moduleBorder, lineWidth: 0.5) }
 
             switch module {
             case .imageCard:
@@ -1179,57 +1167,16 @@ struct SettingsRootView: View {
     }
 
     private var previewImageCardThumbnail: some View {
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0.04),
-                            .init(color: Color(red: 0.43, green: 0.96, blue: 0.78).opacity(0.38), location: 0.34),
-                            .init(color: AppColor.accent.opacity(0.28), location: 0.68),
-                            .init(color: .clear, location: 0.96)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 52, height: 52)
-                .rotationEffect(.degrees(-10), anchor: .bottomLeading)
-                .blur(radius: 7)
-                .offset(x: 8, y: 11)
-
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.18), Color.black.opacity(0.38)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 48, height: 48)
-                .offset(x: 13, y: 16)
-
-            Group {
-                if let image = previewImageCardImage {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Image("ImageCardDefault")
-                        .resizable()
-                        .scaledToFill()
-                }
+        IslandImageCardArtwork(size: 52) {
+            if let image = previewImageCardImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image("ImageCardDefault")
+                    .resizable()
+                    .scaledToFill()
             }
-            .frame(width: 52, height: 52)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.7)
-            }
-            .rotationEffect(.degrees(-10), anchor: .bottomLeading)
-            .shadow(color: AppColor.accent.opacity(0.16), radius: 5, x: -1, y: 1)
-            .shadow(color: .black.opacity(0.30), radius: 6, x: 3, y: 4)
-            .offset(x: 9, y: 9)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1726,6 +1673,43 @@ struct SettingsRootView: View {
                 .padding(.vertical, 6)
                 .padding(.horizontal, 2)
             }
+        }
+    }
+
+    private var moduleOrderSection: some View {
+        let modules = IslandShellLayout.visibleModules(settings: settings)
+
+        return SettingsSectionCard(
+            title: "卡片顺序",
+            subtitle: "上下拖动已启用的卡片，对应灵动岛从左到右的顺序。"
+        ) {
+            if modules.isEmpty {
+                Text("启用卡片后即可调整顺序。")
+                    .font(AppTypography.supporting)
+                    .foregroundStyle(AppColor.textSecondary)
+            }
+
+            ForEach(modules) { module in
+                ModuleOrderRow(module: module) { source in
+                    moveModule(source, to: module)
+                } onStep: { step in
+                    let current = IslandShellLayout.visibleModules(settings: settings)
+                    guard let index = current.firstIndex(of: module),
+                          current.indices.contains(index + step) else { return }
+                    moveModule(module, to: current[index + step])
+                }
+            }
+        }
+    }
+
+    private func moveModule(_ source: IslandPanelModule, to target: IslandPanelModule) {
+        var modules = IslandShellLayout.visibleModules(settings: settings)
+        guard let from = modules.firstIndex(of: source),
+              let to = modules.firstIndex(of: target), from != to else { return }
+
+        modules.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        withAnimation(AppMotion.resolved(AppMotion.standard, reduceMotion: reduceMotion)) {
+            IslandShellLayout.saveVisibleModuleOrder(modules, settings: settings)
         }
     }
 
@@ -2239,6 +2223,55 @@ private struct ClockCapsuleDial: View {
     }
 }
 
+private struct ModuleOrderRow: View {
+    private static let dragType = UTType(exportedAs: "cn.luckysoft.nookflow.module-order", conformingTo: .data)
+
+    let module: IslandPanelModule
+    let onDropModule: (IslandPanelModule) -> Void
+    let onStep: (Int) -> Void
+    @State private var isDropTarget = false
+
+    var body: some View {
+        HStack(spacing: AppSpacing.sm) {
+            Image(systemName: module.systemName)
+                .foregroundStyle(AppColor.textSecondary)
+                .frame(width: 20)
+            Text(module.title)
+                .font(AppTypography.control)
+                .foregroundStyle(AppColor.textPrimary)
+            Spacer()
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(AppColor.textSecondary)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, AppSpacing.md)
+        .frame(height: 36)
+        .background(isDropTarget ? AppColor.accentSoft : AppColor.controlFill, in: RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onDrag {
+            let provider = NSItemProvider()
+            let payload = Data(module.rawValue.utf8)
+            provider.registerDataRepresentation(for: Self.dragType, visibility: .ownProcess) { completion in
+                completion(payload, nil)
+                return nil
+            }
+            return provider
+        }
+        .onDrop(of: [Self.dragType], isTargeted: $isDropTarget) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadDataRepresentation(for: Self.dragType) { data, _ in
+                guard let data, let rawValue = String(data: data, encoding: .utf8),
+                      let source = IslandPanelModule(rawValue: rawValue) else { return }
+                Task { @MainActor in onDropModule(source) }
+            }
+            return true
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: Text("上移")) { onStep(-1) }
+        .accessibilityAction(named: Text("下移")) { onStep(1) }
+    }
+}
+
 private struct WidgetOptionCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
@@ -2452,6 +2485,9 @@ private enum SettingsMusicSupportedApp: CaseIterable, Identifiable {
     }
 
     var icon: NSImage? {
+        if self == .netEaseMusic, let icon = AppCachedImageAssets.netEaseMusicIcon {
+            return icon
+        }
         if let installedIcon = bundleIdentifiers.compactMap(installedAppIcon).first {
             return installedIcon
         }

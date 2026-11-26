@@ -173,16 +173,25 @@ final class IslandWindowController: NSObject {
         trackingView.shouldRetainFileDropAfterExit = { [weak self] screenPoint in
             self?.fileDropActivationRect.contains(screenPoint) == true
         }
-        trackingView.onFileDrop = { [weak self] urls, target in
+        trackingView.filePageImportTopInset = { [weak self] in
+            guard let self, self.viewModel.presentationPhase == .expanded,
+                  self.viewModel.selectedTopTab == .files, !self.viewModel.isFileDropChooserVisible
+            else { return nil }
+            return IslandDesignTokens.expandedTopBarControlHeight + FilesGridView.gridTopInset
+        }
+        trackingView.onFileDrop = { [weak self] urls, target, isDirectImport in
             guard let self, let target else { return false }
-            self.viewModel.finishFileDropInteraction()
+            if !isDirectImport {
+                self.viewModel.finishFileDropInteraction()
+            }
 
             switch target {
             case .staging:
                 let viewModel = self.viewModel
+                let location = self.settings.fileDataLocation
                 Task { @MainActor in
                     let importResult = await Task.detached(priority: .userInitiated) {
-                        FileDataProvider.importFilesToStaging(urls)
+                        FileDataProvider.importFilesToStaging(urls, location: location)
                     }.value
                     if importResult.importedAny {
                         viewModel.notifyFileDataChanged()
@@ -422,8 +431,9 @@ final class IslandWindowController: NSObject {
             return NSRect(x: round((center - width / 2) * scale) / scale,
                           y: y, width: width, height: height)
         }
-        return NotchGeometryProvider.floatingPanelRect(size: size, screenFrame: screen.frame,
-            visibleFrame: screen.visibleFrame, scale: scale,
+        let visibleFrame = screen.visibleFrame
+        return NotchGeometryProvider.floatingPanelRect(size: size, screenFrame: visibleFrame,
+            visibleFrame: visibleFrame, scale: scale,
             horizontalPosition: settings.floatingHorizontalPosition, topInset: settings.floatingTopInset,
             anchorHeight: viewModel.compactCapsuleSize.height)
     }
@@ -457,8 +467,19 @@ final class IslandWindowController: NSObject {
     @discardableResult
     private func updateCompactCapsuleMetrics() -> Bool {
         let screen = preferredScreen
-        guard let metrics = compactCapsuleMetrics(for: screen) else {
+        guard let screen, let metrics = compactCapsuleMetrics(for: screen) else {
             return false
+        }
+
+        let expandedWidthLimit = NotchGeometryProvider.expandedWidthLimit(
+            screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame,
+            cameraCenterX: NotchGeometryProvider.cameraSafeRegionCenterX(for: screen),
+            backingScaleFactor: screen.backingScaleFactor,
+            openingOvershoot: IslandDesignTokens.shellOpenPrimaryWidthOvershoot
+        )
+        if settings.expandedWidthLimit != expandedWidthLimit {
+            settings.expandedWidthLimit = expandedWidthLimit
         }
 
         viewModel.updateCompactCapsuleSizes(
@@ -539,6 +560,11 @@ final class IslandWindowController: NSObject {
     }
 
     private func collapseImmediatelyIfPointerOutsidePanel() {
+        if isExternalFileDragSessionActive || panel?.attachedSheet != nil {
+            viewModel.cancelCollapse()
+            return
+        }
+
         if shouldRetainTabTransitionPointerOwnership(at: NSEvent.mouseLocation) {
             return
         }
@@ -739,8 +765,7 @@ final class IslandWindowController: NSObject {
 
     private var currentInteractiveShellRect: NSRect {
         if viewModel.isFileDropChooserVisible {
-            let shellRect = visualShellRect(for: IslandFileDropLayout.size)
-            return shellRect.union(externalPinButtonHitRect(attachedTo: shellRect))
+            return visualShellRect(for: IslandFileDropLayout.size)
         }
 
         switch viewModel.presentationPhase {
@@ -786,36 +811,11 @@ final class IslandWindowController: NSObject {
         let overflowHeight = viewModel.presentationPhase == .collapsed
             ? 0
             : viewModel.expandedContentOverflowHeight
-        let interactiveRect = overflowHeight > 0
-            ? NSRect(
-                x: shellRect.minX,
-                y: shellRect.minY - overflowHeight,
-                width: shellRect.width,
-                height: shellRect.height + overflowHeight
-            )
-            : shellRect
-        guard settings.showPinButton else { return interactiveRect }
-        let pinAnchorSize = IslandShellLayout.contentSize(
-            settings: settings,
-            selectedTopTab: viewModel.selectedTopTab
-        )
-        let pinAnchorRect = visualShellRect(for: pinAnchorSize)
-        return interactiveRect.union(externalPinButtonHitRect(attachedTo: pinAnchorRect))
-    }
-
-    private func externalPinButtonHitRect(attachedTo shellRect: NSRect) -> NSRect {
-        let hitPadding: CGFloat = 4
-        let size = IslandDesignTokens.pinButtonSize + hitPadding * 2
-        let center = NSPoint(
-            x: shellRect.maxX - IslandDesignTokens.externalPinButtonTrailingOverlap,
-            y: shellRect.minY + IslandDesignTokens.externalPinButtonBottomOverlap
-        )
-
         return NSRect(
-            x: center.x - size / 2,
-            y: center.y - size / 2,
-            width: size,
-            height: size
+            x: shellRect.minX,
+            y: shellRect.minY - overflowHeight,
+            width: shellRect.width,
+            height: shellRect.height + overflowHeight
         )
     }
 
@@ -876,6 +876,7 @@ final class IslandWindowController: NSObject {
         if isActive {
             workspaceVisibilitySettlementTask?.cancel()
             workspaceVisibilitySettlementTask = nil
+            viewModel.cancelCollapse()
             viewModel.cancelPendingCapsuleExpand()
         } else if !viewModel.isFileDropChooserVisible {
             schedulePanelVisibilityReconciliation(delay: 0.30)
@@ -1401,7 +1402,8 @@ private final class IslandTrackingView: NSView {
     var onCameraAreaHoverChanged: ((Bool) -> Void)?
     var onFileDragChanged: ((Bool, IslandFileDropTarget?, String?) -> Void)?
     var onExternalFileDragSessionChanged: ((Bool) -> Void)?
-    var onFileDrop: (([URL], IslandFileDropTarget?) -> Bool)?
+    var onFileDrop: (([URL], IslandFileDropTarget?, Bool) -> Bool)?
+    var filePageImportTopInset: (() -> CGFloat?)?
     var shouldActivateFileDrop: ((NSPoint) -> Bool)?
     var shouldRetainFileDropAfterExit: ((NSPoint) -> Bool)?
     var compactCapsuleSize = IslandDesignTokens.defaultCompactCapsuleSize
@@ -1432,6 +1434,7 @@ private final class IslandTrackingView: NSView {
         onFileDragChanged = nil
         onExternalFileDragSessionChanged = nil
         onFileDrop = nil
+        filePageImportTopInset = nil
         shouldActivateFileDrop = nil
         shouldRetainFileDropAfterExit = nil
         activeExternalDragSequenceNumber = nil
@@ -1539,7 +1542,13 @@ private final class IslandTrackingView: NSView {
         }
 
         let point = convert(sender.draggingLocation, from: nil)
-        let target = fileDropTarget(for: point)
+        let directImportInset = filePageImportTopInset?()
+        let target: IslandFileDropTarget?
+        if let directImportInset {
+            target = filePageImportContains(point, topInset: directImportInset) ? .staging : nil
+        } else {
+            target = fileDropTarget(for: point)
+        }
         let payload = externalFileDragPayload(from: sender)
         let urls = payload.urls
 
@@ -1550,7 +1559,7 @@ private final class IslandTrackingView: NSView {
             return false
         }
 
-        let didDrop = onFileDrop?(urls, target) ?? false
+        let didDrop = onFileDrop?(urls, target, directImportInset != nil) ?? false
         if !didDrop {
             onFileDragChanged?(false, nil, nil)
         }
@@ -1570,6 +1579,9 @@ private final class IslandTrackingView: NSView {
         guard !urls.isEmpty else { return [] }
 
         let point = convert(sender.draggingLocation, from: nil)
+        if let topInset = filePageImportTopInset?() {
+            return filePageImportContains(point, topInset: topInset) ? .copy : []
+        }
         let shouldActivate = isFileDropActive
             || (shouldActivateFileDrop?(point) ?? compactCapsuleContains(point))
             || fileDropTarget(for: point) != nil
@@ -1744,6 +1756,11 @@ private final class IslandTrackingView: NSView {
             return .airDrop
         }
         return nil
+    }
+
+    private func filePageImportContains(_ point: NSPoint, topInset: CGFloat) -> Bool {
+        let shellRect = expandedShellRect
+        return shellRect.contains(point) && point.y <= shellRect.maxY - topInset
     }
 
     private func fileURLs(from sender: NSDraggingInfo) -> [URL] {

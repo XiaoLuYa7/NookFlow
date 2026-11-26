@@ -33,6 +33,34 @@ enum NotchGeometryProvider {
                       width: width, height: height)
     }
 
+    static func expandedWidthLimit(
+        screenFrame: CGRect,
+        visibleFrame: CGRect,
+        cameraCenterX: CGFloat?,
+        backingScaleFactor: CGFloat,
+        openingOvershoot: CGFloat
+    ) -> CGFloat {
+        let edgePadding: CGFloat = 16
+        let canvasPadding: CGFloat = 40
+        let availableWidth: CGFloat
+
+        if let cameraCenterX {
+            let leftClearance = cameraCenterX - screenFrame.minX
+            let rightClearance = screenFrame.maxX - cameraCenterX
+            // AppKit exposes the notch geometry, but not the individual menu bar items.
+            // Reserve part of the trailing menu bar for status items on notched displays.
+            let statusItemReserve = min(280, rightClearance * 0.34)
+            availableWidth = 2 * min(leftClearance, rightClearance - statusItemReserve)
+        } else {
+            // The floating panel already sits below the menu bar.
+            availableWidth = visibleFrame.width
+        }
+
+        let scale = max(1, backingScaleFactor)
+        let limit = (availableWidth - 2 * edgePadding - canvasPadding) / max(1, openingOvershoot)
+        return max(1, floor(limit * scale) / scale)
+    }
+
     static func cameraSafeRegionCenterX(for screen: NSScreen?) -> CGFloat? {
         cameraSafeRegionRect(for: screen)?.midX
     }

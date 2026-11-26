@@ -1,99 +1,170 @@
+import AppKit
 import SwiftUI
 
-/// Manages drag-to-reorder state for the module card row.
-///
-/// Architecture: the dragged card is hidden at its source slot; remaining cards
-/// rearrange in real-time to fill the gap and show the insertion point.
-/// A floating preview overlay follows the cursor independently of the layout.
-///
-/// State is split so that continuous drag offset updates don't trigger card relayout;
-/// only `targetIndex` changes cause the card grid to re-render.
+@MainActor
+final class ModuleDragPreviewPosition: ObservableObject {
+    @Published fileprivate(set) var centerX: CGFloat = 0
+}
+
 @MainActor
 final class ModuleDragController: ObservableObject {
+    static let longPressDuration: TimeInterval = 0.27
+    static let rearrangeAnimation = Animation.easeOut(duration: 0.22)
+    private static let edgeWidth: CGFloat = 48
+    private static let maximumScrollSpeed: CGFloat = 820
 
-    // MARK: - Constants
-
-    static let longPressDuration: TimeInterval = 0.4
-    static let dragMinDistance: CGFloat = 0
-    static let rearrangeAnimation = Animation.easeOut(duration: 0.25)
-    static let dropAnimation = Animation.spring(response: 0.30, dampingFraction: 0.88, blendDuration: 0.04)
-
-    // MARK: - State (split to minimize re-render scope)
-
-    /// Set once at drag start. Cards use this only for source opacity.
-    @Published private(set) var isDragging = false
     @Published private(set) var sourceIndex: Int?
-
-    /// Only changes when cursor crosses a midpoint threshold — triggers card rearrange.
     @Published private(set) var targetIndex: Int?
+    let previewPosition = ModuleDragPreviewPosition()
 
-    /// Continuous — but only the preview overlay reads this.
-    @Published private(set) var dragOffset: CGSize = .zero
-
-    /// Set to true during the snap-to-slot animation after drop.
-    @Published private(set) var isDropping = false
-
-    /// Begin the drop snap animation toward the given target offset.
-    func beginDropAnimation(targetOffset: CGFloat) {
-        dropTargetOffset = targetOffset
-        isDropping = true
-    }
-    /// The x-offset (top-leading) where the preview should animate to on drop.
-    @Published var dropTargetOffset: CGFloat = 0
-
-    // MARK: - Captured at drag start (not published, no re-render)
-
-    private var sourceOrigin: CGPoint = .zero
+    private weak var scrollView: NSScrollView?
+    private var edgeScrollTimer: Timer?
+    private var lastScrollTick: TimeInterval = 0
+    private var pointerPosition: CGPoint = .zero
+    private var pointerToCardCenter: CGFloat = 0
     private var midXs: [CGFloat] = []
-    private var widths: [CGFloat] = []
+    private var viewportSize: CGSize = .zero
+    private var reduceMotion = false
 
-    // MARK: - Public API
+    var isDragging: Bool { sourceIndex != nil }
 
-    var isActive: Bool { isDragging }
-
-    func startDrag(sourceIndex: Int, sourceOrigin: CGPoint, midXs: [CGFloat], widths: [CGFloat]) {
-        isDragging = true
-        isDropping = false
-        self.sourceIndex = sourceIndex
-        self.sourceOrigin = sourceOrigin
-        self.midXs = midXs
-        self.widths = widths
-        targetIndex = sourceIndex
-        dragOffset = .zero
-        dropTargetOffset = 0
+    deinit {
+        edgeScrollTimer?.invalidate()
     }
 
-    /// Called on every drag movement. Only updates `dragOffset` and
-    /// recomputes `targetIndex` when crossing a midpoint with hysteresis.
-    func updateDrag(translation: CGSize) {
-        dragOffset = translation
+    func attachScrollView(_ scrollView: NSScrollView) {
+        self.scrollView = scrollView
+    }
 
-        let cursorX = sourceOrigin.x + translation.width
-        let newTarget = computeTargetIndex(cursorX: cursorX)
-        if newTarget != targetIndex {
-            withAnimation(Self.rearrangeAnimation) {
-                targetIndex = newTarget
+    func detachScrollView(_ scrollView: NSScrollView) {
+        guard self.scrollView === scrollView else { return }
+        self.scrollView = nil
+        reset()
+    }
+
+    func startDrag(
+        sourceIndex: Int,
+        sourceCenterX: CGFloat,
+        startLocation: CGPoint,
+        midXs: [CGFloat],
+        viewportSize: CGSize,
+        reduceMotion: Bool
+    ) {
+        self.midXs = midXs
+        self.viewportSize = viewportSize
+        self.reduceMotion = reduceMotion
+        let scrollOffset = scrollView?.documentVisibleRect.minX ?? 0
+        pointerToCardCenter = sourceCenterX - startLocation.x - scrollOffset
+        pointerPosition = startLocation
+        previewPosition.centerX = sourceCenterX
+        targetIndex = sourceIndex
+        self.sourceIndex = sourceIndex
+    }
+
+    func updateDrag(location: CGPoint) {
+        guard isDragging else { return }
+        pointerPosition = location
+        updateDragPosition()
+        updateEdgeScrolling()
+    }
+
+    /// The pointer is in viewport coordinates. Add the actual scroll offset so
+    /// a stationary pointer can keep moving the insertion point as cards scroll.
+    private func updateDragPosition() {
+        let contentX = pointerPosition.x + (scrollView?.documentVisibleRect.minX ?? 0)
+        let centerX = contentX + pointerToCardCenter
+        let nextIndex = midXs.indices.dropLast().first { index in
+            centerX < (midXs[index] + midXs[index + 1]) / 2
+        } ?? max(0, midXs.count - 1)
+
+        if previewPosition.centerX != centerX { previewPosition.centerX = centerX }
+        if nextIndex != targetIndex {
+            withAnimation(reduceMotion ? nil : Self.rearrangeAnimation) {
+                targetIndex = nextIndex
             }
         }
     }
 
-    /// Cursor position in container space (source center + drag offset).
-    var cursorPosition: CGPoint {
-        CGPoint(
-            x: sourceOrigin.x + dragOffset.width,
-            y: sourceOrigin.y + dragOffset.height
-        )
+    private var edgeScrollVelocity: CGFloat {
+        let edgeWidth = min(Self.edgeWidth, viewportSize.width / 2)
+        guard edgeWidth > 0,
+              (0...viewportSize.width).contains(pointerPosition.x),
+              (0...viewportSize.height).contains(pointerPosition.y) else { return 0 }
+
+        let leading = max(0, 1 - pointerPosition.x / edgeWidth)
+        let trailing = max(0, 1 - (viewportSize.width - pointerPosition.x) / edgeWidth)
+        let strength = trailing - leading
+        guard strength != 0 else { return 0 }
+
+        let minimumSpeed: CGFloat = 45
+        let speed = minimumSpeed + (Self.maximumScrollSpeed - minimumSpeed) * strength * strength
+        return strength < 0 ? -speed : speed
     }
 
-    /// Width of the dragged card.
-    var sourceWidth: CGFloat {
-        guard let idx = sourceIndex, widths.indices.contains(idx) else { return 0 }
-        return widths[idx]
+    private func updateEdgeScrolling() {
+        let velocity = edgeScrollVelocity
+        guard let scrollView, scrollView.window?.isVisible == true,
+              canScroll(scrollView, velocity: velocity) else {
+            stopEdgeScrolling()
+            return
+        }
+        guard edgeScrollTimer == nil else { return }
+
+        lastScrollTick = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.advanceEdgeScrolling() }
+        }
+        edgeScrollTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func advanceEdgeScrolling() {
+        let velocity = edgeScrollVelocity
+        guard isDragging, NSEvent.pressedMouseButtons & 1 != 0,
+              let scrollView, scrollView.window?.isVisible == true,
+              canScroll(scrollView, velocity: velocity) else {
+            stopEdgeScrolling()
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = min(now - lastScrollTick, 0.05)
+        lastScrollTick = now
+        Self.scroll(scrollView, by: velocity * elapsed)
+        updateDragPosition()
+        if !canScroll(scrollView, velocity: velocity) {
+            stopEdgeScrolling()
+        }
+    }
+
+    func stopEdgeScrolling() {
+        edgeScrollTimer?.invalidate()
+        edgeScrollTimer = nil
+    }
+
+    private func canScroll(_ scrollView: NSScrollView, velocity: CGFloat) -> Bool {
+        let clip = scrollView.contentView
+        let offset = clip.bounds.minX
+        if velocity < 0 { return offset > clip.documentRect.minX }
+        if velocity > 0 { return offset < clip.documentRect.maxX - clip.bounds.width }
+        return false
+    }
+
+    static func scroll(_ scrollView: NSScrollView, by delta: CGFloat) {
+        let clip = scrollView.contentView
+        let document = clip.documentRect
+        let maximum = max(document.minX, document.maxX - clip.bounds.width)
+        let origin = clip.bounds.origin
+        let x = min(max(origin.x + delta, document.minX), maximum)
+        guard x != origin.x else { return }
+
+        clip.scroll(to: CGPoint(x: x, y: origin.y))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     /// Computes the layout for a rearranged card order based on current targetIndex.
     /// The dragged card is removed from the list and inserted at the target position.
-    func rearrangedLayout<T>(modules: [T], containerWidth: CGFloat, spacing: CGFloat, widthFor: (T) -> CGFloat) -> (offsets: [CGFloat], widths: [CGFloat]) {
+    func rearrangedLayout<T>(modules: [T], spacing: CGFloat, widthFor: (T) -> CGFloat) -> (offsets: [CGFloat], widths: [CGFloat]) {
         guard let source = sourceIndex, let target = targetIndex else {
             return normalLayout(modules: modules, spacing: spacing, widthFor: widthFor)
         }
@@ -155,54 +226,10 @@ final class ModuleDragController: ObservableObject {
     }
 
     func reset() {
-        isDragging = false
-        isDropping = false
+        stopEdgeScrolling()
         sourceIndex = nil
         targetIndex = nil
-        dragOffset = .zero
-        dropTargetOffset = 0
-        sourceOrigin = .zero
         midXs = []
-        widths = []
-    }
-
-    // MARK: - Target Detection with Hysteresis
-
-    private func computeTargetIndex(cursorX: CGFloat) -> Int {
-        let count = midXs.count
-        guard count > 0 else { return 0 }
-
-        // Hysteresis: use a wider zone around the current target to prevent flickering.
-        // Only switch when the cursor clearly crosses the midpoint between adjacent cards.
-        let current = targetIndex ?? 0
-
-        for (index, midX) in midXs.enumerated() {
-            if index == current {
-                // For the current target, use the adjacent boundary with hysteresis
-                let prevBoundary: CGFloat = index > 0 ? (midXs[index - 1] + midX) / 2 : -CGFloat.infinity
-                let nextBoundary: CGFloat = index < count - 1 ? (midX + midXs[index + 1]) / 2 : CGFloat.infinity
-
-                if cursorX < prevBoundary {
-                    return index - 1
-                } else if cursorX >= nextBoundary {
-                    // Will be caught by next iteration
-                    continue
-                } else {
-                    return index
-                }
-            }
-
-            // For non-current indices, check if cursor is in their zone
-            let prevBoundary: CGFloat = index > 0 ? (midXs[index - 1] + midX) / 2 : -CGFloat.infinity
-            let nextBoundary: CGFloat = index < count - 1 ? (midX + midXs[index + 1]) / 2 : CGFloat.infinity
-
-            if cursorX >= prevBoundary && cursorX < nextBoundary {
-                return index
-            }
-        }
-
-        // Cursor is past the last card
-        return count
     }
 
     private func normalLayout<T>(modules: [T], spacing: CGFloat, widthFor: (T) -> CGFloat) -> (offsets: [CGFloat], widths: [CGFloat]) {

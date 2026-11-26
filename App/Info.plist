@@ -57,5 +57,18 @@
 	<string>https://nookflow.luckysoft.cn/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>2qJa7S3f1EwOErIFutj1/zf9MtQ8iALiAdR+0gDHlOM=</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>cn.luckysoft.nookflow.module-order</string>
+			<key>UTTypeDescription</key>
+			<string>NookFlow Card Order</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

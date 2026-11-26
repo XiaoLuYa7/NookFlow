@@ -24,6 +24,7 @@ struct IslandRootView: View {
     @StateObject private var fileProvider = FileDataProvider()
     @StateObject private var moduleDragController = ModuleDragController()
     @StateObject private var reminderProvider = ReminderProvider()
+    @State private var visibleHomeModules: Set<IslandPanelModule> = []
     @State private var currentSnapshot: PlaybackSnapshot = .idle
     @State private var currentLyricText: String?
     @State private var nextLyricText: String?
@@ -149,6 +150,9 @@ struct IslandRootView: View {
         .onChange(of: settings.allowNetEaseMusicAccess) { _, _ in
             viewModel.playbackProvider.updateAccessConfiguration(from: settings)
         }
+        .onChange(of: visibleHomeModules) { _, _ in
+            refreshRuntimeProviders()
+        }
         .onChange(of: settings.showWeatherModule) { _, _ in
             refreshRuntimeProviders()
         }
@@ -236,8 +240,10 @@ struct IslandRootView: View {
                 reduceMotion: viewModel.reduceMotionEnabled,
                 selectedTopTab: viewModel.selectedTopTab,
                 isPinned: viewModel.isPinned,
+                showsPinButton: settings.showPinButton,
                 onSelectTab: viewModel.selectTopTab,
-                onTogglePin: viewModel.togglePin
+                onTogglePin: viewModel.togglePin,
+                onOpenSettings: onOpenSettings
             )
         }
         .frame(
@@ -349,7 +355,10 @@ struct IslandRootView: View {
                         reminderProvider: reminderProvider,
                         onOpenSettings: onOpenSettings,
                         onOpenTodoSettings: onOpenTodoSettings,
-                        onOpenFeedback: onOpenFeedback
+                        onOpenFeedback: onOpenFeedback,
+                        onVisibleModulesChanged: {
+                            visibleHomeModules = $0.intersection([.weather, .deviceInfo])
+                        }
                     )
                     .environmentObject(settings)
                     .opacity(expandedContentOpacity)
@@ -395,8 +404,6 @@ struct IslandRootView: View {
                 else { return }
                 viewModel.toggleExpandedByClick()
             }
-
-            externalPinButtonOverlay(canvasSize: canvasSize)
         }
         .frame(
             width: canvasSize.width + 40,
@@ -405,30 +412,6 @@ struct IslandRootView: View {
                 + overflowHeight,
             alignment: .top
         )
-    }
-
-    @ViewBuilder
-    private func externalPinButtonOverlay(canvasSize: CGSize) -> some View {
-        if settings.showPinButton && viewModel.presentationPhase != .collapsed {
-            let anchorSize = IslandShellLayout.contentSize(
-                settings: settings,
-                selectedTopTab: viewModel.selectedTopTab
-            )
-
-            PinButton(isPinned: viewModel.isPinned) {
-                viewModel.togglePin()
-            }
-            .opacity(viewModel.secondaryContentRevealProgress)
-            .position(
-                x: 20
-                    + canvasSize.width / 2
-                    + anchorSize.width / 2
-                    - IslandDesignTokens.externalPinButtonTrailingOverlap,
-                y: anchorSize.height - IslandDesignTokens.externalPinButtonBottomOverlap
-            )
-            .transition(.scale(scale: 0.92).combined(with: .opacity))
-            .zIndex(45)
-        }
     }
 
     private var sideStatusContext: SideStatusContext {
@@ -451,16 +434,17 @@ struct IslandRootView: View {
             : []
         let isExpanded = viewModel.isExpandedRuntimeActive
 
-        let needsWeather = settings.showWeatherModule && isExpanded
-            || compactIcons.contains(where: Self.usesWeatherData)
+        let needsWeatherForCapsule = compactIcons.contains(where: Self.usesWeatherData)
+        let needsWeather = needsWeatherForCapsule
+            || (settings.showWeatherModule && isExpanded && visibleHomeModules.contains(.weather))
         if needsWeather {
-            weatherProvider.start()
+            weatherProvider.start(reuseRecentSnapshot: !needsWeatherForCapsule)
         } else {
             weatherProvider.stop()
         }
 
-        let needsDeviceInfo = settings.showDeviceInfoModule && isExpanded
-            || compactIcons.contains(where: Self.usesDeviceInfo)
+        let needsDeviceInfo = compactIcons.contains(where: Self.usesDeviceInfo)
+            || (settings.showDeviceInfoModule && isExpanded && visibleHomeModules.contains(.deviceInfo))
         if needsDeviceInfo {
             deviceInfoProvider.start()
         } else {
@@ -1126,8 +1110,10 @@ private struct FileDropChooserContentSurface: View {
     let reduceMotion: Bool
     let selectedTopTab: IslandTopTab
     let isPinned: Bool
+    let showsPinButton: Bool
     let onSelectTab: (IslandTopTab) -> Void
     let onTogglePin: () -> Void
+    let onOpenSettings: () -> Void
 
     var body: some View {
         let windowCanvasSize = IslandFileDropLayout.windowSize(for: canvasSize)
@@ -1150,6 +1136,16 @@ private struct FileDropChooserContentSurface: View {
                         )
                     }
                     Spacer(minLength: 0)
+
+                    if showsPinButton {
+                        PinButton(isPinned: isPinned, action: onTogglePin)
+                    }
+                    Button(action: onOpenSettings) {
+                        SettingsButtonLabel()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("设置")
+                    .help("设置")
                 }
                 .frame(height: IslandDesignTokens.expandedTopBarControlHeight)
                 .padding(.leading, IslandFileDropLayout.topBarLeadingPadding)
@@ -1187,21 +1183,6 @@ private struct FileDropChooserContentSurface: View {
                 alignment: .top
             )
             .clipShape(finalShellShape)
-
-            PinButton(isPinned: isPinned, action: onTogglePin)
-                .position(
-                    x: windowCanvasSize.width / 2
-                        + IslandFileDropLayout.size.width / 2
-                        - IslandDesignTokens.externalPinButtonTrailingOverlap,
-                    y: IslandFileDropLayout.size.height
-                        - IslandDesignTokens.externalPinButtonBottomOverlap
-                )
-                .islandContentMaterialized(
-                    isVisible: visibleItemCount > 0,
-                    reduceMotion: reduceMotion
-                )
-                .allowsHitTesting(visibleItemCount > 0)
-                .zIndex(2)
         }
         .frame(
             width: windowCanvasSize.width,
